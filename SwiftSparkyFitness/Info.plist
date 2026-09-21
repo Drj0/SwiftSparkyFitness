@@ -2,10 +2,24 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<!-- The server is self-hosted on the user's own LAN over plain HTTP, so
+	     ATS needs the local-networking exception. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
+
+	<!-- Required to resolve a Bonjour (.local) hostname via mDNS on a physical
+	     device. Without it the name never resolves on-device, even with local
+	     network permission granted — the request just fails. The simulator
+	     resolves .local without it, which is why this never surfaced there.
+	     NSLocalNetworkUsageDescription (the iOS 14+ privacy prompt) is set via
+	     the INFOPLIST_KEY_NSLocalNetworkUsageDescription build setting, not
+	     here, so it stays in one place. -->
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_http._tcp</string>
+	</array>
 </dict>
 </plist>

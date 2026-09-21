@@ -79,6 +79,9 @@ its own error.
 
 - [`PROGRESS.md`](PROGRESS.md) — architecture decisions, backend quirks found
   while building against the live server, and what isn't built yet.
+- [`SIMULATOR_MCP.md`](SIMULATOR_MCP.md) — driving the iOS Simulator from a
+  Claude Code session: the Xcode MCP bridge, interaction commands, text entry,
+  and the gotchas that cost the most time.
 - [`UI_UX_REVIEW.md`](UI_UX_REVIEW.md) — a simulator-driven UI/UX audit and
   the fixes applied from it (accessibility, motion, correctness).
 
