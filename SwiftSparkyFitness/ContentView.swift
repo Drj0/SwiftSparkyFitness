@@ -10,6 +10,7 @@ import SwiftUI
 struct ContentView: View {
     @StateObject private var authViewModel = AuthViewModel()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isEditingServer = false
 
     var body: some View {
         Group {
@@ -35,6 +36,11 @@ struct ContentView: View {
                 AuthContainerView(viewModel: authViewModel)
                     .transition(.opacity)
             }
+        }
+        .sheet(isPresented: $isEditingServer) {
+            ServerAddressSheet { Task { await authViewModel.restoreSession() } }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
         }
         .task { await authViewModel.restoreSession() }
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: authViewModel.session?.email)
@@ -74,6 +80,15 @@ struct ContentView: View {
                 Task { await authViewModel.restoreSession() }
             }
             .padding(.top, 4)
+
+            // Without this the screen is a dead end: no connection means no
+            // sign-in, which means no tab bar, which means no Settings — so
+            // the one field that fixes it would be unreachable.
+            Button("Change server address") { isEditingServer = true }
+                .appBody(14, weight: .semibold)
+                .foregroundStyle(AppColor.accent)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
         }
         .padding(.horizontal, 32)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
