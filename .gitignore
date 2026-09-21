@@ -1,0 +1,45 @@
+# ---- Secrets -----------------------------------------------------------
+# .env holds BETTER_AUTH_SECRET and the Postgres password. Never commit it.
+# Keep a redacted .env.example in the repo instead.
+.env
+.env.*
+!.env.example
+
+# ---- Backend runtime state --------------------------------------------
+# Postgres data directory (~70MB) and user-uploaded content: runtime state,
+# not source. Recreated by `docker compose up -d`.
+postgresql/
+uploads/
+backup/
+
+# ---- Xcode -------------------------------------------------------------
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+*.xcscmblueprint
+*.xccheckout
+*.moved-aside
+*.hmap
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Swift Package Manager
+.swiftpm/
+.build/
+Packages/
+Package.resolved
+
+# CocoaPods / Carthage (unused today, harmless to pre-empt)
+Pods/
+Carthage/Build/
+
+# ---- macOS -------------------------------------------------------------
+.DS_Store
+._*
+.Spotlight-V100
+.Trashes
+
+# ---- Claude Code worktrees --------------------------------------------
+.claude/worktrees/

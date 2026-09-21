@@ -1,0 +1,205 @@
+//
+//  WaterViewModel.swift
+//  SwiftSparkyFitness
+//
+//  Owns one day's water: the running total plus the three ways it changes
+//  (a quick-add tap, an undo tap, an exact amount). Kept separate from
+//  TodayViewModel so Today's water card and Diary's water section read the
+//  same logic instead of two screens each doing their own arithmetic on a
+//  daily-summary field.
+//
+//  The server returns authoritative totals from the quick-add POST itself,
+//  so a tap doesn't need a follow-up GET — the number on screen after a tap
+//  is the server's, not a local guess. The total moves optimistically first
+//  (see `adjust`) and the server's answer reconciles it; waiting for the
+//  round trip before showing anything made a tap feel like a dropped one.
+//
+
+import Foundation
+import Combine
+import SwiftUI
+import UIKit
+
+@MainActor
+final class WaterViewModel: ObservableObject {
+    @Published private(set) var totalMl: Double = 0
+    @Published private(set) var goalMl: Double = WaterViewModel.fallbackGoalMl
+    @Published private(set) var entries: [WaterLogEntry] = []
+    @Published private(set) var isBusy = false
+    @Published var errorMessage: String?
+
+    /// Used when the account has no water goal set (`goals.water_goal_ml` is
+    /// null on a fresh account — confirmed live). Module 2 already displayed
+    /// this same 2000 ml fallback on Today, so it isn't a new invention.
+    static let fallbackGoalMl: Double = 2000
+
+    private(set) var date: Date
+    private let apiClient: APIClientProtocol
+
+    init(date: Date = Date(), apiClient: APIClientProtocol = APIClient.shared) {
+        self.date = date
+        self.apiClient = apiClient
+    }
+
+    var mlPerDrink: Double { Water.defaultMlPerDrink }
+
+    /// Whole drinks logged, for the "3 glasses · 250 ml each" label. Derived
+    /// from the total rather than the entry count so a custom 300 ml amount
+    /// doesn't read as a full glass.
+    var wholeDrinks: Int { Int((totalMl / mlPerDrink).rounded(.down)) }
+
+    var progress: Double {
+        goalMl > 0 ? min(totalMl / goalMl, 1) : 0
+    }
+
+    /// Only hand-logged water can be undone — the server's decrement only
+    /// removes `source = 'manual'` ledger rows, so the control is disabled
+    /// when there are none rather than tapping to no effect.
+    ///
+    /// Deliberately not gated on `isBusy` any more: the stepper applies its
+    /// taps optimistically, so `manualMl` already reflects every tap in
+    /// flight and disabling for the round trip only threw taps away.
+    @Published private(set) var manualMl: Double = 0
+    var canUndo: Bool { manualMl > 0 }
+
+    /// Water derived from food, when the user has opted into
+    /// `add_food_water_to_intake`. Shown separately because it isn't in the
+    /// ledger and can't be deleted from here.
+    @Published private(set) var foodMl: Double = 0
+
+    /// Seeds the total from a daily summary the caller already fetched,
+    /// avoiding a second round-trip for a number Today/Diary just loaded.
+    func adopt(summary: DailySummary) {
+        totalMl = summary.waterIntake
+        goalMl = summary.goals.waterGoalMl ?? Self.fallbackGoalMl
+        manualMl = summary.waterIntakeBreakdown?.manualMl ?? summary.waterIntake
+        foodMl = summary.waterIntakeBreakdown?.foodMl ?? 0
+    }
+
+    func setDate(_ newDate: Date) {
+        date = newDate
+    }
+
+    /// The card and the custom-amount sheet share this view model, so a
+    /// failure from a quick-add would otherwise greet the user as a banner
+    /// the moment they opened the sheet. Called when the sheet appears.
+    func clearError() {
+        errorMessage = nil
+    }
+
+    /// Loads the itemised ledger — only Diary needs it (Today shows a total
+    /// and a stepper), so it's a separate call from `adopt`.
+    func loadEntries() async {
+        do {
+            entries = try await apiClient.waterLog(date: date)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func apply(_ totals: WaterTotals) {
+        totalMl = totals.waterMl
+        manualMl = totals.manualMl
+        foodMl = totals.foodMl
+    }
+
+    /// Taps applied to the total but not yet acknowledged by the server, and
+    /// whether a send loop is already draining them.
+    private var unsentDrinks = 0
+    private var isSendingDrinks = false
+
+    /// Quick-add (`drinks > 0`) and undo (`drinks < 0`). The server clamps
+    /// at zero and no-ops on an empty day — verified live — so there's no
+    /// pre-check here beyond disabling the control.
+    ///
+    /// The tap lands on the displayed total immediately and the server's
+    /// answer reconciles it. Before this, `isBusy` disabled both steppers for
+    /// the whole round trip: a second tap within ~300 ms was simply dropped,
+    /// and the total then jumped by one drink instead of two. Taps that
+    /// arrive mid-flight are coalesced into the next call rather than queued
+    /// as separate round trips, so a flurry of five is one extra request.
+    func adjust(drinks: Int) async {
+        errorMessage = nil
+        applyOptimistic(drinks: drinks)
+        unsentDrinks += drinks
+
+        guard !isSendingDrinks else { return }
+        isSendingDrinks = true
+        defer { isSendingDrinks = false }
+
+        while unsentDrinks != 0 {
+            let batch = unsentDrinks
+            unsentDrinks = 0
+            do {
+                apply(try await apiClient.adjustWater(date: date, drinks: batch))
+                // The server's total predates anything tapped while the call
+                // was in flight, so those taps have to go back on top of it
+                // or the number would visibly fall back mid-flurry.
+                if unsentDrinks != 0 {
+                    applyOptimistic(drinks: unsentDrinks)
+                }
+            } catch {
+                // Nothing was accepted, so take back every tap still
+                // unacknowledged: this batch and whatever queued behind it.
+                applyOptimistic(drinks: -(batch + unsentDrinks))
+                unsentDrinks = 0
+                errorMessage = error.localizedDescription
+                Haptics.error()
+                return
+            }
+        }
+    }
+
+    /// Moves the displayed total by a number of drinks ahead of the server.
+    /// Clamped at zero the same way the server clamps, so an over-eager "−"
+    /// can't show a negative total for the length of a round trip.
+    private func applyOptimistic(drinks: Int) {
+        guard drinks != 0 else { return }
+        let delta = Double(drinks) * mlPerDrink
+        let total = max(0, totalMl + delta)
+        let manual = max(0, manualMl + delta)
+        // Reduce Motion isn't readable from the environment here, so this
+        // asks UIKit for the same setting SwiftUI's accessibilityReduceMotion
+        // reflects.
+        let animation: Animation? = UIAccessibility.isReduceMotionEnabled
+            ? nil : .spring(response: 0.4, dampingFraction: 0.8)
+        withAnimation(animation) {
+            totalMl = total
+            manualMl = manual
+        }
+    }
+
+    @discardableResult
+    func logExactAmount(_ milliliters: Double) async -> Bool {
+        guard !isBusy else { return false }
+        isBusy = true
+        errorMessage = nil
+        defer { isBusy = false }
+        do {
+            apply(try await apiClient.logWaterAmount(date: date, milliliters: milliliters))
+            Haptics.success()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            Haptics.error()
+            return false
+        }
+    }
+
+    func delete(_ entry: WaterLogEntry) async {
+        guard !isBusy else { return }
+        isBusy = true
+        errorMessage = nil
+        defer { isBusy = false }
+        do {
+            try await apiClient.deleteWaterLogEntry(id: entry.id)
+            // The delete response is just an ack, so re-read the two things
+            // that changed rather than subtracting locally and drifting.
+            entries = try await apiClient.waterLog(date: date)
+            apply(try await apiClient.waterTotals(date: date))
+        } catch {
+            errorMessage = error.localizedDescription
+            Haptics.error()
+        }
+    }
+}
