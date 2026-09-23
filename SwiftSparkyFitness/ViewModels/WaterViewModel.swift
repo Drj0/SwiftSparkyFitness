@@ -211,6 +211,15 @@ final class WaterViewModel: ObservableObject {
     }
 
     @discardableResult
+    /// `isBusy` still gates this one — unlike the stepper, a double-tap on
+    /// Add is a duplicate write rather than a second drink the user meant.
+    ///
+    /// It does now reconcile with the stepper, though. The two write paths
+    /// are independent, so a "+" tapped while this was in flight used to be
+    /// swallowed: this call's response carries the server's total from
+    /// *before* that tap, and applying it plainly overwrote the optimistic
+    /// one. Re-applying whatever is still unsent is the same correction the
+    /// stepper's own send loop makes.
     func logExactAmount(_ milliliters: Double) async -> Bool {
         guard !isBusy else { return false }
         isBusy = true
@@ -218,6 +227,9 @@ final class WaterViewModel: ObservableObject {
         defer { isBusy = false }
         do {
             apply(try await apiClient.logWaterAmount(date: date, milliliters: milliliters))
+            if unsentDrinks != 0 {
+                applyOptimistic(drinks: unsentDrinks)
+            }
             Haptics.success()
             return true
         } catch {

@@ -44,22 +44,33 @@ struct BodyCard: View {
                         // `.frame(minWidth:)` couldn't promise for two labels
                         // of different widths.
                         //
-                        // Lopsided on purpose: upwards it can use the card's
-                        // own padding, but downwards it has to stop short of
-                        // the weight button below, which is drawn on top and
-                        // would otherwise swallow the overlap. 34pt rather
-                        // than the full 44 — the alternative was ~30pt of
-                        // extra card height for two lines of text.
-                        .padding(.horizontal, 12)
+                        // Lopsided on purpose: upwards it uses the card's own
+                        // padding, downwards it reaches over the weight
+                        // button. The label measures 11.7pt, not the 14 its
+                        // point size suggests, so 14 + 11.7 + 19 clears 44.
+                        //
+                        // That overlap used to be why this stopped at 34pt:
+                        // the weight button is a later sibling, so it drew on
+                        // top and took the taps. The header carries a zIndex
+                        // now, which reorders hit-testing without reordering
+                        // layout — and the region they share is the top-right
+                        // corner, where this button's own label is and where
+                        // the weight value (left-aligned) never reaches.
+                        // 13, not 12: the short "Edit" label left the target
+                        // 43pt wide, a point under the minimum.
+                        .padding(.horizontal, 13)
                         .padding(.top, 14)
-                        .padding(.bottom, 6)
+                        .padding(.bottom, 19)
                         .contentShape(Rectangle())
-                        .padding(.horizontal, -12)
+                        .padding(.horizontal, -13)
                         .padding(.top, -14)
-                        .padding(.bottom, -6)
+                        .padding(.bottom, -19)
                 }
                 .buttonStyle(.pressable)
             }
+            // Above the weight button for hit-testing only; the layout is
+            // unchanged. See the padding note above.
+            .zIndex(1)
 
             Button(action: onLogWeight) {
                 // Grouped only so the hit-area padding below can wrap both
@@ -93,10 +104,10 @@ struct BodyCard: View {
                 // tappable, so nothing is stolen) and leaves the header
                 // button the space above.
                 .padding(.top, 4)
-                .padding(.bottom, 14)
+                .padding(.bottom, 17)
                 .contentShape(Rectangle())
                 .padding(.top, -4)
-                .padding(.bottom, -14)
+                .padding(.bottom, -17)
             }
             .buttonStyle(.pressable)
             .accessibilityLabel(measurements.weight == nil ? "Log today's weight" : "Weight")
