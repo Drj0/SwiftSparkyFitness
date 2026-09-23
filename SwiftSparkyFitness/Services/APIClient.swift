@@ -49,6 +49,9 @@ protocol APIClientProtocol {
     func searchFoods(query: String) async throws -> [Food]
     func foodSuggestions() async throws -> FoodSuggestions
     func searchExternalFoods(query: String) async throws -> [Food]
+    /// Empty when this server has no USDA provider configured — that's a
+    /// deployment choice, not an error.
+    func searchUsdaFoods(query: String) async throws -> [Food]
     func createCustomFood(_ input: CustomFoodInput) async throws -> Food
     func materializeExternalFood(_ food: Food) async throws -> Food
     func createFoodEntry(_ input: FoodEntryInput) async throws
@@ -179,7 +182,8 @@ final class APIClient: APIClientProtocol {
         method: String = "GET",
         query: [URLQueryItem] = [],
         body: Encodable? = nil,
-        verbatimKeys: Bool = false
+        verbatimKeys: Bool = false,
+        headers: [String: String] = [:]
     ) async throws -> T {
         guard var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
             throw APIError.invalidResponse
@@ -189,6 +193,9 @@ final class APIClient: APIClientProtocol {
 
         var request = URLRequest(url: url)
         request.httpMethod = method
+        for (field, value) in headers {
+            request.setValue(value, forHTTPHeaderField: field)
+        }
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
             request.httpBody = try (verbatimKeys ? verbatimEncoder : encoder).encode(body)
@@ -361,11 +368,71 @@ final class APIClient: APIClientProtocol {
     /// OpenFoodFacts is free/keyless and confirmed live — unlike USDA,
     /// Nutritionix, and Fatsecret, which this server also proxies but need
     /// per-provider API credentials configured server-side first.
+    /// `verbatimKeys` is load-bearing: OpenFoodFacts' keys (`product_name`,
+    /// `energy-kcal_100g`) are matched literally by CodingKeys, and the shared
+    /// decoder's snake-to-camel conversion rewrites them first so nothing
+    /// matches — decoding 20 products with every field nil and no error. See
+    /// OpenFoodFactsProduct.
     func searchExternalFoods(query: String) async throws -> [Food] {
         let response: OpenFoodFactsSearchResponse = try await send(
-            "api/foods/openfoodfacts/search", query: [URLQueryItem(name: "query", value: query)]
+            "api/foods/openfoodfacts/search",
+            query: [URLQueryItem(name: "query", value: query)],
+            verbatimKeys: true
         )
         return response.products.compactMap(\.asFood).prefix(20).map { $0 }
+    }
+
+    // MARK: - USDA FoodData Central
+
+    /// Which provider row to search with, or nil if this deployment has none.
+    ///
+    /// USDA needs an `x-provider-id` naming a row the user may use — unlike
+    /// OpenFoodFacts, which is keyless and needs no header. The id is looked
+    /// up once and cached: it can't change without the user editing Settings,
+    /// and a lookup per keystroke would double the request count of every
+    /// search.
+    private actor ProviderCache {
+        private var usdaId: String??
+
+        func id(loading: () async throws -> String?) async -> String? {
+            if let usdaId { return usdaId }
+            let resolved = try? await loading()
+            usdaId = .some(resolved)
+            return resolved
+        }
+
+        func invalidate() { usdaId = nil }
+    }
+
+    private let providerCache = ProviderCache()
+
+    private struct ExternalProvider: Decodable {
+        let id: String
+        let providerType: String
+        let isActive: Bool?
+    }
+
+    private func usdaProviderId() async -> String? {
+        await providerCache.id { [self] in
+            let providers: [ExternalProvider] = try await send("api/external-providers")
+            return providers.first { $0.providerType == "usda" && $0.isActive != false }?.id
+        }
+    }
+
+    /// Generic/whole foods — see UsdaFood for why this exists alongside
+    /// OpenFoodFacts and why branded rows are dropped.
+    ///
+    /// The backend returns FoodData Central's response untouched (a bare
+    /// `res.json(data)`), so the mapping is this app's job, unlike the
+    /// OpenFoodFacts route which the server normalises.
+    func searchUsdaFoods(query: String) async throws -> [Food] {
+        guard let providerId = await usdaProviderId() else { return [] }
+        let response: UsdaSearchResponse = try await send(
+            "api/foods/usda/search",
+            query: [URLQueryItem(name: "query", value: query)],
+            headers: ["x-provider-id": providerId]
+        )
+        return response.foods.compactMap(\.asFood).prefix(20).map { $0 }
     }
 
     private struct CustomFoodRequest: Encodable {

@@ -20,15 +20,41 @@ struct FoodVariant: Decodable, Identifiable, Hashable {
     let fat: Double?
 }
 
+/// Where a search result came from.
+///
+/// Replaces a bare `isExternal` flag: the app now queries two external
+/// databases, and the row has to say which one a result is from — two
+/// separate properties for "is it external" and "which one" would drift.
+enum FoodSource: String, Hashable {
+    /// Already in this server's own `foods` table.
+    case local
+    case openFoodFacts
+    case usda
+
+    /// Shown in the result row. Local foods aren't labelled — the absence of
+    /// a source *is* the signal that it's the user's own.
+    var label: String? {
+        switch self {
+        case .local: return nil
+        case .openFoodFacts: return "Open Food Facts"
+        case .usda: return "USDA"
+        }
+    }
+}
+
 struct Food: Decodable, Identifiable, Hashable {
     let id: String
     let name: String
     let brand: String?
     let defaultVariant: FoodVariant?
-    /// True for a result from an external database (OpenFoodFacts) that
-    /// isn't in our local `foods` table yet. Logging one sends a nutrition
-    /// snapshot only — no food_id/variant_id, since neither exists locally.
-    var isExternal: Bool = false
+    /// Not decoded — the search endpoints don't report it, the call site knows
+    /// which one it asked.
+    var source: FoodSource = .local
+
+    /// A result that isn't in our local `foods` table yet. Logging one has to
+    /// materialise it first: the entry needs a real food_id, and a snapshot
+    /// alone is rejected by the RLS insert policy.
+    var isExternal: Bool { source != .local }
 
     private enum CodingKeys: String, CodingKey {
         case id, name, brand, defaultVariant

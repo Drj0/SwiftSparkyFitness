@@ -4,10 +4,26 @@
 //
 //  GET /api/foods/openfoodfacts/search proxies OpenFoodFacts directly — free,
 //  keyless, and confirmed live to return real matches (e.g. "aloo" returns 20
-//  real products server-side). Unlike our own API, its nutriment keys use
-//  hyphens ("energy-kcal_100g"), which the decoder's .convertFromSnakeCase
-//  strategy doesn't touch — explicit CodingKeys here, so it decodes correctly
-//  regardless of that strategy.
+//  real products server-side).
+//
+//  THIS MUST BE DECODED WITH KEYS TAKEN VERBATIM
+//  ---------------------------------------------
+//  An earlier comment here claimed the explicit CodingKeys below made it
+//  decode "correctly regardless of" the shared decoder's
+//  `.convertFromSnakeCase`. That is backwards, and it silently broke the
+//  whole integration.
+//
+//  The strategy transforms the *incoming JSON key* before matching it against
+//  a CodingKey, so `product_name` arrives as `productName` and never matches
+//  the key `"product_name"`. Hyphens are indeed left alone, but the
+//  underscore isn't: `energy-kcal_100g` becomes `energy-kcal100g`.
+//
+//  The result decoded without ever throwing — 20 products, every field nil —
+//  so `asFood` returned nil for all of them and search quietly fell back to
+//  local foods only. Measured against the live server: shared decoder gives
+//  0 usable foods, a plain one gives 19 from the same bytes.
+//
+//  Hence the call site passes `verbatimKeys: true`. Don't remove it.
 //
 //  OpenFoodFacts entries are user-submitted and routinely inconsistent in
 //  shape (a missing `nutriments`, an unexpected field type). A plain
@@ -83,6 +99,6 @@ struct OpenFoodFactsProduct: Decodable {
             calories: calories, protein: nutriments?.proteins100g,
             carbs: nutriments?.carbohydrates100g, fat: nutriments?.fat100g
         )
-        return Food(id: "off-\(code ?? UUID().uuidString)", name: name, brand: brands, defaultVariant: variant, isExternal: true)
+        return Food(id: "off-\(code ?? UUID().uuidString)", name: name, brand: brands, defaultVariant: variant, source: .openFoodFacts)
     }
 }

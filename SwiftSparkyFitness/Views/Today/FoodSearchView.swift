@@ -295,6 +295,12 @@ struct FoodSearchView: View {
         if let calories = variant?.calories {
             parts.append("\(Int(calories)) kcal")
         }
+        // Where the data came from, appended to the line that's already a
+        // "·"-joined list rather than given its own badge — results from three
+        // databases otherwise look identically authoritative. A local food
+        // adds nothing here: no source label *is* the signal it's the user's
+        // own.
+        if let source = food.source.label { parts.append(source) }
         return parts.joined(separator: " · ")
     }
 }

@@ -117,6 +117,9 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         var externalSearchError: Error?
         var localSearchQueries: [String] = []
         var externalSearchQueries: [String] = []
+        var usdaFoodsToReturn: [Food] = []
+        var usdaSearchError: Error?
+        var usdaSearchQueries: [String] = []
         var suggestionsToReturn = FoodSuggestions.none
         var suggestionsError: Error?
         var suggestionsRequests = 0
@@ -172,6 +175,11 @@ final class SwiftSparkyFitnessTests: XCTestCase {
             externalSearchQueries.append(query)
             if let externalSearchError { throw externalSearchError }
             return externalFoodsToReturn
+        }
+        func searchUsdaFoods(query: String) async throws -> [Food] {
+            usdaSearchQueries.append(query)
+            if let usdaSearchError { throw usdaSearchError }
+            return usdaFoodsToReturn
         }
         func foodSuggestions() async throws -> FoodSuggestions {
             suggestionsRequests += 1
@@ -1257,10 +1265,15 @@ final class SwiftSparkyFitnessTests: XCTestCase {
     /// design gives them different screens — collapsing both into an empty
     /// list would offer "add it yourself" to someone who is simply offline.
     @MainActor
-    func testOnlyABothSidesFailureCountsAsANetworkError() async {
+    func testOnlyATotalFailureCountsAsANetworkError() async {
         let stub = StubAPIClient()
-        stub.localSearchError = APIError.server(message: "down", code: nil)
-        stub.externalSearchError = APIError.server(message: "down", code: nil)
+        let down = APIError.server(message: "down", code: nil)
+        // Three sources now, not two — USDA joined local and OpenFoodFacts.
+        // This test failing when USDA was added is the rule working: with one
+        // source still answering, the screen must not claim to be offline.
+        stub.localSearchError = down
+        stub.externalSearchError = down
+        stub.usdaSearchError = down
         let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
         viewModel.query = "porridge"
         await viewModel.search()
@@ -1360,6 +1373,200 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         await viewModel.search()
 
         XCTAssertEqual(stub.suggestionsRequests, 0)
+    }
+
+    // MARK: - OpenFoodFacts key handling
+
+    /// OpenFoodFacts search was returning *nothing* in the app while the
+    /// backend returned 20 products, and it failed silently: the response
+    /// decoded without error, just with every field nil, so `asFood` mapped
+    /// them all away and search fell back to local foods only.
+    ///
+    /// The cause is that `.convertFromSnakeCase` rewrites the incoming key
+    /// before matching it, so `product_name` arrives as `productName` and
+    /// never matches the CodingKey `"product_name"`. This pins both halves:
+    /// the shared decoder loses everything, a verbatim one doesn't.
+    func testOpenFoodFactsNeedsItsKeysTakenVerbatim() throws {
+        // Shape as the proxy actually returns it, hyphen and underscore
+        // included.
+        let json = """
+        {"products": [
+          {"code": "123", "brands": "Acme",
+           "product_name": "Apple Juice",
+           "nutriments": {"energy-kcal_100g": 50, "proteins_100g": 0.2,
+                          "carbohydrates_100g": 12, "fat_100g": 0.1}}
+        ]}
+        """
+        let data = Data(json.utf8)
+
+        let shared = JSONDecoder()
+        shared.keyDecodingStrategy = .convertFromSnakeCase
+        let viaShared = try shared.decode(OpenFoodFactsSearchResponse.self, from: data)
+        XCTAssertEqual(viaShared.products.count, 1, "it decodes — that's why this was silent")
+        XCTAssertNil(viaShared.products[0].productName)
+        XCTAssertEqual(viaShared.products.compactMap(\.asFood).count, 0)
+
+        let verbatim = try JSONDecoder().decode(OpenFoodFactsSearchResponse.self, from: data)
+        let foods = verbatim.products.compactMap(\.asFood)
+        XCTAssertEqual(foods.count, 1)
+        XCTAssertEqual(foods[0].name, "Apple Juice")
+        XCTAssertEqual(foods[0].defaultVariant?.calories, 50)
+        XCTAssertEqual(foods[0].source, .openFoodFacts)
+    }
+
+    /// USDA's API is camelCase already (`fdcId`, `dataType`, `foodNutrients`,
+    /// `nutrientId`), so it is unaffected by the strategy either way — worth
+    /// pinning so nobody "fixes" it to verbatim and breaks the other one.
+    func testUsdaDecodesUnderEitherKeyStrategy() throws {
+        let data = Data(usdaSampleJSON.utf8)
+        let shared = JSONDecoder()
+        shared.keyDecodingStrategy = .convertFromSnakeCase
+        let a = try shared.decode(UsdaSearchResponse.self, from: data).foods.compactMap(\.asFood)
+        let b = try JSONDecoder().decode(UsdaSearchResponse.self, from: data).foods.compactMap(\.asFood)
+        XCTAssertEqual(a.map(\.name), b.map(\.name))
+        XCTAssertEqual(a.map(\.name), ["Cheeseburger, NFS", "Apple, raw"])
+    }
+
+    // MARK: - USDA generic foods
+
+    /// A trimmed copy of a real `/api/foods/usda/search` body. The backend
+    /// returns FoodData Central's response untouched, so this is the shape the
+    /// app actually has to map.
+    private let usdaSampleJSON = """
+    {"totalHits": 307, "foods": [
+      {"fdcId": 2655984, "description": "CHEESEBURGER", "dataType": "Branded",
+       "brandOwner": "7-Eleven, Inc.",
+       "foodNutrients": [{"nutrientId": 1008, "value": 343}, {"nutrientId": 1003, "value": 14}]},
+      {"fdcId": 2341573, "description": "Cheeseburger, NFS", "dataType": "Survey (FNDDS)",
+       "foodNutrients": [{"nutrientId": 1008, "value": 296}, {"nutrientId": 1003, "value": 17.87},
+                         {"nutrientId": 1005, "value": 18.71}, {"nutrientId": 1004, "value": 16.15}]},
+      {"fdcId": 999001, "description": "Lunchmeat, chicken breast, sliced", "dataType": "Foundation",
+       "foodNutrients": [{"nutrientId": 1003, "value": null}]},
+      {"fdcId": 173944, "description": "Apple, raw", "dataType": "SR Legacy",
+       "foodNutrients": [{"nutrientId": 2048, "value": 61}]}
+    ]}
+    """
+
+    private func decodedUsdaFoods() throws -> [Food] {
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let response = try decoder.decode(UsdaSearchResponse.self, from: Data(usdaSampleJSON.utf8))
+        return response.foods.compactMap(\.asFood)
+    }
+
+    /// FDC returns all four datasets. Branded is ~1.9M supermarket rows and
+    /// for "cheeseburger" the first NINE are near-identical entries literally
+    /// named "CHEESEBURGER", pushing the useful generic to #12 — while
+    /// duplicating OpenFoodFacts, which is queried alongside and is the better
+    /// branded source.
+    func testUsdaKeepsOnlyTheGenericDatasets() throws {
+        let foods = try decodedUsdaFoods()
+        XCTAssertFalse(foods.contains { $0.name == "CHEESEBURGER" }, "Branded rows must be dropped")
+        XCTAssertEqual(foods.map(\.name), ["Cheeseburger, NFS", "Apple, raw"])
+        XCTAssertTrue(foods.allSatisfy { $0.source == .usda })
+    }
+
+    /// A Foundation row for "Lunchmeat, chicken breast, sliced" comes back
+    /// with every nutrient null (measured: 1 in ~300). Offering it would log a
+    /// 0 kcal entry, which is worse than not offering it at all.
+    func testUsdaDropsResultsWithNoCalories() throws {
+        let foods = try decodedUsdaFoods()
+        XCTAssertFalse(foods.contains { $0.name.contains("Lunchmeat") })
+        XCTAssertTrue(foods.allSatisfy { ($0.defaultVariant?.calories ?? 0) > 0 })
+    }
+
+    /// Energy isn't always reported under 1008 — some rows carry only an
+    /// Atwater variant instead, and missing that reads as "no calories".
+    func testUsdaFallsBackToTheAtwaterEnergyNutrients() throws {
+        let apple = try XCTUnwrap(decodedUsdaFoods().first { $0.name == "Apple, raw" })
+        XCTAssertEqual(apple.defaultVariant?.calories, 61, "2048 should be used when 1008 is absent")
+    }
+
+    /// Both external sources model a variant as per-100g, so the portion sheet
+    /// needs no special case for either.
+    func testUsdaMapsPer100gLikeOpenFoodFacts() throws {
+        let burger = try XCTUnwrap(decodedUsdaFoods().first { $0.name == "Cheeseburger, NFS" })
+        let variant = try XCTUnwrap(burger.defaultVariant)
+        XCTAssertEqual(variant.servingSize, 100)
+        XCTAssertEqual(variant.servingUnit, "g")
+        XCTAssertEqual(variant.calories, 296)
+        XCTAssertEqual(variant.protein, 17.87)
+        XCTAssertEqual(variant.carbs, 18.71)
+        XCTAssertEqual(variant.fat, 16.15)
+        // Generic rows carry no brand — a stray one would read as a product.
+        XCTAssertNil(burger.brand)
+    }
+
+    /// One malformed entry must not discard the batch, the same lesson
+    /// OpenFoodFacts taught.
+    func testOneUnparseableUsdaEntryDoesNotDiscardTheRest() throws {
+        let json = """
+        {"foods": [
+          {"fdcId": "not-an-int", "description": "Broken", "dataType": "SR Legacy"},
+          {"fdcId": 1, "description": "Banana, raw", "dataType": "Survey (FNDDS)",
+           "foodNutrients": [{"nutrientId": 1008, "value": 97}]}
+        ]}
+        """
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let response = try decoder.decode(UsdaSearchResponse.self, from: Data(json.utf8))
+        XCTAssertEqual(response.foods.compactMap(\.asFood).map(\.name), ["Banana, raw"])
+    }
+
+    @MainActor
+    func testGenericResultsRankAboveBrandedOnes() async {
+        let stub = StubAPIClient()
+        stub.localFoodsToReturn = [makeFood("local-1", "My Apple")]
+        stub.externalFoodsToReturn = [makeFood("off-1", "Apple Juice Carton")]
+        stub.usdaFoodsToReturn = [makeFood("usda-1", "Apple, raw")]
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+
+        viewModel.query = "apple"
+        await viewModel.search()
+
+        guard case .results(let foods) = viewModel.outcome else {
+            return XCTFail("expected results, got \(viewModel.outcome)")
+        }
+        // The user's own first, then the two providers alternating with USDA
+        // taking the first slot — someone typing "apple" wants the fruit, but
+        // the juice carton still has to be reachable without scrolling past
+        // twenty generics.
+        XCTAssertEqual(foods.map(\.id), ["local-1", "usda-1", "off-1"])
+    }
+
+    /// Concatenating the providers buried whichever one the query meant:
+    /// "cheerios" put five generic "Cereal, O's" rows above the real Cheerios
+    /// box, because each source returns up to 20 matches for anything.
+    @MainActor
+    func testABrandedQueryStillSurfacesItsBrandedResultNearTheTop() async {
+        let stub = StubAPIClient()
+        stub.usdaFoodsToReturn = (1...8).map { makeFood("generic-\($0)", "Cereal, O's variant \($0)") }
+        stub.externalFoodsToReturn = [makeFood("off-cheerios", "Cheerios")]
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+
+        viewModel.query = "cheerios"
+        await viewModel.search()
+
+        guard case .results(let foods) = viewModel.outcome else {
+            return XCTFail("expected results, got \(viewModel.outcome)")
+        }
+        let brandedRank = try? XCTUnwrap(foods.firstIndex { $0.id == "off-cheerios" })
+        XCTAssertEqual(brandedRank, 1, "the branded match must not be pushed below the generics")
+    }
+
+    /// A server with no USDA provider configured returns nothing from it, and
+    /// that must stay an ordinary empty result rather than an error.
+    @MainActor
+    func testSearchStillWorksWhenUsdaIsUnavailable() async {
+        let stub = StubAPIClient()
+        stub.usdaSearchError = APIError.server(message: "no provider", code: nil)
+        stub.externalFoodsToReturn = [makeFood("off-1", "Cheerios")]
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+
+        viewModel.query = "cheerios"
+        await viewModel.search()
+
+        XCTAssertEqual(viewModel.outcome.kindID, "results")
     }
 
     // MARK: - Custom food

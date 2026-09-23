@@ -106,23 +106,56 @@ final class FoodSearchViewModel: ObservableObject {
         defer { isSearching = false }
 
         async let local = fetch(trimmed, apiClient.searchFoods)
-        async let external = fetch(trimmed, apiClient.searchExternalFoods)
+        async let openFoodFacts = fetch(trimmed, apiClient.searchExternalFoods)
+        // USDA is what makes generic foods findable ("Apple, raw",
+        // "Cheeseburger, NFS"); OpenFoodFacts only has packaged products. It
+        // returns nothing when the server has no USDA provider configured,
+        // which is a deployment choice rather than a failure.
+        async let usda = fetch(trimmed, apiClient.searchUsdaFoods)
+
         let (localFoods, localFailed) = await local
-        let (externalFoods, externalFailed) = await external
+        let (brandedFoods, brandedFailed) = await openFoodFacts
+        let (genericFoods, usdaFailed) = await usda
 
         // A newer keystroke may have started (and awaited) another search
         // while this one was in flight; don't let a slower, superseded
         // response clobber whatever that later search already showed.
         guard !Task.isCancelled, trimmed == query.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
 
-        let combined = localFoods + externalFoods
+        // The user's own foods lead, then the two providers alternating.
+        //
+        // Concatenating them instead — all generics, then all branded —
+        // buried whichever source the query actually meant, because each
+        // returns up to 20 matches for anything. Measured: searching
+        // "cheerios" put five generic "Cereal, O's …" rows above the real
+        // Cheerios box. Alternating keeps both kinds within the first few
+        // rows, so the app doesn't have to guess whether "apple" means the
+        // fruit or a juice carton — it offers both immediately.
+        //
+        // USDA takes each pair's first slot, which is the one bias worth
+        // having: it's the source that knows what a plain apple is.
+        let combined = localFoods + interleaved(genericFoods, brandedFoods)
         if !combined.isEmpty {
             outcome = .results(combined)
-        } else if localFailed && externalFailed {
+        } else if localFailed && brandedFailed && usdaFailed {
+            // Only a total blackout is a network error. One source down while
+            // another simply has nothing is still "no results".
             outcome = .networkError(query: trimmed)
         } else {
             outcome = .noResults(query: trimmed)
         }
+    }
+
+    /// Alternates two result lists, starting with `first`, and appends
+    /// whatever remains once the shorter one runs out.
+    private func interleaved(_ first: [Food], _ second: [Food]) -> [Food] {
+        var merged: [Food] = []
+        merged.reserveCapacity(first.count + second.count)
+        for index in 0..<Swift.max(first.count, second.count) {
+            if index < first.count { merged.append(first[index]) }
+            if index < second.count { merged.append(second[index]) }
+        }
+        return merged
     }
 
     /// Runs one source and reports whether it genuinely failed. Cancellation

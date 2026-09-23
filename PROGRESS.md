@@ -272,6 +272,36 @@ An adversarial review of this pass found four defects; all four are fixed.
 - The card's bar filled and stopped at 100%, so 2 litres and 4 litres against a 2 litre goal drew identically. `overshoot` is a second lap over the full bar. `progress` stays clamped deliberately — it's a width, and a width can't overflow.
 - Drawn in a deeper tone rather than the calorie ring's red: drinking past a water goal is a good outcome, and red reads as a warning.
 
+**Generic food search (USDA FoodData Central)**
+
+The complaint was that searching "apple" returned apple juice and "cheeseburger" returned only branded fast food. Two separate causes, one of them long-standing.
+
+*Cause 1 — OpenFoodFacts had been returning nothing at all, silently*
+
+- `OpenFoodFactsProduct` carries explicit CodingKeys (`product_name`, `energy-kcal_100g`) and a comment claiming they made it decode "correctly regardless of" the shared decoder's `.convertFromSnakeCase`. **That is backwards.** The strategy rewrites the *incoming* key before matching, so `product_name` arrives as `productName` and never matches. Hyphens are left alone, but the underscore isn't: `energy-kcal_100g` becomes `energy-kcal100g`.
+- It **decoded without ever throwing** — 20 products, every field nil — so `asFood` mapped them all away and search quietly fell back to local foods only. Measured on the same bytes from the live server: shared decoder → **0** usable foods, plain decoder → **19**.
+- Fixed by passing `verbatimKeys: true` (the same escape hatch goals uses). A test pins both halves so nobody "tidies" it back.
+- Worth noting the failure mode: an empty result set from a 200 response looks exactly like "nothing matched", which is why this survived a full UI/UX review.
+
+*Cause 2 — USDA wasn't configured, and had to be*
+
+- FoodData Central is where generic composites live. The backend has a `usda` integration and route, but **no provider row existed** and there's no env-var path — the key is read per-request from `external_data_providers`. The route answers `400 "Missing x-provider-id header"` until one exists.
+- **The suspected `dataType` bug is not real.** `usdaService.ts:109` sends *no* `dataType` on text search, so all four datasets come back; only the barcode path pins `Branded`, which is correct for barcodes. No backend change was needed.
+- **`/api/foods/usda/search` returns FoodData Central's response untouched** (a bare `res.json(data)`), unlike the OpenFoodFacts route which the server normalises — so `UsdaFood` does the mapping client-side.
+- **Branded rows are dropped.** FDC's Branded set is ~1.9M supermarket products; for "cheeseburger" the first *nine* results are near-identical rows literally named "CHEESEBURGER", with "Cheeseburger, NFS" at #12. Keeping them would bury the generics while duplicating OpenFoodFacts, which is the better branded source. The three generic datasets are kept.
+- **Results with no energy value are dropped too** — a Foundation row for "Lunchmeat, chicken breast, sliced" returns every nutrient null (1 in ~300 measured), and offering it would log a 0 kcal entry.
+- **A zero macro is kept, though.** An early version required `> 0` for every nutrient, which turned roast chicken's real 0 g of carbohydrate into "missing".
+
+*Ordering*
+
+- Recents/custom first (unchanged), then the two providers **alternating**, USDA taking each pair's first slot.
+- Concatenating them (all generics, then all branded) was tried first and **buried whichever source the query meant**: "cheerios" put five generic "Cereal, O's …" rows above the real Cheerios box, because each source returns up to 20 matches for anything. Alternating keeps both kinds in the first few rows without the app guessing whether "apple" means the fruit or a juice carton.
+- The source is appended to the row's existing "·"-joined subtitle ("100g · 61 kcal · USDA") rather than given a badge — there was no existing source-indicator pattern in the design, and three databases otherwise look identically authoritative. A local food shows none: its absence is the signal.
+
+*Known flakiness, not app-side*
+
+The container's outbound call to `api.nal.usda.gov` intermittently `ETIMEDOUT`s — observed roughly 1 in 6 early on, then 6/6 clean. A USDA timeout degrades to OpenFoodFacts-only results rather than erroring, which is the existing per-source failure rule.
+
 ## Not yet built
 
 - **Progress tab** — placeholder only.
