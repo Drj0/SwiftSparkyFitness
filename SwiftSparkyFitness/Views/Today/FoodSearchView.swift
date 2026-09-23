@@ -91,24 +91,28 @@ struct FoodSearchView: View {
     // painted pills and the type stay exactly the size they were.
     private var header: some View {
         VStack(spacing: 10) {
-            HStack {
-                // The frame goes on the *label*, not on the Button: a frame
-                // outside a Button grows the view without growing what the
-                // button actually hit-tests.
-                Button { dismiss() } label: {
-                    Text("Cancel")
-                        .appBody(15)
-                        .foregroundStyle(AppColor.secondaryText)
-                        .frame(minWidth: 44, minHeight: 44, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.pressable)
-                Spacer()
-                Text("Log Food").appDisplay(18)
-                Spacer()
-                Color.clear.frame(width: 44, height: 1)
-            }
+            // No trailing action: this sheet commits nothing itself, it
+            // pushes a detail sheet that does. SheetHeader centres the title
+            // on the bar, so it no longer needs a spacer to balance Cancel —
+            // and its own divider is suppressed because the rule that matters
+            // here is the one under the chips, not under the title.
+            SheetHeader(title: "Log Food", onCancel: { dismiss() }, showsDivider: false)
 
+            searchAndChips
+        }
+        .padding(.top, 2)
+        .padding(.bottom, 8)
+        .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .bottom)
+        .task { isSearchFocused = true }
+        .task(id: viewModel.query) {
+            try? await Task.sleep(nanoseconds: 350_000_000)
+            guard !Task.isCancelled else { return }
+            await viewModel.search()
+        }
+    }
+
+    private var searchAndChips: some View {
+        VStack(spacing: 10) {
             HStack(spacing: 8) {
                 // Decorative twin of the field's own label — as its own
                 // element it announced "Search" immediately before an
@@ -135,16 +139,7 @@ struct FoodSearchView: View {
                 }
             }
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 2)
-        .padding(.bottom, 8)
-        .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .bottom)
-        .task { isSearchFocused = true }
-        .task(id: viewModel.query) {
-            try? await Task.sleep(nanoseconds: 350_000_000)
-            guard !Task.isCancelled else { return }
-            await viewModel.search()
-        }
+        .padding(.horizontal, AppSpacing.screenPad)
     }
 
     @ViewBuilder

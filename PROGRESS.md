@@ -231,13 +231,33 @@ The gap the review flagged — food search, custom food and exercise logging wer
 - **BMR is the one field whose lower bound isn't "more than zero"** — the column carries a 600–6000 constraint, so `BodyField.minimum` exists for it alone. Without that, typing 550 returned a raw `400 "Too small: expected number to be >=600"` instead of a field error. Percentages are bounded at 100 server-side.
 - `steps` stays deliberately unwritten — see the Apple Health notes for why active energy is the better signal.
 
+**Module 5 completion pass** — the open items from the UI/UX review.
+
+*Units (Settings › Units) — Settings is now complete*
+
+- `PUT /api/user-preferences`, partial merge, one key per tap.
+- **The server validates none of these.** `default_weight_unit: "bogus"` returns 200 and is stored — verified. The option lists in `UserPreferences.Setting` are the only guard, which is also why every label getter falls through a `default:` rather than trusting what comes back.
+- **`st_lbs` and `ft_in` are accepted by the server and deliberately not offered.** They're compound units and the app has one numeric field per measurement; "13.5 st" is not how anyone writes stone and pounds, so offering them would promise something the UI can't keep. A value set from the web client still reads back, is labelled honestly, and the picker says so instead of showing nothing selected.
+- **Nothing converts, and the screen says so.** The stored number is in whatever unit the preference names, so switching kg→lb relabels and leaves 73.5 as 73.5. That's the web client's behaviour; diverging would make one row mean two things across the two clients. A silent relabel reads as a bug the first time you meet it, hence the note on the screen.
+
+*Sheet chrome — all seven sheets now share `SheetHeader`*
+
+- The six hand-built headers are migrated. Measured after: Log Exercise's Save went from ~33x17pt to a full 44pt target, and its title from up-to-6pt off-centre to 201.05 against a 201.0 centre.
+- `SheetAction` gained `isBusy` so the migration kept the spinner-in-place-of-Save behaviour three sheets rely on (two of them make sequential calls, which is how a double-tap used to write a duplicate).
+- `showsDivider` exists for Log Food alone: its header is the title bar *plus* a search field and meal chips, and the rule that matters is under all of it — a second rule under just the title cut the block in half.
+- **This caught a font bug.** `WaterCard`'s "Add" button still had `.fontWeight(.semibold)`, missed in the Module 1 sweep — i.e. it was asking CoreText to synthesise a weight on a static custom face. The migration removed it; there are now zero `.fontWeight` calls in the app.
+
+*Water overshoot*
+
+- The card's bar filled and stopped at 100%, so 2 litres and 4 litres against a 2 litre goal drew identically. `overshoot` is a second lap over the full bar. `progress` stays clamped deliberately — it's a width, and a width can't overflow.
+- Drawn in a deeper tone rather than the calorie ring's red: drinking past a water goal is a good outcome, and red reads as a warning.
+
 ## Not yet built
 
 - **Progress tab** — placeholder only.
 - **Settings tab** — partially built (Module 5): server address and Sign out. Still missing units, water containers, and goals.
 - **Per-meal default times and reordering** — the column exists (`default_time`, and the defaults accept one) but nothing in the app sets it or schedules anything by it, and there is no drag-to-reorder: the server refuses to reorder its own four, so a general reorder would work for only some rows. A new category lands after the existing ones.
 - **Container extras** — containers can be added, made primary and deleted, but not *edited*: renaming or resizing one means delete and re-add. `servings_per_container` is modelled but not editable (everything the app creates is one serving), and `hydration_factor`, `is_quick_add`, `sort_order` and the `linked_food_*` fields are untouched. The last of those would make a drink also log its calories and caffeine, which is a feature in its own right.
-- **Unit preference UI** — Module 4 *reads* `default_weight_unit` / `default_measurement_unit` / `water_display_unit` from the server and labels every field from them, but nothing can change them yet. That's Module 5's job, and it needs no client-side rework — but read the kg/cm BMR caveat under "backend quirks" first.
 - **A note on a weight entry** — `check_in_measurements` has no notes column, so the weight sheet has no note field. Would need either a custom measurement category (which does carry notes) or a backend change.
 - **`steps`** — a column on the same check-in row. Deliberately still unwritten: the Health integration reports active energy instead, because steps *add* to logged workouts where active calories replace them. See the Apple Health notes above.
 - **Completing a password reset in-app** — the app can *request* a reset (Module 1 completion pass); the link itself opens the web frontend. There's no deep-link route that would let the new password be set without leaving the app. Note also that no reset mail is delivered at all until the server operator configures SMTP, which is a deployment concern rather than an app one.
@@ -249,6 +269,4 @@ The gap the review flagged — food search, custom food and exercise logging wer
 - **Test coverage gaps that remain** — the suite is 58 server-free tests and now covers Module 2's view models too. Still untested: `FoodDetailViewModel`'s portion math, `TodayViewModel`/`DiaryViewModel` load/error paths beyond the goal check, and every `View` (there are no snapshot or UI tests at all).
   - Two throwaway techniques from Module 4 worth reusing, since no Xcode MCP tools were available that session: (1) a temporary test that drives the real `APIClient` against the live server — it catches URL/encode/decode mistakes the stub can't; (2) rendering views to PNGs (`/tmp`) and looking at them, which is how the wrong-coloured progress bar and the truncated decimals were caught. Note `ImageRenderer` draws `ScrollView` content as **blank** (verified with a control) — render anything inside one through a `UIHostingController` in a `UIWindow` plus `drawHierarchy(in:afterScreenUpdates:)` instead.
 - **Native `TabView`** — the tab bar is hand-rolled, so switching tabs destroys each tab's `@StateObject` and re-runs its load. Verified live: browse Diary to Sep 20, tap Today, tap Diary → you are back on today, with the collapsed sections and scroll position gone. Re-tapping the active tab also does nothing (no scroll-to-top). Migrating to `TabView` fixes the state loss, scroll-to-top, keyboard traversal and Dynamic Type in the bar together; the cost is the design's ringed-icon treatment, which would need a custom `.symbolset`.
-- **Over-goal ring overshoot on water** — calories now show "N kcal over" with a red overshoot lap, but the water card's own bar still pins at 100%.
-- **Sheet chrome, the other six** — `SheetHeader` exists and fixes the centring and tap targets (Module 1 completion pass), but only `ForgotPasswordSheet` uses it. The six older sheets still hand-build their headers and still carry the off-centre title and the ~45x17pt Cancel/Save targets. Migrating them is mechanical now. Note `FoodSearchView`'s comment about a `NavigationStack` in a multi-detent sheet reserving ~130pt of phantom space — that's why `SheetHeader` is a plain `HStack` rather than a toolbar.
 - **Multi-server support** — the mobile reference app (SparkyFitnessMobile) supports multiple server configs/accounts; this app stores one address (editable in Settings) and one session.

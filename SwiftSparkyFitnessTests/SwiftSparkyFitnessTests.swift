@@ -133,6 +133,8 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         var deletedContainerIds: [Int] = []
         var containerWriteError: Error?
         var adjustCalls: [(drinks: Int, containerId: Int?)] = []
+        var preferenceWrites: [(setting: UserPreferences.Setting, value: String)] = []
+        var preferenceWriteError: Error?
 
         func signIn(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
         func signUp(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
@@ -207,6 +209,11 @@ final class SwiftSparkyFitnessTests: XCTestCase {
             if let syncActiveEnergyError { throw syncActiveEnergyError }
         }
         func userPreferences() async throws -> UserPreferences { preferencesToReturn }
+        func updateUserPreference(_ setting: UserPreferences.Setting, to value: String) async throws -> UserPreferences {
+            preferenceWrites.append((setting, value))
+            if let preferenceWriteError { throw preferenceWriteError }
+            return preferencesToReturn
+        }
         func goals(date: Date) async throws -> NutritionGoals {
             if let goalsLoadError { throw goalsLoadError }
             return goalsToReturn
@@ -683,6 +690,81 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertEqual(decoded.weightUnitLabel, "kg")
         XCTAssertEqual(decoded.measurementUnitLabel, "cm")
         XCTAssertEqual(decoded.waterUnitLabel, "ml")
+    }
+
+    // MARK: - Unit preferences
+
+    /// The server accepts anything — `default_weight_unit: "bogus"` returns
+    /// 200 and is stored — so the option lists are the only guard, and every
+    /// label getter has to fall through rather than trust what comes back.
+    func testUnitOptionsExcludeCompoundUnitsTheUICannotShow() {
+        let weight = UserPreferences.Setting.weight.options.map(\.value)
+        XCTAssertEqual(weight, ["kg", "lbs"])
+        XCTAssertFalse(weight.contains("st_lbs"), "a single numeric field can't express stone and pounds")
+
+        let measurement = UserPreferences.Setting.measurement.options.map(\.value)
+        XCTAssertEqual(measurement, ["cm", "inches"])
+        XCTAssertFalse(measurement.contains("ft_in"))
+    }
+
+    /// A compound unit set from the web client still has to read back sanely
+    /// rather than falling through to the wrong label.
+    func testAValueSetElsewhereIsStillLabelledHonestly() {
+        let compound = UserPreferences(
+            defaultWeightUnit: "st_lbs", defaultMeasurementUnit: "ft_in",
+            waterDisplayUnit: "ml", measurementDecimalPlaces: 0
+        )
+        XCTAssertEqual(compound.weightUnitLabel, "st")
+        XCTAssertEqual(compound.measurementUnitLabel, "ft")
+        XCTAssertEqual(compound.value(for: .weight), "st_lbs")
+        // ...and the picker knows it has nothing to highlight.
+        XCTAssertFalse(UserPreferences.Setting.weight.options.contains { $0.value == "st_lbs" })
+    }
+
+    @MainActor
+    func testSelectingAUnitWritesOnlyThatKey() async {
+        let stub = StubAPIClient()
+        let viewModel = UnitPreferencesViewModel(apiClient: stub)
+        await viewModel.load()
+
+        await viewModel.select("lbs", for: .weight)
+        XCTAssertEqual(stub.preferenceWrites.count, 1)
+        XCTAssertEqual(stub.preferenceWrites.first?.setting, .weight)
+        XCTAssertEqual(stub.preferenceWrites.first?.value, "lbs")
+
+        // Re-picking what's already stored is not a write.
+        await viewModel.select(viewModel.preferences.value(for: .water), for: .water)
+        XCTAssertEqual(stub.preferenceWrites.count, 1)
+    }
+
+    // MARK: - Water overshoot
+
+    /// The bar filled and stopped at 100%, so 2 litres and 4 litres drew
+    /// identically. `progress` stays clamped because it's a width; the
+    /// excess is a second lap.
+    @MainActor
+    func testWaterOvershootIsReportedSeparatelyFromTheClampedFill() {
+        let stub = StubAPIClient()
+        let viewModel = WaterViewModel(date: Date(), apiClient: stub)
+        viewModel.adopt(summary: DailySummary(
+            calorieBalance: .init(eaten: 0, burned: 0, remaining: 0, goal: 2000),
+            waterIntake: 3000, waterIntakeBreakdown: nil,
+            goals: .init(calories: nil, protein: nil, carbs: nil, fat: nil, waterGoalMl: 2000),
+            foodEntries: [], exerciseSessions: []
+        ))
+
+        XCTAssertEqual(viewModel.progress, 1)
+        XCTAssertEqual(viewModel.overshoot, 0.5)
+
+        // Under goal: no second lap at all.
+        viewModel.adopt(summary: DailySummary(
+            calorieBalance: .init(eaten: 0, burned: 0, remaining: 0, goal: 2000),
+            waterIntake: 1000, waterIntakeBreakdown: nil,
+            goals: .init(calories: nil, protein: nil, carbs: nil, fat: nil, waterGoalMl: 2000),
+            foodEntries: [], exerciseSessions: []
+        ))
+        XCTAssertEqual(viewModel.progress, 0.5)
+        XCTAssertEqual(viewModel.overshoot, 0)
     }
 
     // MARK: - Water containers

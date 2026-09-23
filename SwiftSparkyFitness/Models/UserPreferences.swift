@@ -67,6 +67,66 @@ struct UserPreferences: Decodable, Equatable, Sendable {
     /// this per user (defaults to 0) so lists and cards agree.
     var decimals: Int { max(0, min(3, measurementDecimalPlaces ?? 0)) }
 
+    // MARK: - What Settings may offer
+    //
+    // **The server does not validate any of these.** `PUT` with
+    // `default_weight_unit: "bogus"` returns 200 and stores it, verified
+    // live — so these lists are the only thing keeping the value sane, and
+    // every label getter above falls back through `default:` rather than
+    // trusting what comes back.
+    //
+    // `st_lbs` and `ft_in` are accepted by the server and deliberately NOT
+    // offered: they're compound units, and the app has a single numeric field
+    // per measurement. Showing "13.5 st" is not how anyone writes stone and
+    // pounds, so selecting one here would promise something the UI can't
+    // keep. A value set from the web client still reads back and is labelled
+    // honestly.
+
+    enum Setting: String, CaseIterable, Identifiable {
+        case weight, measurement, water, decimals
+
+        var id: String { rawValue }
+
+        var title: String {
+            switch self {
+            case .weight: return "Weight"
+            case .measurement: return "Measurements"
+            case .water: return "Water"
+            case .decimals: return "Decimal places"
+            }
+        }
+
+        /// Stored value → what the picker shows.
+        var options: [(value: String, label: String)] {
+            switch self {
+            case .weight: return [("kg", "kg"), ("lbs", "lb")]
+            case .measurement: return [("cm", "cm"), ("inches", "in")]
+            case .water: return [("ml", "ml"), ("oz", "oz"), ("liter", "L")]
+            case .decimals: return [("0", "0"), ("1", "1"), ("2", "2")]
+            }
+        }
+
+        /// The request key. Written out because these are dictionary keys,
+        /// which no key-encoding strategy touches.
+        var apiKey: String {
+            switch self {
+            case .weight: return "default_weight_unit"
+            case .measurement: return "default_measurement_unit"
+            case .water: return "water_display_unit"
+            case .decimals: return "measurement_decimal_places"
+            }
+        }
+    }
+
+    func value(for setting: Setting) -> String {
+        switch setting {
+        case .weight: return defaultWeightUnit ?? "kg"
+        case .measurement: return defaultMeasurementUnit ?? "cm"
+        case .water: return waterDisplayUnit ?? "ml"
+        case .decimals: return String(decimals)
+        }
+    }
+
     /// Formats a stored value for display.
     ///
     /// `measurement_decimal_places` is treated as a *minimum*, not a ceiling:

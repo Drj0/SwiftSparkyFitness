@@ -73,6 +73,19 @@ final class WaterViewModel: ObservableObject {
         goalMl > 0 ? min(totalMl / goalMl, 1) : 0
     }
 
+    /// How far past the goal, as a second lap of 0...1. The bar filled and
+    /// stopped at 100% before, so a day at 2 litres and a day at 4 looked
+    /// identical. Kept separate from `progress` rather than letting that
+    /// exceed 1, because the base fill is a width and a width can't overflow.
+    ///
+    /// Drinking past a water goal is a good outcome, unlike eating past a
+    /// calorie goal, so the card draws this in a deeper water tone rather
+    /// than borrowing the calorie ring's red warning.
+    var overshoot: Double {
+        guard goalMl > 0 else { return 0 }
+        return min(max(0, totalMl / goalMl - 1), 1)
+    }
+
     /// Only hand-logged water can be undone — the server's decrement only
     /// removes `source = 'manual'` ledger rows, so the control is disabled
     /// when there are none rather than tapping to no effect.

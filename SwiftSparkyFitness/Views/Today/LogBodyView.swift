@@ -47,40 +47,18 @@ struct LogBodyView: View {
             // Cancel measured ~45 x 17pt and Save ~33 x 17pt. Both now carry
             // a 44pt target; the header's own vertical padding drops from 14
             // to 2 so the row keeps the height it had.
-            HStack {
-                Button { dismiss() } label: {
-                    Text("Cancel")
-                        .foregroundStyle(AppColor.secondaryText)
-                        .frame(minWidth: 44, minHeight: 44, alignment: .leading)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.pressable)
-
-                Spacer()
-                Text(viewModel.kind.title).appDisplay(18).foregroundStyle(AppColor.ink)
-                Spacer()
-
-                Button {
+            SheetHeader(
+                title: viewModel.kind.title,
+                onCancel: { dismiss() },
+                action: SheetAction("Save", isBusy: viewModel.isSaving) {
                     Task {
                         if await viewModel.save() {
                             onSaved()
                             dismiss()
                         }
                     }
-                } label: {
-                    Text("Save")
-                        .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
-                        .contentShape(Rectangle())
                 }
-                .buttonStyle(.pressable)
-                .foregroundStyle(viewModel.isSaving ? AppColor.placeholder : AppColor.accent)
-                .appBody(15, weight: .semibold)
-                .disabled(viewModel.isSaving)
-            }
-            .appBody(15)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 2)
-            .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .bottom)
+            )
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {

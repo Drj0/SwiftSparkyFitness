@@ -2,12 +2,12 @@
 //  SettingsView.swift
 //  SwiftSparkyFitness
 //
-//  Settings: the server address, daily goals, and signing out.
+//  Settings: the server address, goals, meals, water containers, units,
+//  Apple Health, and signing out.
 //
 //  This replaced the placeholder tab specifically because the backend URL
 //  stopped being a hardcoded constant — without somewhere to type it, a fresh
-//  install has no way to reach a server at all. Units and water containers
-//  still belong here later.
+//  install has no way to reach a server at all.
 //
 
 import SwiftUI
@@ -22,6 +22,7 @@ struct SettingsView: View {
     @State private var isPresentingGoals = false
     @State private var isPresentingMeals = false
     @State private var isPresentingWater = false
+    @State private var isPresentingUnits = false
     @AppStorage(HealthSync.defaultsKey) private var healthSyncEnabled = false
     @FocusState private var isFieldFocused: Bool
 
@@ -124,6 +125,21 @@ struct SettingsView: View {
                     .buttonStyle(.pressable)
                 }
 
+                section("UNITS") {
+                    Text("How weights, measurements and water are labelled.")
+                        .appBody(13)
+                        .foregroundStyle(AppColor.secondaryText)
+
+                    Button { isPresentingUnits = true } label: {
+                        Text("Edit units")
+                            .appBody(15, weight: .semibold)
+                            .foregroundStyle(AppColor.accent)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.pressable)
+                }
+
                 section("APPLE HEALTH") {
                     Text("Counts the active energy Health has recorded towards your daily burn. Your logged workouts still count — the server takes whichever total is higher, so nothing is counted twice.")
                         .appBody(13)
@@ -190,6 +206,11 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $isPresentingWater) {
             WaterContainersView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $isPresentingUnits) {
+            UnitPreferencesView()
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }

@@ -29,11 +29,17 @@ import SwiftUI
 struct SheetAction {
     let title: String
     var isEnabled: Bool = true
+    /// Swaps the title for a spinner and refuses taps. Several sheets make
+    /// more than one sequential call on save, which left the button looking
+    /// tappable for seconds — long enough for a second tap to write a
+    /// duplicate entry.
+    var isBusy: Bool = false
     let perform: () -> Void
 
-    init(_ title: String, isEnabled: Bool = true, perform: @escaping () -> Void) {
+    init(_ title: String, isEnabled: Bool = true, isBusy: Bool = false, perform: @escaping () -> Void) {
         self.title = title
         self.isEnabled = isEnabled
+        self.isBusy = isBusy
         self.perform = perform
     }
 }
@@ -43,6 +49,11 @@ struct SheetHeader: View {
     var cancelTitle: String = "Cancel"
     let onCancel: () -> Void
     var action: SheetAction? = nil
+    /// Log Food's header is the title bar *plus* a search field and meal
+    /// chips, and the rule below all of that is the one that separates the
+    /// header from the results. A second rule under just the title would cut
+    /// the block in half.
+    var showsDivider: Bool = true
 
     var body: some View {
         HStack(spacing: 8) {
@@ -60,10 +71,11 @@ struct SheetHeader: View {
             if let action {
                 button(
                     title: action.title,
-                    tint: action.isEnabled ? AppColor.accent : AppColor.placeholder,
+                    tint: action.isEnabled && !action.isBusy ? AppColor.accent : AppColor.placeholder,
                     weight: .semibold,
                     alignment: .trailing,
-                    isEnabled: action.isEnabled,
+                    isEnabled: action.isEnabled && !action.isBusy,
+                    isBusy: action.isBusy,
                     perform: action.perform
                 )
             }
@@ -80,7 +92,11 @@ struct SheetHeader: View {
                 .allowsHitTesting(false)
         }
         .padding(.horizontal, AppSpacing.screenPad)
-        .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .bottom)
+        .overlay(alignment: .bottom) {
+            if showsDivider {
+                Rectangle().fill(AppColor.hairline).frame(height: 1)
+            }
+        }
     }
 
     /// The 44pt target lives on the *label*, not on the Button — a frame
@@ -92,14 +108,21 @@ struct SheetHeader: View {
         weight: Font.Weight,
         alignment: Alignment,
         isEnabled: Bool,
+        isBusy: Bool = false,
         perform: @escaping () -> Void
     ) -> some View {
         Button(action: perform) {
-            Text(title)
-                .appBody(15, weight: weight)
-                .foregroundStyle(tint)
-                .frame(minWidth: 44, minHeight: 44, alignment: alignment)
-                .contentShape(Rectangle())
+            Group {
+                if isBusy {
+                    ProgressView().controlSize(.small)
+                } else {
+                    Text(title)
+                        .appBody(15, weight: weight)
+                        .foregroundStyle(tint)
+                }
+            }
+            .frame(minWidth: 44, minHeight: 44, alignment: alignment)
+            .contentShape(Rectangle())
         }
         .buttonStyle(.pressable)
         .disabled(!isEnabled)

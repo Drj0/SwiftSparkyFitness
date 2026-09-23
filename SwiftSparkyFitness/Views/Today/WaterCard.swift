@@ -131,12 +131,21 @@ struct WaterCard: View {
                 Capsule()
                     .fill(AppColor.water)
                     .frame(width: max(0, geometry.size.width * viewModel.progress))
+                // Past the goal, a second lap over the full bar — otherwise
+                // 2 litres and 4 litres drew identically. Deeper water, not
+                // red: drinking more than you planned isn't a warning.
+                if viewModel.overshoot > 0 {
+                    Capsule()
+                        .fill(AppColor.ink.opacity(0.35))
+                        .frame(width: max(0, geometry.size.width * viewModel.overshoot))
+                }
             }
         }
         .frame(height: 6)
         // The fill used to snap to its new width the instant the server
         // answered; it now travels with the optimistic total.
         .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.85), value: viewModel.progress)
+        .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.85), value: viewModel.overshoot)
     }
 
     private func stepperButton(systemName: String, label: String, isEnabled: Bool, action: @escaping () -> Void) -> some View {
@@ -174,20 +183,13 @@ struct LogWaterAmountView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Button("Cancel") { dismiss() }.foregroundStyle(AppColor.secondaryText)
-                Spacer()
-                Text("Add Water").appDisplay(18).foregroundStyle(AppColor.ink)
-                Spacer()
-                Button("Add") { Task { await add() } }
-                    .foregroundStyle(AppColor.accent)
-                    .fontWeight(.semibold)
-                    .disabled(viewModel.isBusy)
-            }
-            .appBody(15)
-            .padding(.horizontal, 20)
-            .padding(.vertical, 14)
-            .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .bottom)
+            SheetHeader(
+                title: "Add Water",
+                onCancel: { dismiss() },
+                action: SheetAction("Add", isBusy: viewModel.isBusy) {
+                    Task { await add() }
+                }
+            )
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {

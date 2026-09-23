@@ -88,52 +88,21 @@ struct CustomFoodView: View {
         .task { nameFocused = true }
     }
 
-    // Cancel measured ~45 x 17pt and Save ~33 x 17pt. Both now carry a 44pt
-    // target; the header's own vertical padding drops from 14 to 2 so the
-    // row keeps the height it had.
     private var header: some View {
-        HStack {
-            Button { dismiss() } label: {
-                Text("Cancel")
-                    .foregroundStyle(AppColor.secondaryText)
-                    .frame(minWidth: 44, minHeight: 44, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.pressable)
-
-            Spacer()
-            Text("Custom Food").appDisplay(18).foregroundStyle(AppColor.ink)
-            Spacer()
-
-            // Same as LogExerciseView: isSaving was published but never
-            // rendered, so a double-tap created a duplicate custom food.
-            Button {
+        SheetHeader(
+            title: "Custom Food",
+            onCancel: { dismiss() },
+            // isSaving was published but never rendered, so a double-tap
+            // during the round trip created a duplicate custom food.
+            action: SheetAction("Save", isBusy: viewModel.isSaving) {
                 Task {
                     if await viewModel.save() != nil {
                         onSaved()
                         dismiss()
                     }
                 }
-            } label: {
-                Group {
-                    if viewModel.isSaving {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("Save")
-                    }
-                }
-                .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
-                .contentShape(Rectangle())
             }
-            .buttonStyle(.pressable)
-            .disabled(viewModel.isSaving)
-            .foregroundStyle(viewModel.isSaving ? AppColor.placeholder : AppColor.accent)
-            .appBody(15, weight: .semibold)
-        }
-        .appBody(15)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 2)
-        .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .bottom)
+        )
     }
 
     private func macroField(_ text: Binding<String>) -> some View {

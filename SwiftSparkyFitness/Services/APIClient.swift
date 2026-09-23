@@ -49,6 +49,7 @@ protocol APIClientProtocol {
     func updateExerciseEntry(id: String, _ input: ExerciseEntryInput) async throws -> ExerciseSessionSummary
     func deleteExerciseEntry(id: String) async throws
     func userPreferences() async throws -> UserPreferences
+    func updateUserPreference(_ setting: UserPreferences.Setting, to value: String) async throws -> UserPreferences
     func goals(date: Date) async throws -> NutritionGoals
     func saveGoals(_ goals: NutritionGoals, startingOn date: Date) async throws
     func waterTotals(date: Date) async throws -> WaterTotals
@@ -553,6 +554,23 @@ final class APIClient: APIClientProtocol {
     /// UserPreferences for why no conversion happens on top of this.
     func userPreferences() async throws -> UserPreferences {
         try await send("api/user-preferences")
+    }
+
+    /// Partial merge — only the key sent changes, and the full updated row
+    /// comes back. Note the server does **not** validate these values (a unit
+    /// of "bogus" is stored happily), so the caller is the only guard.
+    func updateUserPreference(_ setting: UserPreferences.Setting, to value: String) async throws -> UserPreferences {
+        var body: [String: JSONValue] = [:]
+        // Decimal places is the one numeric preference; sending it as a
+        // string would store a string.
+        body[setting.apiKey] = setting == .decimals
+            ? .number(Double(value) ?? 0)
+            : .string(value)
+        // The standard coders are right here despite the snake_case keys:
+        // convertToSnakeCase only inserts underscores before capitals, so an
+        // already-snake_cased key passes through untouched — and the response
+        // is an ordinary UserPreferences that needs the usual decoding.
+        return try await send("api/user-preferences", method: "PUT", body: body)
     }
 
     // MARK: - Health sync

@@ -26,23 +26,11 @@ struct ServerAddressSheet: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            HStack {
-                Button("Cancel") { dismiss() }
-                    .foregroundStyle(AppColor.secondaryText)
-                    .frame(minWidth: 44, minHeight: 44, alignment: .leading)
-                    .contentShape(Rectangle())
-                Spacer()
-                Text("Server").appDisplay(18).foregroundStyle(AppColor.ink)
-                Spacer()
-                Button("Save", action: save)
-                    .foregroundStyle(AppColor.accent)
-                    .appBody(15, weight: .semibold)
-                    .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
-                    .contentShape(Rectangle())
-            }
-            .appBody(15)
-            .padding(.horizontal, 20)
-            .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .bottom)
+            SheetHeader(
+                title: "Server",
+                onCancel: { dismiss() },
+                action: SheetAction("Save", perform: save)
+            )
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
