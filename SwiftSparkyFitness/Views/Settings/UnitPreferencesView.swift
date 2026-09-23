@@ -80,6 +80,9 @@ struct UnitPreferencesView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.pressable)
+                    // A bare "kg" or "0" doesn't say what it sets; the group
+                    // heading above it isn't read with the button.
+                    .accessibilityLabel("\(setting.title): \(option.label)")
                     .accessibilityAddTraits(isSelected ? [.isSelected] : [])
                 }
             }

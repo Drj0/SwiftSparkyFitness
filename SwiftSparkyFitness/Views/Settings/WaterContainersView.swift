@@ -94,6 +94,9 @@ struct WaterContainersView: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.pressable)
+                // "Use this" is meaningless read on its own, which is exactly
+                // how VoiceOver reaches it.
+                .accessibilityLabel("Use \(container.name) for quick add")
             }
 
             Button {
