@@ -105,6 +105,21 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         var goalsLoadError: Error?
         var goalsSaveError: Error?
         var savedGoals: [NutritionGoals] = []
+        var createdCustomFoods: [CustomFoodInput] = []
+        var createCustomFoodError: Error?
+        var lookedUpExerciseNames: [String] = []
+        var createdExerciseEntries: [ExerciseEntryInput] = []
+        var updatedExerciseEntries: [(id: String, input: ExerciseEntryInput)] = []
+        var exerciseWriteError: Error?
+        var localFoodsToReturn: [Food] = []
+        var externalFoodsToReturn: [Food] = []
+        var localSearchError: Error?
+        var externalSearchError: Error?
+        var localSearchQueries: [String] = []
+        var externalSearchQueries: [String] = []
+        var suggestionsToReturn = FoodSuggestions.none
+        var suggestionsError: Error?
+        var suggestionsRequests = 0
 
         func signIn(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
         func signUp(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
@@ -116,17 +131,45 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         }
         func dailySummary(date: Date) async throws -> DailySummary { summaryToReturn }
         func mealTypes() async throws -> [MealType] { [] }
-        func searchFoods(query: String) async throws -> [Food] { [] }
-        func searchExternalFoods(query: String) async throws -> [Food] { [] }
-        func createCustomFood(_ input: CustomFoodInput) async throws -> Food { fatalError("unused") }
+        func searchFoods(query: String) async throws -> [Food] {
+            localSearchQueries.append(query)
+            if let localSearchError { throw localSearchError }
+            return localFoodsToReturn
+        }
+        func searchExternalFoods(query: String) async throws -> [Food] {
+            externalSearchQueries.append(query)
+            if let externalSearchError { throw externalSearchError }
+            return externalFoodsToReturn
+        }
+        func foodSuggestions() async throws -> FoodSuggestions {
+            suggestionsRequests += 1
+            if let suggestionsError { throw suggestionsError }
+            return suggestionsToReturn
+        }
+        func createCustomFood(_ input: CustomFoodInput) async throws -> Food {
+            createdCustomFoods.append(input)
+            if let createCustomFoodError { throw createCustomFoodError }
+            return Food(id: "created-food", name: input.name, brand: input.brand, defaultVariant: nil)
+        }
         func materializeExternalFood(_ food: Food) async throws -> Food { fatalError("unused") }
         func createFoodEntry(_ input: FoodEntryInput) async throws {}
         func updateFoodEntry(id: String, _ input: FoodEntryInput) async throws {}
         func deleteFoodEntry(id: String) async throws {}
         func searchExercises(query: String) async throws -> [Exercise] { [] }
-        func findOrCreateExercise(named name: String) async throws -> Exercise { fatalError("unused") }
-        func createExerciseEntry(_ input: ExerciseEntryInput) async throws -> ExerciseSessionSummary { fatalError("unused") }
-        func updateExerciseEntry(id: String, _ input: ExerciseEntryInput) async throws -> ExerciseSessionSummary { fatalError("unused") }
+        func findOrCreateExercise(named name: String) async throws -> Exercise {
+            lookedUpExerciseNames.append(name)
+            return Exercise(id: "exercise-1", name: name, category: nil)
+        }
+        func createExerciseEntry(_ input: ExerciseEntryInput) async throws -> ExerciseSessionSummary {
+            createdExerciseEntries.append(input)
+            if let exerciseWriteError { throw exerciseWriteError }
+            return ExerciseSessionSummary(id: "session-1", name: nil, caloriesBurned: input.caloriesBurned, durationMinutes: input.durationMinutes, exerciseId: input.exerciseId)
+        }
+        func updateExerciseEntry(id: String, _ input: ExerciseEntryInput) async throws -> ExerciseSessionSummary {
+            updatedExerciseEntries.append((id, input))
+            if let exerciseWriteError { throw exerciseWriteError }
+            return ExerciseSessionSummary(id: id, name: nil, caloriesBurned: input.caloriesBurned, durationMinutes: input.durationMinutes, exerciseId: input.exerciseId)
+        }
         func deleteExerciseEntry(id: String) async throws {}
 
         func userPreferences() async throws -> UserPreferences { preferencesToReturn }
@@ -588,6 +631,316 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertEqual(decoded.weightUnitLabel, "kg")
         XCTAssertEqual(decoded.measurementUnitLabel, "cm")
         XCTAssertEqual(decoded.waterUnitLabel, "ml")
+    }
+
+    // MARK: - Food search
+
+    private func makeFood(_ id: String, _ name: String) -> Food {
+        Food(id: id, name: name, brand: nil, defaultVariant: nil)
+    }
+
+    @MainActor
+    func testBlankQueryStaysIdleAndAsksTheNetworkNothing() async {
+        let stub = StubAPIClient()
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+
+        viewModel.query = "   "
+        await viewModel.search()
+
+        XCTAssertEqual(viewModel.outcome.kindID, "idle")
+        XCTAssertTrue(stub.localSearchQueries.isEmpty)
+        XCTAssertTrue(stub.externalSearchQueries.isEmpty)
+    }
+
+    /// The user's own foods lead: they're verified entries, where the
+    /// OpenFoodFacts matches are a best guess at a barcode database.
+    @MainActor
+    func testLocalResultsLeadTheMergedList() async {
+        let stub = StubAPIClient()
+        stub.localFoodsToReturn = [makeFood("local-1", "My Porridge")]
+        stub.externalFoodsToReturn = [makeFood("off-1", "Porridge Oats")]
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+
+        viewModel.query = "porridge"
+        await viewModel.search()
+
+        guard case .results(let foods) = viewModel.outcome else {
+            return XCTFail("expected results, got \(viewModel.outcome)")
+        }
+        XCTAssertEqual(foods.map(\.id), ["local-1", "off-1"])
+        XCTAssertEqual(stub.localSearchQueries, ["porridge"])
+        XCTAssertEqual(stub.externalSearchQueries, ["porridge"])
+    }
+
+    /// "Nothing matched" and "we couldn't ask" are different answers and the
+    /// design gives them different screens — collapsing both into an empty
+    /// list would offer "add it yourself" to someone who is simply offline.
+    @MainActor
+    func testOnlyABothSidesFailureCountsAsANetworkError() async {
+        let stub = StubAPIClient()
+        stub.localSearchError = APIError.server(message: "down", code: nil)
+        stub.externalSearchError = APIError.server(message: "down", code: nil)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+        viewModel.query = "porridge"
+        await viewModel.search()
+        XCTAssertEqual(viewModel.outcome.kindID, "networkError")
+
+        // One source failing while the other simply has nothing is still
+        // "no results" — not an error the user can act on.
+        let partial = StubAPIClient()
+        partial.externalSearchError = APIError.server(message: "down", code: nil)
+        let partialViewModel = FoodSearchViewModel(mealTypes: [], apiClient: partial)
+        partialViewModel.query = "porridge"
+        await partialViewModel.search()
+        XCTAssertEqual(partialViewModel.outcome.kindID, "noResults")
+    }
+
+    /// A failing source must not hide results the other one found.
+    @MainActor
+    func testResultsFromOneSourceSurviveTheOtherFailing() async {
+        let stub = StubAPIClient()
+        stub.externalSearchError = APIError.server(message: "off is down", code: nil)
+        stub.localFoodsToReturn = [makeFood("local-1", "My Porridge")]
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+
+        viewModel.query = "porridge"
+        await viewModel.search()
+
+        XCTAssertEqual(viewModel.outcome.kindID, "results")
+    }
+
+    /// Tapping "+" beside a meal names the destination explicitly; that must
+    /// beat the time-of-day guess, which is how a 10pm tap on Breakfast used
+    /// to open on Dinner.
+    @MainActor
+    func testAnExplicitMealBeatsTheTimeOfDayGuess() {
+        let breakfast = MealType(id: "b", name: "breakfast", sortOrder: 10)
+        let dinner = MealType(id: "d", name: "dinner", sortOrder: 40)
+        let viewModel = FoodSearchViewModel(
+            mealTypes: [breakfast, dinner], initialMealType: breakfast, apiClient: StubAPIClient()
+        )
+        XCTAssertEqual(viewModel.selectedMealType?.id, "b")
+    }
+
+    @MainActor
+    func testMealChipsAreOrderedBySortOrderNotInputOrder() {
+        let viewModel = FoodSearchViewModel(
+            mealTypes: [
+                MealType(id: "d", name: "dinner", sortOrder: 40),
+                MealType(id: "b", name: "breakfast", sortOrder: 10),
+            ],
+            apiClient: StubAPIClient()
+        )
+        XCTAssertEqual(viewModel.mealTypes.map(\.id), ["b", "d"])
+    }
+
+    @MainActor
+    func testRecentFoodsLoadForTheIdleStateAndAreFetchedOnce() async {
+        let stub = StubAPIClient()
+        stub.suggestionsToReturn = FoodSuggestions(
+            recentFoods: [makeFood("r1", "Greek Yoghurt")],
+            topFoods: [makeFood("t1", "Porridge Oats")]
+        )
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+
+        await viewModel.loadRecents()
+        XCTAssertEqual(viewModel.recentFoods.map(\.id), ["r1"])
+
+        // The sheet's .task can re-run; re-fetching a list that can't have
+        // changed while the sheet is open would just flicker it.
+        await viewModel.loadRecents()
+        XCTAssertEqual(stub.suggestionsRequests, 1)
+    }
+
+    /// Recents are a shortcut on a screen that works without them, so a
+    /// failure must not raise an error state over the search box — the idle
+    /// prompt is the fallback.
+    @MainActor
+    func testFailingToLoadRecentsIsSilent() async {
+        let stub = StubAPIClient()
+        stub.suggestionsError = APIError.server(message: "down", code: nil)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+
+        await viewModel.loadRecents()
+
+        XCTAssertTrue(viewModel.recentFoods.isEmpty)
+        XCTAssertEqual(viewModel.outcome.kindID, "idle")
+    }
+
+    /// The suggestions call and the search call are different modes of the
+    /// same path, and a search must not be mistaken for one.
+    @MainActor
+    func testSearchingDoesNotRefetchSuggestions() async {
+        let stub = StubAPIClient()
+        stub.localFoodsToReturn = [makeFood("local-1", "Porridge")]
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+
+        viewModel.query = "porridge"
+        await viewModel.search()
+
+        XCTAssertEqual(stub.suggestionsRequests, 0)
+    }
+
+    // MARK: - Custom food
+
+    @MainActor
+    func testCustomFoodRefusesToSaveWithoutANameOrRealCalories() async {
+        let stub = StubAPIClient()
+        let viewModel = CustomFoodViewModel(apiClient: stub)
+
+        viewModel.name = "   "
+        viewModel.calories = "200"
+        var saved = await viewModel.save()
+        XCTAssertNil(saved)
+        XCTAssertNotNil(viewModel.nameError)
+
+        viewModel.name = "Porridge"
+        viewModel.calories = "not a number"
+        saved = await viewModel.save()
+        XCTAssertNil(saved)
+        XCTAssertNotNil(viewModel.caloriesError)
+
+        viewModel.calories = "-5"
+        saved = await viewModel.save()
+        XCTAssertNil(saved)
+        XCTAssertNotNil(viewModel.caloriesError)
+
+        // None of those may have reached the network.
+        XCTAssertTrue(stub.createdCustomFoods.isEmpty)
+    }
+
+    @MainActor
+    func testCustomFoodSendsTheTypedValuesAndTreatsBlankMacrosAsZero() async {
+        let stub = StubAPIClient()
+        let viewModel = CustomFoodViewModel(apiClient: stub)
+        viewModel.name = "Porridge Oats"
+        viewModel.servingSize = "40"
+        viewModel.servingUnit = "g"
+        viewModel.calories = "156"
+        viewModel.protein = "5.2"
+        // A macro left unparseable is a zero, not a failed save — the sheet
+        // only makes calories mandatory.
+        viewModel.carbs = ""
+        viewModel.fat = "3"
+
+        let food = await viewModel.save()
+
+        XCTAssertNotNil(food)
+        let sent = try? XCTUnwrap(stub.createdCustomFoods.first)
+        XCTAssertEqual(sent?.name, "Porridge Oats")
+        XCTAssertEqual(sent?.servingSize, 40)
+        XCTAssertEqual(sent?.servingUnit, "g")
+        XCTAssertEqual(sent?.calories, 156)
+        XCTAssertEqual(sent?.protein, 5.2)
+        XCTAssertEqual(sent?.carbs, 0)
+        XCTAssertEqual(sent?.fat, 3)
+    }
+
+    @MainActor
+    func testCustomFoodSurfacesAServerFailureRatherThanReportingSuccess() async {
+        let stub = StubAPIClient()
+        stub.createCustomFoodError = APIError.server(message: "Food already exists.", code: nil)
+        let viewModel = CustomFoodViewModel(apiClient: stub)
+        viewModel.name = "Porridge"
+        viewModel.calories = "156"
+
+        let food = await viewModel.save()
+
+        XCTAssertNil(food)
+        XCTAssertEqual(viewModel.bannerMessage, "Food already exists.")
+    }
+
+    // MARK: - Log exercise
+
+    @MainActor
+    func testExerciseRequiresBothAnActivityAndADuration() async {
+        let stub = StubAPIClient()
+        let viewModel = LogExerciseViewModel(apiClient: stub)
+
+        var saved = await viewModel.save()
+        XCTAssertFalse(saved)
+        XCTAssertNotNil(viewModel.activityError)
+        XCTAssertNotNil(viewModel.durationError)
+
+        viewModel.activityName = "Cycling"
+        // Zero is not a duration — it would log a session burning nothing.
+        viewModel.durationMinutesText = "0"
+        saved = await viewModel.save()
+        XCTAssertFalse(saved)
+        XCTAssertNotNil(viewModel.durationError)
+
+        XCTAssertTrue(stub.createdExerciseEntries.isEmpty)
+    }
+
+    @MainActor
+    func testExerciseCreateLooksUpTheActivityThenLogsTheEstimatedBurn() async {
+        let stub = StubAPIClient()
+        let viewModel = LogExerciseViewModel(apiClient: stub)
+        viewModel.activityName = "Cycling"
+        viewModel.durationMinutesText = "45"
+        viewModel.intensity = .vigorous
+
+        XCTAssertEqual(viewModel.estimatedCalories, 45 * 12)
+        let saved = await viewModel.save()
+        XCTAssertTrue(saved)
+
+        XCTAssertEqual(stub.lookedUpExerciseNames, ["Cycling"])
+        let sent = try? XCTUnwrap(stub.createdExerciseEntries.first)
+        XCTAssertEqual(sent?.exerciseId, "exercise-1")
+        XCTAssertEqual(sent?.durationMinutes, 45)
+        XCTAssertEqual(sent?.caloriesBurned, 540)
+        XCTAssertTrue(stub.updatedExerciseEntries.isEmpty)
+    }
+
+    /// Diary's edit path already knows the exercise id, so it must PUT
+    /// against it rather than doing a redundant find-or-create — which would
+    /// also risk creating a second exercise if the name had been edited.
+    @MainActor
+    func testExerciseEditUpdatesInPlaceWithoutRecreatingTheActivity() async {
+        let stub = StubAPIClient()
+        let entryDate = Date(timeIntervalSince1970: 1_700_000_000)
+        let viewModel = LogExerciseViewModel(
+            editingEntryId: "entry-9", exerciseId: "exercise-7", name: "Running",
+            durationMinutes: 30, caloriesBurned: 240, entryDate: entryDate,
+            apiClient: stub
+        )
+
+        // 240/30 = 8 kcal/min, which is exactly the moderate preset.
+        XCTAssertEqual(viewModel.intensity, .moderate)
+        XCTAssertEqual(viewModel.durationMinutesText, "30")
+        XCTAssertTrue(viewModel.isEditing)
+
+        let saved = await viewModel.save()
+        XCTAssertTrue(saved)
+
+        XCTAssertTrue(stub.lookedUpExerciseNames.isEmpty, "editing must not create another exercise")
+        XCTAssertTrue(stub.createdExerciseEntries.isEmpty)
+        let update = try? XCTUnwrap(stub.updatedExerciseEntries.first)
+        XCTAssertEqual(update?.id, "entry-9")
+        XCTAssertEqual(update?.input.exerciseId, "exercise-7")
+        XCTAssertEqual(update?.input.entryDate, entryDate, "an edit must not silently move the entry to today")
+    }
+
+    /// Intensity isn't stored — it's reverse-derived from the logged
+    /// kcal/minute, so the preset that reopens is the nearest one, not
+    /// necessarily the one originally chosen.
+    @MainActor
+    func testExerciseEditPicksTheNearestIntensityPreset() {
+        let stub = StubAPIClient()
+        let nearlyLight = LogExerciseViewModel(
+            editingEntryId: "e", exerciseId: "x", name: "Walk",
+            durationMinutes: 60, caloriesBurned: 260, entryDate: Date(), apiClient: stub
+        )
+        // 4.33 kcal/min sits nearest the light preset (4), not moderate (8).
+        XCTAssertEqual(nearlyLight.intensity, .light)
+
+        let zeroDuration = LogExerciseViewModel(
+            editingEntryId: "e", exerciseId: "x", name: "Odd",
+            durationMinutes: 0, caloriesBurned: 100, entryDate: Date(), apiClient: stub
+        )
+        // Guards the divide-by-zero rather than producing a NaN rate.
+        XCTAssertEqual(zeroDuration.intensity, .moderate)
+        XCTAssertEqual(zeroDuration.durationMinutesText, "")
     }
 
     // MARK: - Goals

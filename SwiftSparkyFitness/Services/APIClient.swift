@@ -33,6 +33,7 @@ protocol APIClientProtocol {
     func dailySummary(date: Date) async throws -> DailySummary
     func mealTypes() async throws -> [MealType]
     func searchFoods(query: String) async throws -> [Food]
+    func foodSuggestions() async throws -> FoodSuggestions
     func searchExternalFoods(query: String) async throws -> [Food]
     func createCustomFood(_ input: CustomFoodInput) async throws -> Food
     func materializeExternalFood(_ food: Food) async throws -> Food
@@ -303,6 +304,13 @@ final class APIClient: APIClientProtocol {
             URLQueryItem(name: "limit", value: "25"),
         ]
         return try await (send("api/foods", query: items) as FoodSearchResponse).searchResults
+    }
+
+    /// The same path with no `name`, which is a different mode entirely — see
+    /// FoodSuggestions. Sending an empty `name` also works; sending a real
+    /// one returns search results and no suggestions at all.
+    func foodSuggestions() async throws -> FoodSuggestions {
+        try await send("api/foods")
     }
 
     /// OpenFoodFacts is free/keyless and confirmed live — unlike USDA,

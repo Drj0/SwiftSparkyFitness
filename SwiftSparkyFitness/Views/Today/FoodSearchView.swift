@@ -68,6 +68,7 @@ struct FoodSearchView: View {
         }
         .background(AppColor.surface)
         .scrollDismissesKeyboard(.interactively)
+        .task { await viewModel.loadRecents() }
         .sheet(item: $pushedFood) { food in
             if let mealType = viewModel.selectedMealType {
                 FoodDetailView(food: food, mealTypes: viewModel.mealTypes, initialMealType: mealType) {
@@ -189,9 +190,27 @@ struct FoodSearchView: View {
         return viewModel.isSearching ? "searching" : viewModel.outcome.kindID
     }
 
+    /// Before anything is typed: the foods most recently logged, which is
+    /// what re-logging usually wants. Falls back to the prompt on a fresh
+    /// account (or if the request failed — recents are a shortcut, not
+    /// something worth an error banner).
+    @ViewBuilder
+    private var idlePrompt: some View {
+        if !viewModel.recentFoods.isEmpty {
+            resultsListContent(viewModel.recentFoods, heading: "RECENT")
+        } else if viewModel.isLoadingRecents {
+            // Nothing has been typed and nothing is known yet; a spinner here
+            // would be the only thing on screen, so stay quiet and let the
+            // prompt appear once the answer arrives.
+            Color.clear.frame(height: 1)
+        } else {
+            searchPrompt
+        }
+    }
+
     /// ContentUnavailableView rather than a hand-built stack: it groups as a
     /// single VoiceOver element and handles Dynamic Type layout for free.
-    private var idlePrompt: some View {
+    private var searchPrompt: some View {
         ContentUnavailableView {
             Label("Search for a food", systemImage: "magnifyingglass")
         } description: {
@@ -235,14 +254,15 @@ struct FoodSearchView: View {
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
-    private func resultsListContent(_ foods: [Food]) -> some View {
+    private func resultsListContent(_ foods: [Food], heading: String = "RESULTS") -> some View {
         VStack(spacing: 0) {
-            Text("RESULTS")
+            Text(heading)
                 .appBody(11, weight: .semibold)
                 .foregroundStyle(AppColor.placeholder)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding(.top, 10)
                 .padding(.bottom, 4)
+                .accessibilityAddTraits(.isHeader)
 
             ForEach(foods) { food in
                 Button {

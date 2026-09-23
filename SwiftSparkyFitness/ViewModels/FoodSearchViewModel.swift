@@ -11,10 +11,10 @@
 //  (free, keyless, confirmed live) for real matches on first search. Local
 //  results lead since they're the user's own verified entries.
 //
-//  ponytail: skipped a "RECENT" section — the design shows one, but no
-//  recently-logged-foods endpoint was verified against the live server, and
-//  guessing its shape risks shipping a feature that silently 404s. Add it
-//  once a real endpoint is confirmed.
+//  The idle state (before anything is typed) shows the design's "RECENT"
+//  section. That needs its own request: `GET /api/foods` has two mutually
+//  exclusive modes, and the one that returns recents is the one with no
+//  search term — so a search can never carry them along. See FoodSuggestions.
 //
 
 import Foundation
@@ -46,6 +46,13 @@ final class FoodSearchViewModel: ObservableObject {
     @Published private(set) var outcome: FoodSearchOutcome = .idle
     @Published private(set) var isSearching = false
     @Published var selectedMealType: MealType?
+
+    /// Recently logged foods, shown in the idle state. A failure here is
+    /// deliberately silent: this is a shortcut on an otherwise usable screen,
+    /// and an error banner over the search box would be louder than the
+    /// feature is important. The idle prompt is the fallback.
+    @Published private(set) var recentFoods: [Food] = []
+    @Published private(set) var isLoadingRecents = false
 
     let mealTypes: [MealType]
     private let apiClient: APIClientProtocol
@@ -80,6 +87,13 @@ final class FoodSearchViewModel: ObservableObject {
         default: name = "dinner"
         }
         return mealTypes.first { $0.name == name } ?? mealTypes.first
+    }
+
+    func loadRecents() async {
+        guard recentFoods.isEmpty else { return }
+        isLoadingRecents = true
+        defer { isLoadingRecents = false }
+        recentFoods = (try? await apiClient.foodSuggestions())?.recentFoods ?? []
     }
 
     func search() async {
