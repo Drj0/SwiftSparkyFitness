@@ -119,9 +119,18 @@ final class DiaryViewModel: ObservableObject {
         (summary?.foodEntries ?? []).macroTotals
     }
 
+    /// Meal sections to render. A hidden meal still appears on a day that
+    /// already has food in it — hiding one stops it being *offered*, it
+    /// doesn't retroactively bury what's already logged there.
     var entriesByMeal: [(mealType: MealType, entries: [FoodEntrySummary])] {
         mealTypes.grouped(summary?.foodEntries ?? [])
+            .filter { $0.mealType.visible || !$0.entries.isEmpty }
     }
+
+    /// Meals the logging sheets may offer. The endpoint returns hidden ones
+    /// so the management screen can list them, so this filter is the caller's
+    /// job.
+    var loggableMealTypes: [MealType] { mealTypes.visibleOnly }
 
     func isCollapsed(_ sectionId: String) -> Bool {
         collapsedSections.contains(sectionId)

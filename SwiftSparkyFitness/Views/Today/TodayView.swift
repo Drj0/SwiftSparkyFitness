@@ -90,7 +90,7 @@ struct TodayView: View {
             viewModel.pendingMealType = nil
             Task { await viewModel.load() }
         }) {
-            FoodSearchView(mealTypes: viewModel.mealTypes, initialMealType: viewModel.pendingMealType)
+            FoodSearchView(mealTypes: viewModel.loggableMealTypes, initialMealType: viewModel.pendingMealType)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }

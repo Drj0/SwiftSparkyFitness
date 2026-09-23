@@ -122,6 +122,11 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         var suggestionsRequests = 0
         var syncedActiveEnergy: [Double] = []
         var syncActiveEnergyError: Error?
+        var mealTypesToReturn: [MealType] = []
+        var createdMealTypes: [(name: String, sortOrder: Int)] = []
+        var updatedMealTypes: [(id: String, input: MealTypeInput)] = []
+        var deletedMealTypeIds: [String] = []
+        var mealTypeWriteError: Error?
 
         func signIn(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
         func signUp(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
@@ -132,7 +137,24 @@ final class SwiftSparkyFitnessTests: XCTestCase {
             if let passwordResetError { throw passwordResetError }
         }
         func dailySummary(date: Date) async throws -> DailySummary { summaryToReturn }
-        func mealTypes() async throws -> [MealType] { [] }
+        func mealTypes() async throws -> [MealType] { mealTypesToReturn }
+        func createMealType(name: String, sortOrder: Int) async throws -> MealType {
+            createdMealTypes.append((name, sortOrder))
+            if let mealTypeWriteError { throw mealTypeWriteError }
+            let created = MealType(id: "new-\(name)", name: name, sortOrder: sortOrder, userId: "user-1")
+            mealTypesToReturn.append(created)
+            return created
+        }
+        func updateMealType(id: String, _ input: MealTypeInput) async throws -> MealType {
+            updatedMealTypes.append((id, input))
+            if let mealTypeWriteError { throw mealTypeWriteError }
+            return MealType(id: id, name: input.name ?? "x", sortOrder: input.sortOrder ?? 0, userId: "user-1", isVisible: input.isVisible)
+        }
+        func deleteMealType(id: String) async throws {
+            deletedMealTypeIds.append(id)
+            if let mealTypeWriteError { throw mealTypeWriteError }
+            mealTypesToReturn.removeAll { $0.id == id }
+        }
         func searchFoods(query: String) async throws -> [Food] {
             localSearchQueries.append(query)
             if let localSearchError { throw localSearchError }
@@ -637,6 +659,138 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertEqual(decoded.weightUnitLabel, "kg")
         XCTAssertEqual(decoded.measurementUnitLabel, "cm")
         XCTAssertEqual(decoded.waterUnitLabel, "ml")
+    }
+
+    // MARK: - Meal categories
+
+    private func systemMeal(_ id: String, _ name: String, _ order: Int, visible: Bool = true) -> MealType {
+        MealType(id: id, name: name, sortOrder: order, userId: nil, isVisible: visible)
+    }
+
+    private func customMeal(_ id: String, _ name: String, _ order: Int, visible: Bool = true) -> MealType {
+        MealType(id: id, name: name, sortOrder: order, userId: "user-1", isVisible: visible)
+    }
+
+    /// The server protects its four (403 on rename, reorder and delete), so
+    /// the UI must not offer those controls in the first place.
+    func testSystemDefaultsAreDistinguishedFromUserCategories() {
+        XCTAssertTrue(systemMeal("b", "breakfast", 10).isSystemDefault)
+        XCTAssertFalse(customMeal("p", "Pre-Workout", 25).isSystemDefault)
+        // The four ship lowercase; a user's own is stored as typed.
+        XCTAssertEqual(systemMeal("b", "breakfast", 10).displayName, "Breakfast")
+        XCTAssertEqual(customMeal("p", "Pre-Workout", 25).displayName, "Pre-Workout")
+    }
+
+    /// The endpoint returns hidden categories too, because the management
+    /// screen has to list them — so every other consumer has to filter.
+    func testHiddenCategoriesAreNotOfferedForLogging() {
+        let meals = [
+            customMeal("p", "Pre-Workout", 25, visible: false),
+            systemMeal("d", "dinner", 40),
+            systemMeal("b", "breakfast", 10),
+        ]
+        XCTAssertEqual(meals.visibleOnly.map(\.id), ["b", "d"])
+        // A row from before the column existed has no value and is visible.
+        XCTAssertTrue(MealType(id: "x", name: "old", sortOrder: 1).visible)
+    }
+
+    /// Hiding a meal stops it being offered; it must not bury food already
+    /// logged there, which would look like data loss.
+    @MainActor
+    func testAHiddenMealStillShowsOnADayThatAlreadyUsedIt() async {
+        let stub = StubAPIClient()
+        stub.mealTypesToReturn = [
+            systemMeal("b", "breakfast", 10),
+            customMeal("p", "Pre-Workout", 25, visible: false),
+            systemMeal("d", "dinner", 40, visible: false),
+        ]
+        stub.summaryToReturn = DailySummary(
+            calorieBalance: .init(eaten: 200, burned: 0, remaining: 0, goal: 2000),
+            waterIntake: 0, waterIntakeBreakdown: nil,
+            goals: .init(calories: 2000, protein: nil, carbs: nil, fat: nil, waterGoalMl: nil),
+            foodEntries: [
+                FoodEntrySummary(id: "1", foodName: "Shake", mealType: "Pre-Workout", quantity: 1, unit: "serving", calories: 200, protein: nil, carbs: nil, fat: nil, foodId: nil, variantId: nil, mealTypeId: "p", brandName: nil, servingSize: nil, servingUnit: nil),
+            ],
+            exerciseSessions: []
+        )
+        let viewModel = TodayViewModel(apiClient: stub, health: StubHealthKit())
+
+        await viewModel.load()
+
+        // Pre-Workout is hidden but has food, so it stays. Dinner is hidden
+        // and empty, so it goes.
+        XCTAssertEqual(viewModel.entriesByMeal.map(\.mealType.id), ["b", "p"])
+        // Neither hidden meal may be offered as somewhere to log new food.
+        XCTAssertEqual(viewModel.loggableMealTypes.map(\.id), ["b"])
+    }
+
+    @MainActor
+    func testCreatingACategoryPutsItAfterTheExistingOnes() async {
+        let stub = StubAPIClient()
+        stub.mealTypesToReturn = [systemMeal("b", "breakfast", 10), systemMeal("d", "dinner", 40)]
+        let viewModel = MealCategoriesViewModel(apiClient: stub)
+        await viewModel.load()
+
+        viewModel.newName = "  Pre-Workout  "
+        await viewModel.create()
+
+        XCTAssertEqual(stub.createdMealTypes.map(\.name), ["Pre-Workout"])
+        XCTAssertEqual(stub.createdMealTypes.first?.sortOrder, 50)
+        XCTAssertEqual(viewModel.newName, "", "the field clears so the next one can be typed")
+    }
+
+    /// The server answers 409 while food is still logged against a category.
+    /// That's a rule worth explaining rather than reporting as a failure.
+    @MainActor
+    func testDeletingACategoryStillInUseExplainsWhy() async {
+        let stub = StubAPIClient()
+        stub.mealTypesToReturn = [customMeal("p", "Pre-Workout", 25)]
+        stub.mealTypeWriteError = APIError.server(
+            message: "Cannot delete this meal type because it is still in use.", code: nil
+        )
+        let viewModel = MealCategoriesViewModel(apiClient: stub)
+        await viewModel.load()
+
+        await viewModel.delete(stub.mealTypesToReturn[0])
+
+        let message = try? XCTUnwrap(viewModel.errorMessage)
+        XCTAssertEqual(message?.contains("still has food logged against it"), true)
+        XCTAssertEqual(message?.contains("Pre-Workout"), true)
+    }
+
+    /// A rename must never be attempted against one of the server's four —
+    /// it's a guaranteed 403, and the UI hides the control.
+    @MainActor
+    func testRenamingASystemDefaultIsRefusedWithoutAskingTheServer() async {
+        let stub = StubAPIClient()
+        let breakfast = systemMeal("b", "breakfast", 10)
+        stub.mealTypesToReturn = [breakfast]
+        let viewModel = MealCategoriesViewModel(apiClient: stub)
+        await viewModel.load()
+
+        await viewModel.rename(breakfast, to: "Brekkie")
+
+        XCTAssertTrue(stub.updatedMealTypes.isEmpty)
+        XCTAssertNotNil(viewModel.errorMessage)
+    }
+
+    /// Visibility is the one edit a default does allow, so it must go through.
+    @MainActor
+    func testHidingASystemDefaultIsAllowedAndSendsOnlyVisibility() async {
+        let stub = StubAPIClient()
+        let breakfast = systemMeal("b", "breakfast", 10)
+        stub.mealTypesToReturn = [breakfast]
+        let viewModel = MealCategoriesViewModel(apiClient: stub)
+        await viewModel.load()
+
+        await viewModel.setVisible(false, for: breakfast)
+
+        let update = try? XCTUnwrap(stub.updatedMealTypes.first)
+        XCTAssertEqual(update?.id, "b")
+        XCTAssertEqual(update?.input.isVisible, false)
+        // Sending name or sortOrder for a default is a 403 even unchanged.
+        XCTAssertNil(update?.input.name)
+        XCTAssertNil(update?.input.sortOrder)
     }
 
     // MARK: - Cleared goals

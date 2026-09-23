@@ -32,6 +32,9 @@ protocol APIClientProtocol {
     func requestPasswordReset(email: String) async throws
     func dailySummary(date: Date) async throws -> DailySummary
     func mealTypes() async throws -> [MealType]
+    func createMealType(name: String, sortOrder: Int) async throws -> MealType
+    func updateMealType(id: String, _ input: MealTypeInput) async throws -> MealType
+    func deleteMealType(id: String) async throws
     func searchFoods(query: String) async throws -> [Food]
     func foodSuggestions() async throws -> FoodSuggestions
     func searchExternalFoods(query: String) async throws -> [Food]
@@ -291,8 +294,30 @@ final class APIClient: APIClientProtocol {
 
     // MARK: - Meal types
 
+    /// Returns hidden categories too — the management screen needs them. Use
+    /// `visibleOnly` anywhere that's offering somewhere to log food.
     func mealTypes() async throws -> [MealType] {
         try await send("api/meal-types")
+    }
+
+    func createMealType(name: String, sortOrder: Int) async throws -> MealType {
+        try await send(
+            "api/meal-types",
+            method: "POST",
+            body: MealTypeInput(name: name, sortOrder: sortOrder)
+        )
+    }
+
+    /// Partial merge — only the fields set on `input` are sent. Sending `name`
+    /// or `sortOrder` for one of the server's four defaults is a 403 even when
+    /// the value is unchanged, so callers must omit them there.
+    func updateMealType(id: String, _ input: MealTypeInput) async throws -> MealType {
+        try await send("api/meal-types/\(id)", method: "PUT", body: input)
+    }
+
+    /// 403 for a system default, 409 while food is still logged against it.
+    func deleteMealType(id: String) async throws {
+        _ = try await (send("api/meal-types/\(id)", method: "DELETE") as MessageResponse)
     }
 
     // MARK: - Food

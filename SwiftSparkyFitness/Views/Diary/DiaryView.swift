@@ -197,7 +197,7 @@ struct DiaryView: View {
             let initialMealType = viewModel.mealTypes.first { $0.name == entry.mealType } ?? viewModel.mealTypes.first
             if let initialMealType {
                 FoodDetailView(
-                    food: food, mealTypes: viewModel.mealTypes, initialMealType: initialMealType,
+                    food: food, mealTypes: viewModel.loggableMealTypes, initialMealType: initialMealType,
                     existingEntryId: entry.id, initialQuantity: entry.quantity, entryDate: viewModel.selectedDate
                 ) {}
                 .presentationDetents([.medium, .large])

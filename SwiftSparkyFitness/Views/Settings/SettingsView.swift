@@ -20,6 +20,7 @@ struct SettingsView: View {
     @State private var draft = ""
     @State private var savedNotice = false
     @State private var isPresentingGoals = false
+    @State private var isPresentingMeals = false
     @AppStorage(HealthSync.defaultsKey) private var healthSyncEnabled = false
     @FocusState private var isFieldFocused: Bool
 
@@ -92,6 +93,21 @@ struct SettingsView: View {
                     .buttonStyle(.pressable)
                 }
 
+                section("MEALS") {
+                    Text("The meals food is logged into. Add your own, or hide any you don't use.")
+                        .appBody(13)
+                        .foregroundStyle(AppColor.secondaryText)
+
+                    Button { isPresentingMeals = true } label: {
+                        Text("Edit meals")
+                            .appBody(15, weight: .semibold)
+                            .foregroundStyle(AppColor.accent)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.pressable)
+                }
+
                 section("APPLE HEALTH") {
                     Text("Counts the active energy Health has recorded towards your daily burn. Your logged workouts still count — the server takes whichever total is higher, so nothing is counted twice.")
                         .appBody(13)
@@ -148,6 +164,11 @@ struct SettingsView: View {
         .onChange(of: draft) { _, _ in savedNotice = false }
         .sheet(isPresented: $isPresentingGoals) {
             SetGoalsView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $isPresentingMeals) {
+            MealCategoriesView()
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
