@@ -50,6 +50,22 @@ struct DailySummary: Decodable {
         let carbs: Double?
         let fat: Double?
         let waterGoalMl: Double?
+
+        /// Water target to measure progress against.
+        ///
+        /// A goal the user never set is null, but one they *cleared* comes
+        /// back as 0 — so `?? fallback` alone isn't enough, and it became
+        /// reachable from the app itself once the goals sheet could write a
+        /// blank water target. Dividing a ring's progress by that zero gave an
+        /// infinite value.
+        var effectiveWaterGoalMl: Double {
+            guard let waterGoalMl, waterGoalMl > 0 else { return Self.fallbackWaterGoalMl }
+            return waterGoalMl
+        }
+
+        /// Module 2 already showed this on Today before goals were editable,
+        /// so it isn't a new invention.
+        static let fallbackWaterGoalMl: Double = 2000
     }
 }
 
@@ -87,4 +103,36 @@ struct ExerciseSessionSummary: Decodable, Identifiable {
     /// Diary-only: needed to reopen LogExerciseView pre-loaded for editing
     /// without a redundant findOrCreateExercise(named:) lookup.
     let exerciseId: String?
+
+    /// The server records a Health active-energy figure as an exercise entry
+    /// against a sentinel exercise it names "Active Calories", rather than as
+    /// a column of its own. It therefore arrives in `exerciseSessions` looking
+    /// like a workout — one lasting zero minutes that the user never logged.
+    ///
+    /// Left alone it would sit in Today's exercise list and Diary's Exercise
+    /// section offering to be edited (the edit sheet would ask how many
+    /// minutes of "Active Calories" were done) and swiped away, which would
+    /// then silently come back on the next sync. So the lists exclude it and
+    /// the figure is surfaced as what it is.
+    ///
+    /// Matching on the name is the only handle the summary gives — there's no
+    /// source or kind field distinguishing it. If a server release renames
+    /// that exercise this check goes quiet rather than breaking: the row
+    /// reappears as a zero-minute workout, which is visible.
+    var isHealthActiveEnergy: Bool {
+        name == "Active Calories"
+    }
+}
+
+extension Array where Element == ExerciseSessionSummary {
+    /// Sessions the user actually logged, i.e. everything a list may offer to
+    /// edit or delete.
+    var userLogged: [ExerciseSessionSummary] {
+        filter { !$0.isHealthActiveEnergy }
+    }
+
+    /// The Health-sourced active energy for the day, if any has been synced.
+    var healthActiveEnergy: Double? {
+        first { $0.isHealthActiveEnergy }?.caloriesBurned
+    }
 }

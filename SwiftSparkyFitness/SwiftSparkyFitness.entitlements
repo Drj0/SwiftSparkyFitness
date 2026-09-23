@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Reading step counts from Health. The app requests read access only;
+	     it never writes to HealthKit, so com.apple.developer.healthkit.access
+	     (clinical records) and any share types are deliberately absent. -->
+	<key>com.apple.developer.healthkit</key>
+	<true/>
+</dict>
+</plist>

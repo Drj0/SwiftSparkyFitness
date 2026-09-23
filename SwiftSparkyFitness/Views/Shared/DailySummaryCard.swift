@@ -48,7 +48,7 @@ struct DailySummaryCard: View {
     private var ring: some View {
         let goal = summary.calorieBalance.goal
         let energyGoal = max(goal * 0.15, 1)
-        let waterGoal = summary.goals.waterGoalMl ?? 2000
+        let waterGoal = summary.goals.effectiveWaterGoalMl
         let isOver = remaining < 0
         let water = waterMl ?? summary.waterIntake
 

@@ -20,7 +20,18 @@ struct SettingsView: View {
     @State private var draft = ""
     @State private var savedNotice = false
     @State private var isPresentingGoals = false
+    @AppStorage(HealthSync.defaultsKey) private var healthSyncEnabled = false
     @FocusState private var isFieldFocused: Bool
+
+    private let health: HealthKitReading = HealthKitService.shared
+    private var healthAvailable: Bool { health.isAvailable }
+
+    /// Presenting the sheet is all the app can do. HealthKit deliberately
+    /// won't say whether reading was allowed, so the toggle records that the
+    /// user opted in, not that access was granted.
+    private func connectHealth() async {
+        try? await health.requestAuthorization()
+    }
 
     private var effective: String { ServerConfig.urlString }
     private var isDirty: Bool { draft.trimmingCharacters(in: .whitespaces) != effective }
@@ -79,6 +90,38 @@ struct SettingsView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.pressable)
+                }
+
+                section("APPLE HEALTH") {
+                    Text("Counts the active energy Health has recorded towards your daily burn. Your logged workouts still count — the server takes whichever total is higher, so nothing is counted twice.")
+                        .appBody(13)
+                        .foregroundStyle(AppColor.secondaryText)
+
+                    if healthAvailable {
+                        Toggle(isOn: $healthSyncEnabled) {
+                            Text("Use Apple Health")
+                                .appBody(15, weight: .semibold)
+                                .foregroundStyle(AppColor.ink)
+                        }
+                        .tint(AppColor.accent)
+                        .frame(minHeight: 44)
+                        .onChange(of: healthSyncEnabled) { _, isOn in
+                            guard isOn else { return }
+                            Task { await connectHealth() }
+                        }
+
+                        // Health won't report whether a read was granted, so
+                        // this can't say "connected" — only that we asked.
+                        if healthSyncEnabled {
+                            Text("If your burn doesn't change, check SwiftSparkyFitness is allowed to read Active Energy in Health › Sharing › Apps.")
+                                .appBody(12)
+                                .foregroundStyle(AppColor.placeholder)
+                        }
+                    } else {
+                        Text("Health isn't available on this device.")
+                            .appBody(13)
+                            .foregroundStyle(AppColor.placeholder)
+                    }
                 }
 
                 section("ACCOUNT") {

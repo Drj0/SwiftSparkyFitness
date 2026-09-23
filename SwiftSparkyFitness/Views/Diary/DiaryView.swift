@@ -120,7 +120,7 @@ struct DiaryView: View {
                 ForEach(viewModel.entriesByMeal, id: \.mealType.id) { group in
                     mealSection(group.mealType, group.entries)
                 }
-                exerciseSection(summary.exerciseSessions)
+                exerciseSection(summary.exerciseSessions.userLogged)
                 waterSection()
                 bodySection()
             } else {

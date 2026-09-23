@@ -110,7 +110,7 @@ final class DiaryViewModel: ObservableObject {
 
     var hasLoggedAnything: Bool {
         !(summary?.foodEntries.isEmpty ?? true)
-            || !(summary?.exerciseSessions.isEmpty ?? true)
+            || !(summary?.exerciseSessions.userLogged.isEmpty ?? true)
             || water.totalMl > 0
             || bodyMeasurements.exists
     }

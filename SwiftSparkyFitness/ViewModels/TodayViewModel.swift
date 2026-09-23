@@ -50,11 +50,16 @@ final class TodayViewModel: ObservableObject {
     let water: WaterViewModel
 
     private let apiClient: APIClientProtocol
+    private let health: HealthKitReading
     private var cancellables = Set<AnyCancellable>()
     private var today = Date()
 
-    init(apiClient: APIClientProtocol = APIClient.shared) {
+    init(
+        apiClient: APIClientProtocol = APIClient.shared,
+        health: HealthKitReading = HealthKitService.shared
+    ) {
         self.apiClient = apiClient
+        self.health = health
         self.water = WaterViewModel(date: today, apiClient: apiClient)
         // `water` is its own ObservableObject, so a quick-add publishes to
         // the water card but NOT to this screen — which decides between the
@@ -81,7 +86,7 @@ final class TodayViewModel: ObservableObject {
     /// tap came from off screen with it.
     var hasLoggedAnything: Bool {
         !(summary?.foodEntries.isEmpty ?? true)
-            || !(summary?.exerciseSessions.isEmpty ?? true)
+            || !(summary?.exerciseSessions.userLogged.isEmpty ?? true)
             || water.totalMl > 0
             || bodyMeasurements.exists
     }
@@ -94,12 +99,30 @@ final class TodayViewModel: ObservableObject {
         mealTypes.grouped(summary?.foodEntries ?? [])
     }
 
+    /// Pushes today's active energy from Health to the server, if the user
+    /// turned that on.
+    ///
+    /// Runs *before* the summary is fetched so the figure is already in the
+    /// balance the screen then renders — otherwise every launch would show a
+    /// burn total one load out of date. The write upserts, so repeating it on
+    /// every load is harmless.
+    ///
+    /// Deliberately silent on failure: an unavailable Health store, a refused
+    /// permission and a day with no movement are indistinguishable here, and
+    /// none of them is something to interrupt the screen for.
+    private func syncHealthActiveEnergy() async {
+        guard HealthSync.isEnabled else { return }
+        guard case .kilocalories(let kilocalories)? = try? await health.activeEnergy(on: today) else { return }
+        try? await apiClient.syncActiveEnergy(kilocalories: kilocalories, date: today)
+    }
+
     func load() async {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
         today = Date()
         water.setDate(today)
+        await syncHealthActiveEnergy()
         do {
             async let summaryTask = apiClient.dailySummary(date: today)
             async let mealTypesTask = mealTypes.isEmpty ? apiClient.mealTypes() : mealTypes

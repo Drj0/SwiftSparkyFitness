@@ -28,10 +28,10 @@ final class WaterViewModel: ObservableObject {
     @Published private(set) var isBusy = false
     @Published var errorMessage: String?
 
-    /// Used when the account has no water goal set (`goals.water_goal_ml` is
-    /// null on a fresh account — confirmed live). Module 2 already displayed
-    /// this same 2000 ml fallback on Today, so it isn't a new invention.
-    static let fallbackGoalMl: Double = 2000
+    /// Used when the account has no usable water goal. Lives on
+    /// `DailySummary.Goals` so the card and this view model can't disagree —
+    /// and so both get the "a cleared goal is 0, not null" rule.
+    static let fallbackGoalMl: Double = DailySummary.Goals.fallbackWaterGoalMl
 
     private(set) var date: Date
     private let apiClient: APIClientProtocol
@@ -71,7 +71,7 @@ final class WaterViewModel: ObservableObject {
     /// avoiding a second round-trip for a number Today/Diary just loaded.
     func adopt(summary: DailySummary) {
         totalMl = summary.waterIntake
-        goalMl = summary.goals.waterGoalMl ?? Self.fallbackGoalMl
+        goalMl = summary.goals.effectiveWaterGoalMl
         manualMl = summary.waterIntakeBreakdown?.manualMl ?? summary.waterIntake
         foodMl = summary.waterIntakeBreakdown?.foodMl ?? 0
     }

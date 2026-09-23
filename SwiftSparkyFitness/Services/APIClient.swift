@@ -53,6 +53,7 @@ protocol APIClientProtocol {
     func adjustWater(date: Date, drinks: Int) async throws -> WaterTotals
     func logWaterAmount(date: Date, milliliters: Double) async throws -> WaterTotals
     func deleteWaterLogEntry(id: String) async throws
+    func syncActiveEnergy(kilocalories: Double, date: Date) async throws
     func bodyMeasurements(date: Date) async throws -> BodyMeasurements
     func upsertBodyMeasurements(_ input: BodyMeasurementsInput) async throws -> BodyMeasurements
     func deleteBodyMeasurements(id: String) async throws
@@ -520,6 +521,42 @@ final class APIClient: APIClientProtocol {
     /// UserPreferences for why no conversion happens on top of this.
     func userPreferences() async throws -> UserPreferences {
         try await send("api/user-preferences")
+    }
+
+    // MARK: - Health sync
+
+    /// Reports the day's active energy from Health.
+    ///
+    /// This is the generic health-data ingest, not the check-in row: the body
+    /// is a single `{type, value, date}` entry (an array of them also works;
+    /// wrapping them in an `entries` key does not). For `active_calories` the
+    /// server materialises a sentinel exercise entry named "Active Calories"
+    /// rather than writing a column, and `calorieBalance` then takes the
+    /// larger of that and (logged workouts + step calories) — which is what
+    /// stops a Health figure double-counting against a hand-logged workout.
+    ///
+    /// It upserts: posting twice for the same day returns the same row id, so
+    /// this is safe to call on every load.
+    ///
+    /// The sentinel session comes back in `exerciseSessions` like any other,
+    /// which is why the app filters it out of the editable exercise lists —
+    /// see `ExerciseSessionSummary.isHealthActiveEnergy`.
+    func syncActiveEnergy(kilocalories: Double, date: Date) async throws {
+        _ = try await (send(
+            "api/measurements/health-data",
+            method: "POST",
+            body: HealthDataEntry(
+                type: "active_calories",
+                value: kilocalories,
+                date: dateFormatter.string(from: date)
+            )
+        ) as MessageResponse)
+    }
+
+    private struct HealthDataEntry: Encodable {
+        let type: String
+        let value: Double
+        let date: String
     }
 
     // MARK: - Goals

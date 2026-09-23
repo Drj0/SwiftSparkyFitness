@@ -120,6 +120,8 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         var suggestionsToReturn = FoodSuggestions.none
         var suggestionsError: Error?
         var suggestionsRequests = 0
+        var syncedActiveEnergy: [Double] = []
+        var syncActiveEnergyError: Error?
 
         func signIn(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
         func signUp(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
@@ -172,6 +174,10 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         }
         func deleteExerciseEntry(id: String) async throws {}
 
+        func syncActiveEnergy(kilocalories: Double, date: Date) async throws {
+            syncedActiveEnergy.append(kilocalories)
+            if let syncActiveEnergyError { throw syncActiveEnergyError }
+        }
         func userPreferences() async throws -> UserPreferences { preferencesToReturn }
         func goals(date: Date) async throws -> NutritionGoals {
             if let goalsLoadError { throw goalsLoadError }
@@ -631,6 +637,143 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertEqual(decoded.weightUnitLabel, "kg")
         XCTAssertEqual(decoded.measurementUnitLabel, "cm")
         XCTAssertEqual(decoded.waterUnitLabel, "ml")
+    }
+
+    // MARK: - Cleared goals
+
+    /// A goal the user never set is null; one they *cleared* is 0. Only the
+    /// first is caught by `?? fallback`, and the goals sheet made the second
+    /// reachable — dividing a ring's progress by it produced infinity.
+    func testAClearedWaterGoalFallsBackInsteadOfBeingZero() {
+        let cleared = DailySummary.Goals(calories: 2000, protein: 0, carbs: 0, fat: 0, waterGoalMl: 0)
+        XCTAssertEqual(cleared.effectiveWaterGoalMl, DailySummary.Goals.fallbackWaterGoalMl)
+        XCTAssertTrue((1000 / cleared.effectiveWaterGoalMl).isFinite)
+
+        let never = DailySummary.Goals(calories: nil, protein: nil, carbs: nil, fat: nil, waterGoalMl: nil)
+        XCTAssertEqual(never.effectiveWaterGoalMl, DailySummary.Goals.fallbackWaterGoalMl)
+
+        let real = DailySummary.Goals(calories: 2000, protein: nil, carbs: nil, fat: nil, waterGoalMl: 3000)
+        XCTAssertEqual(real.effectiveWaterGoalMl, 3000)
+    }
+
+    // MARK: - Apple Health
+
+    private final class StubHealthKit: HealthKitReading {
+        var isAvailable = true
+        var state: HealthAuthorizationState = .requested
+        var reading: EnergyReading = .noData
+        var readError: Error?
+        var authorizationRequests = 0
+        var energyQueries = 0
+
+        func authorizationState() async -> HealthAuthorizationState { state }
+        func requestAuthorization() async throws { authorizationRequests += 1 }
+        func activeEnergy(on date: Date) async throws -> EnergyReading {
+            energyQueries += 1
+            if let readError { throw readError }
+            return reading
+        }
+    }
+
+    private func healthSession(_ calories: Double) -> ExerciseSessionSummary {
+        ExerciseSessionSummary(id: "health-1", name: "Active Calories", caloriesBurned: calories, durationMinutes: 0, exerciseId: "sentinel")
+    }
+
+    private func loggedSession() -> ExerciseSessionSummary {
+        ExerciseSessionSummary(id: "run-1", name: "Running", caloriesBurned: 300, durationMinutes: 30, exerciseId: "ex-1")
+    }
+
+    /// The server stores a Health active-energy figure as an exercise entry
+    /// against an exercise it calls "Active Calories", so it arrives looking
+    /// like a zero-minute workout the user never logged. Left in the list it
+    /// would offer to be edited and swiped away, then silently return on the
+    /// next sync.
+    func testHealthActiveEnergyIsNotTreatedAsALoggedWorkout() {
+        let sessions = [loggedSession(), healthSession(420)]
+
+        XCTAssertEqual(sessions.userLogged.map(\.id), ["run-1"])
+        XCTAssertEqual(sessions.healthActiveEnergy, 420)
+        XCTAssertTrue(sessions[1].isHealthActiveEnergy)
+        XCTAssertFalse(sessions[0].isHealthActiveEnergy)
+    }
+
+    /// A day whose only "exercise" is the Health sentinel hasn't been logged
+    /// in — Today must still offer its first-run layout rather than claiming
+    /// a workout exists.
+    @MainActor
+    func testADayWithOnlyHealthEnergyStillCountsAsNothingLogged() async {
+        let stub = StubAPIClient()
+        stub.summaryToReturn = DailySummary(
+            calorieBalance: .init(eaten: 0, burned: 420, remaining: 0, goal: 2000),
+            waterIntake: 0, waterIntakeBreakdown: nil,
+            goals: .init(calories: 2000, protein: nil, carbs: nil, fat: nil, waterGoalMl: nil),
+            foodEntries: [], exerciseSessions: [healthSession(420)]
+        )
+        let viewModel = TodayViewModel(apiClient: stub, health: StubHealthKit())
+
+        await viewModel.load()
+
+        XCTAssertFalse(viewModel.hasLoggedAnything)
+    }
+
+    @MainActor
+    func testHealthIsNotQueriedUnlessTheUserTurnedItOn() async {
+        let health = StubHealthKit()
+        health.reading = .kilocalories(500)
+        let stub = StubAPIClient()
+        HealthSync.isEnabled = false
+        defer { HealthSync.isEnabled = false }
+
+        await TodayViewModel(apiClient: stub, health: health).load()
+
+        XCTAssertEqual(health.energyQueries, 0, "must not read Health for someone who never asked for it")
+        XCTAssertTrue(stub.syncedActiveEnergy.isEmpty)
+    }
+
+    @MainActor
+    func testEnabledHealthSyncsTheDaysActiveEnergyBeforeReadingTheSummary() async {
+        let health = StubHealthKit()
+        health.reading = .kilocalories(437.6)
+        let stub = StubAPIClient()
+        HealthSync.isEnabled = true
+        defer { HealthSync.isEnabled = false }
+
+        await TodayViewModel(apiClient: stub, health: health).load()
+
+        XCTAssertEqual(stub.syncedActiveEnergy, [437.6])
+    }
+
+    /// A refused read, an unavailable store and a day with no movement are
+    /// indistinguishable, and none of them should put an error on the screen.
+    @MainActor
+    func testHealthFailuresAreSilentAndDoNotBlockTheScreen() async {
+        HealthSync.isEnabled = true
+        defer { HealthSync.isEnabled = false }
+
+        let noData = StubHealthKit()
+        noData.reading = .noData
+        let stub = StubAPIClient()
+        let viewModel = TodayViewModel(apiClient: stub, health: noData)
+        await viewModel.load()
+        XCTAssertTrue(stub.syncedActiveEnergy.isEmpty, "nothing to report means nothing is sent")
+        XCTAssertNil(viewModel.errorMessage)
+
+        let throwing = StubHealthKit()
+        throwing.readError = APIError.server(message: "health denied", code: nil)
+        let stub2 = StubAPIClient()
+        let viewModel2 = TodayViewModel(apiClient: stub2, health: throwing)
+        await viewModel2.load()
+        XCTAssertNil(viewModel2.errorMessage)
+
+        // A failing *upload* is equally silent — the summary still loads.
+        let working = StubHealthKit()
+        working.reading = .kilocalories(200)
+        let stub3 = StubAPIClient()
+        stub3.syncActiveEnergyError = APIError.server(message: "nope", code: nil)
+        let viewModel3 = TodayViewModel(apiClient: stub3, health: working)
+        await viewModel3.load()
+        XCTAssertNil(viewModel3.errorMessage)
+        XCTAssertNotNil(viewModel3.summary)
     }
 
     // MARK: - Food search
