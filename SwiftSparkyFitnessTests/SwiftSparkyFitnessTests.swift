@@ -692,6 +692,41 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertEqual(decoded.waterUnitLabel, "ml")
     }
 
+    // MARK: - Settings edits reaching the other tabs
+
+    /// A regression guard for something the `TabView` migration broke.
+    ///
+    /// The old hand-rolled bar destroyed each tab's `@StateObject` on every
+    /// switch, so returning to Today re-ran its `.task` and refetched
+    /// everything — the state loss was hiding the staleness. `TabView` keeps
+    /// tabs alive and doesn't re-run `.task` on re-selection, so adding a meal
+    /// category in Settings never reached the screen that renders it.
+    ///
+    /// Meal types are the sharp case because they're cached across loads
+    /// (`mealTypes.isEmpty ? fetch : cached`), so a plain reload wasn't enough
+    /// — not even pull-to-refresh would have picked a new one up.
+    @MainActor
+    func testANotifiedReferenceChangeRefetchesCachedMealTypes() async {
+        let stub = StubAPIClient()
+        stub.mealTypesToReturn = [systemMeal("b", "breakfast", 10)]
+        let viewModel = TodayViewModel(apiClient: stub, health: StubHealthKit())
+
+        await viewModel.load()
+        XCTAssertEqual(viewModel.mealTypes.map(\.id), ["b"])
+
+        // Settings adds one while Today sits alive behind the tab bar.
+        stub.mealTypesToReturn.append(customMeal("p", "Pre-Workout", 25))
+        NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+
+        // The observer reloads on the main actor; give it a turn to land.
+        try? await Task.sleep(nanoseconds: 300_000_000)
+
+        XCTAssertEqual(
+            viewModel.mealTypes.map(\.id), ["b", "p"],
+            "a category added in Settings has to reach the screen that renders it"
+        )
+    }
+
     // MARK: - Unit preferences
 
     /// The server accepts anything — `default_weight_unit: "bogus"` returns
@@ -1065,13 +1100,11 @@ final class SwiftSparkyFitnessTests: XCTestCase {
 
     private final class StubHealthKit: HealthKitReading {
         var isAvailable = true
-        var state: HealthAuthorizationState = .requested
         var reading: EnergyReading = .noData
         var readError: Error?
         var authorizationRequests = 0
         var energyQueries = 0
 
-        func authorizationState() async -> HealthAuthorizationState { state }
         func requestAuthorization() async throws { authorizationRequests += 1 }
         func activeEnergy(on date: Date) async throws -> EnergyReading {
             energyQueries += 1

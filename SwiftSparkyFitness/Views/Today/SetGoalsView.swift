@@ -22,12 +22,8 @@ struct SetGoalsView: View {
 
     private let onSaved: () -> Void
 
-    init(
-        date: Date = Date(),
-        preferences: UserPreferences = .serverDefaults,
-        onSaved: @escaping () -> Void = {}
-    ) {
-        _viewModel = StateObject(wrappedValue: GoalsViewModel(date: date, preferences: preferences))
+    init(date: Date = Date(), onSaved: @escaping () -> Void = {}) {
+        _viewModel = StateObject(wrappedValue: GoalsViewModel(date: date))
         self.onSaved = onSaved
     }
 

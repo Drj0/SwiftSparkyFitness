@@ -200,17 +200,23 @@ struct SettingsView: View {
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $isPresentingMeals) {
-            MealCategoriesView()
+            MealCategoriesView {
+                NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+            }
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $isPresentingWater) {
-            WaterContainersView()
+            WaterContainersView {
+                NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+            }
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $isPresentingUnits) {
-            UnitPreferencesView()
+            UnitPreferencesView {
+                NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+            }
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }

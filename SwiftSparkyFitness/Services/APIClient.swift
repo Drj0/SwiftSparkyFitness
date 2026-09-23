@@ -22,6 +22,17 @@ extension Notification.Name {
     /// error, which is confusing days into a session when it's really just
     /// "please sign in again." AuthViewModel listens and drops back to login.
     static let sessionExpired = Notification.Name("SparkyFitness.sessionExpired")
+
+    /// Posted when Settings changes something the other tabs render — a meal
+    /// category, a unit, a water container.
+    ///
+    /// This became necessary when the shell moved to a real `TabView`. The
+    /// old hand-rolled bar destroyed each tab's `@StateObject` on every
+    /// switch, so returning to Today re-ran its `.task` and refetched
+    /// everything; the state loss was masking the staleness. `TabView` keeps
+    /// tabs alive and does not re-run `.task` on re-selection, so an edit in
+    /// Settings would otherwise never reach the screen that displays it.
+    static let referenceDataChanged = Notification.Name("SparkyFitness.referenceDataChanged")
 }
 
 protocol APIClientProtocol {

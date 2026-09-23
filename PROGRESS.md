@@ -247,6 +247,15 @@ The gap the review flagged — food search, custom food and exercise logging wer
 - `showsDivider` exists for Log Food alone: its header is the title bar *plus* a search field and meal chips, and the rule that matters is under all of it — a second rule under just the title cut the block in half.
 - **This caught a font bug.** `WaterCard`'s "Add" button still had `.fontWeight(.semibold)`, missed in the Module 1 sweep — i.e. it was asking CoreText to synthesise a weight on a static custom face. The migration removed it; there are now zero `.fontWeight` calls in the app.
 
+*Independent audit, and a regression it caught*
+
+An adversarial review of this pass found four defects; all four are fixed.
+
+- **The `TabView` migration silently broke every Settings edit.** `MealCategoriesView`, `WaterContainersView` and `UnitPreferencesView` each took an `onChanged` callback and `SettingsView` passed none, so the default no-op ran. That was *harmless under the old shell* — the hand-rolled bar destroyed each tab's `@StateObject` on every switch, so returning to Today refetched everything and hid the staleness. `TabView` keeps tabs alive and doesn't re-run `.task` on re-selection, so an added meal, a changed unit or a new water container never reached the screen that renders it. Meal types were the sharp case: they're cached across loads (`mealTypes.isEmpty ? fetch : cached`), so not even pull-to-refresh would have picked one up — only a relaunch. Settings now posts `.referenceDataChanged` and both day screens drop the cache and reload. Verified live: adding "Brunch" made it appear on Today without relaunching, and there's a regression test.
+- **`MealCategoriesViewModel.rename` had no caller** — its only user was a test, which is false confidence rather than coverage. A user category's name is now a button that opens a rename alert; the server's four aren't, since renaming one is a 403.
+- **`HealthKitService.authorizationState()` and `HealthAuthorizationState` were entirely dead.** Removed. The reasoning is kept as a comment: `statusForAuthorizationRequest` distinguishes only "asked" from "not asked", never granted from refused, so it answers nothing the UI can act on.
+- **`GoalsViewModel.preferences` was stored and never read**, threaded through two layers to get there. Removed — every unit on that form is fixed by the column it writes.
+
 *VoiceOver — what was done, and what still can't be*
 
 - Everything statically checkable was swept: every interactive element has an explicit label, decorative images are hidden, selected states carry `.isSelected`, and the ambiguous ones were rewritten — a container's "Use this" (meaningless read alone) became "Use <name> for quick add", and the unit chips' bare "kg"/"0" became "Weight: kg", since the group heading above them isn't read with the button.

@@ -37,10 +37,11 @@
 //  you'd been denied would itself leak health information — the fact that the
 //  user has something they don't want to share.
 //
-//  `statusForAuthorizationRequest` distinguishes only "the sheet would
-//  appear" (never asked) from "it wouldn't" (already answered, either way).
-//  After that, a refused read and a genuinely empty day are identical: both
-//  return no samples.
+//  `statusForAuthorizationRequest` would distinguish only "the sheet would
+//  appear" (never asked) from "it wouldn't" (already answered, either way) —
+//  not granted from refused — so it answers nothing the UI can act on and
+//  isn't used. After the sheet, a refused read and a genuinely empty day are
+//  identical: both return no samples.
 //
 //  This is why the design's "Health data paused" state isn't built as
 //  described — the app cannot know it's paused. `EnergyReading` separates "no
@@ -58,15 +59,6 @@ enum EnergyReading: Equatable {
     /// Health returned nothing. Either permission was refused or there are no
     /// samples — HealthKit does not let a reader tell these apart.
     case noData
-}
-
-enum HealthAuthorizationState: Equatable {
-    /// No Health on this device at all.
-    case unavailable
-    /// Never asked — the permission sheet would appear.
-    case notRequested
-    /// Already answered. Whether it was granted is deliberately unknowable.
-    case requested
 }
 
 /// Whether the user has opted into Health at all.
@@ -87,7 +79,6 @@ enum HealthSync {
 
 protocol HealthKitReading {
     var isAvailable: Bool { get }
-    func authorizationState() async -> HealthAuthorizationState
     func requestAuthorization() async throws
     func activeEnergy(on date: Date) async throws -> EnergyReading
 }
@@ -101,19 +92,6 @@ final class HealthKitService: HealthKitReading {
     private var readTypes: Set<HKObjectType> { [energyType] }
 
     var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
-
-    func authorizationState() async -> HealthAuthorizationState {
-        guard isAvailable else { return .unavailable }
-        do {
-            let status = try await store.statusForAuthorizationRequest(toShare: [], read: readTypes)
-            return status == .shouldRequest ? .notRequested : .requested
-        } catch {
-            // Treating an unreadable status as "never asked" is the harmless
-            // branch: the worst case is presenting the sheet, which the system
-            // itself suppresses once it has been answered.
-            return .notRequested
-        }
-    }
 
     /// Presents the permission sheet. Returning without throwing means the
     /// sheet was shown and dismissed — NOT that access was granted, which

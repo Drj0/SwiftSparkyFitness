@@ -70,6 +70,20 @@ final class TodayViewModel: ObservableObject {
         water.objectWillChange
             .sink { [weak self] _ in self?.objectWillChange.send() }
             .store(in: &cancellables)
+
+        // Settings can add a meal, rename a unit or change the water
+        // container while this screen stays alive behind the tab bar, so it
+        // has to be told. `mealTypes` is dropped rather than merged because
+        // it's cached across loads — without clearing it, a new category
+        // would never appear, not even on pull-to-refresh.
+        NotificationCenter.default.publisher(for: .referenceDataChanged)
+            .sink { [weak self] _ in
+                Task { @MainActor in
+                    self?.mealTypes = []
+                    await self?.load()
+                }
+            }
+            .store(in: &cancellables)
     }
 
     /// Reads the goal *row*, not `calorieBalance.goal` — the latter falls back

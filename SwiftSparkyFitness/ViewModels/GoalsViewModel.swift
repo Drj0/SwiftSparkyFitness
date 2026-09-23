@@ -66,15 +66,13 @@ final class GoalsViewModel: ObservableObject {
     @Published private(set) var loaded: NutritionGoals?
 
     private let apiClient: APIClientProtocol
-    private let preferences: UserPreferences
 
-    init(
-        date: Date,
-        preferences: UserPreferences = .serverDefaults,
-        apiClient: APIClientProtocol = APIClient.shared
-    ) {
+    // No `preferences` here on purpose: every unit on this form is fixed by
+    // the column it writes. Calories are kcal, macros are grams, and the
+    // water target is `water_goal_ml` — millilitres whatever the display
+    // preference says, since converting would store the wrong number.
+    init(date: Date, apiClient: APIClientProtocol = APIClient.shared) {
         self.date = date
-        self.preferences = preferences
         self.apiClient = apiClient
     }
 

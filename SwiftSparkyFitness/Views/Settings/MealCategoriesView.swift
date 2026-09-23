@@ -18,6 +18,8 @@ struct MealCategoriesView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isNewFieldFocused: Bool
+    @State private var renamingCategory: MealType?
+    @State private var renameText = ""
 
     /// Called on dismiss so the screens that render these categories pick up
     /// additions, renames and visibility changes.
@@ -59,18 +61,50 @@ struct MealCategoriesView: View {
         }
         .background(AppColor.background)
         .task { await viewModel.load() }
+        .alert("Rename meal", isPresented: .constant(renamingCategory != nil)) {
+            TextField("Name", text: $renameText)
+                .autocapitalization(.words)
+            Button("Cancel", role: .cancel) { renamingCategory = nil }
+            Button("Rename") {
+                if let renamingCategory {
+                    Task { await viewModel.rename(renamingCategory, to: renameText) }
+                }
+                renamingCategory = nil
+            }
+        }
     }
 
     private func row(_ category: MealType) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(category.displayName)
-                    .appBody(15, weight: .semibold)
-                    .foregroundStyle(category.visible ? AppColor.ink : AppColor.secondaryText)
+                // Only a user's own category is renameable — the server
+                // answers 403 for its four, so tapping one would just produce
+                // an error. A default's name is plain text.
                 if category.isSystemDefault {
+                    Text(category.displayName)
+                        .appBody(15, weight: .semibold)
+                        .foregroundStyle(category.visible ? AppColor.ink : AppColor.secondaryText)
                     Text("Built in")
                         .appBody(12)
                         .foregroundStyle(AppColor.placeholder)
+                } else {
+                    Button {
+                        renamingCategory = category
+                        renameText = category.name
+                    } label: {
+                        HStack(spacing: 5) {
+                            Text(category.displayName)
+                                .appBody(15, weight: .semibold)
+                                .foregroundStyle(category.visible ? AppColor.ink : AppColor.secondaryText)
+                            Image(systemName: "pencil")
+                                .font(.system(size: 11))
+                                .foregroundStyle(AppColor.placeholder)
+                        }
+                        .frame(minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.pressable)
+                    .accessibilityLabel("Rename \(category.displayName)")
                 }
             }
 

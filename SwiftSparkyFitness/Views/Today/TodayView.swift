@@ -111,7 +111,7 @@ struct TodayView: View {
             bodySheet(kind: .measurements)
         }
         .sheet(isPresented: $viewModel.isPresentingSetGoals) {
-            SetGoalsView(preferences: viewModel.preferences) {
+            SetGoalsView {
                 Task { await viewModel.load() }
             }
             .presentationDetents([.large])
