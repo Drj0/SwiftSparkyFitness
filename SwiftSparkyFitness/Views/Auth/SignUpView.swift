@@ -89,7 +89,7 @@ struct SignUpView: View {
                     // own top padding comes off to keep the spacing as drawn.
                     Text("Log in")
                         .foregroundStyle(AppColor.accent)
-                        .fontWeight(.semibold)
+                        .appBody(13, weight: .semibold)
                         .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                 }

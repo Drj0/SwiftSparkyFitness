@@ -140,6 +140,50 @@ final class AuthViewModel: ObservableObject {
         }
     }
 
+    // MARK: - Password reset
+
+    /// Deliberately has no "that address isn't registered" case: the server
+    /// answers identically either way so the form can't be used to find out
+    /// who has an account, and this can only ever report that the request
+    /// was accepted.
+    enum ResetState: Equatable {
+        case editing
+        case sending
+        case requested
+    }
+
+    @Published var resetEmail = ""
+    @Published private(set) var resetState: ResetState = .editing
+    @Published private(set) var resetError: String?
+
+    var canRequestReset: Bool {
+        resetState != .sending && resetEmail.contains("@")
+    }
+
+    /// Call when opening the sheet, so it starts on whatever was already
+    /// typed into the login form rather than making them type it twice.
+    func preparePasswordReset() {
+        resetEmail = email
+        resetState = .editing
+        resetError = nil
+    }
+
+    func requestPasswordReset() async {
+        resetError = nil
+        resetState = .sending
+        do {
+            try await apiClient.requestPasswordReset(
+                email: resetEmail.trimmingCharacters(in: .whitespacesAndNewlines)
+            )
+            resetState = .requested
+            Haptics.success()
+        } catch {
+            resetState = .editing
+            resetError = error.localizedDescription
+            Haptics.error()
+        }
+    }
+
     private func apply(_ error: APIError) {
         guard case .server(let message, let code) = error else {
             bannerMessage = error.localizedDescription

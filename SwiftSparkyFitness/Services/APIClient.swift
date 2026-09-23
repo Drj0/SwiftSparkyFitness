@@ -29,6 +29,7 @@ protocol APIClientProtocol {
     func signUp(email: String, password: String) async throws -> SessionUser
     func currentSession() async throws -> SessionUser?
     func signOut() async
+    func requestPasswordReset(email: String) async throws
     func dailySummary(date: Date) async throws -> DailySummary
     func mealTypes() async throws -> [MealType]
     func searchFoods(query: String) async throws -> [Food]
@@ -214,6 +215,28 @@ final class APIClient: APIClientProtocol {
         let name = email.split(separator: "@").first.map(String.init) ?? email
         return try await (send("api/auth/sign-up/email", method: "POST", body: SignUpRequest(name: name, email: email, password: password)) as AuthResponse).user
     }
+
+    /// Asks the server to mail a reset link.
+    ///
+    /// Returns nothing on purpose. The endpoint answers an identical 200 for
+    /// an address that has an account and one that doesn't (verified live) —
+    /// that's deliberate, so the form can't be used to discover who has an
+    /// account here. The caller therefore cannot report "we sent it", only
+    /// "if that address is registered, it's on its way".
+    ///
+    /// Note `/api/auth/forget-password` is a 404 on this server; better-auth
+    /// renamed the route. `redirectTo` is accepted but optional, and is
+    /// omitted because the reset link opens the web frontend — this app has
+    /// no deep-link route to hand the token to.
+    func requestPasswordReset(email: String) async throws {
+        _ = try await (send(
+            "api/auth/request-password-reset",
+            method: "POST",
+            body: PasswordResetRequest(email: email)
+        ) as MessageResponse)
+    }
+
+    private struct PasswordResetRequest: Encodable { let email: String }
 
     /// Throws on a transport failure; returns nil only when the server
     /// answered and there is genuinely no valid session.

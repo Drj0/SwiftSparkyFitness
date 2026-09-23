@@ -74,7 +74,7 @@ struct LogBodyView: View {
                 }
                 .buttonStyle(.pressable)
                 .foregroundStyle(viewModel.isSaving ? AppColor.placeholder : AppColor.accent)
-                .fontWeight(.semibold)
+                .appBody(15, weight: .semibold)
                 .disabled(viewModel.isSaving)
             }
             .appBody(15)

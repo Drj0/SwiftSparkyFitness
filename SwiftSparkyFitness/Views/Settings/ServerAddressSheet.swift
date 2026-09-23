@@ -36,7 +36,7 @@ struct ServerAddressSheet: View {
                 Spacer()
                 Button("Save", action: save)
                     .foregroundStyle(AppColor.accent)
-                    .fontWeight(.semibold)
+                    .appBody(15, weight: .semibold)
                     .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                     .contentShape(Rectangle())
             }

@@ -133,7 +133,7 @@ struct LogExerciseView: View {
             .buttonStyle(.pressable)
             .disabled(viewModel.isSaving)
             .foregroundStyle(viewModel.isSaving ? AppColor.placeholder : AppColor.accent)
-            .fontWeight(.semibold)
+            .appBody(15, weight: .semibold)
         }
         .appBody(15)
         .padding(.horizontal, 20)

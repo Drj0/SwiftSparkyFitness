@@ -12,6 +12,8 @@
 
 import XCTest
 import Combine
+import SwiftUI
+import UIKit
 @testable import SwiftSparkyFitness
 
 final class SwiftSparkyFitnessTests: XCTestCase {
@@ -97,11 +99,17 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         var deletedWaterEntryIds: [String] = []
         var deletedBodyIds: [String] = []
         var upsertedBodyInputs: [BodyMeasurementsInput] = []
+        var passwordResetRequests: [String] = []
+        var passwordResetError: Error?
 
         func signIn(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
         func signUp(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
         func currentSession() async throws -> SessionUser? { nil }
         func signOut() async {}
+        func requestPasswordReset(email: String) async throws {
+            passwordResetRequests.append(email)
+            if let passwordResetError { throw passwordResetError }
+        }
         func dailySummary(date: Date) async throws -> DailySummary { summaryToReturn }
         func mealTypes() async throws -> [MealType] { [] }
         func searchFoods(query: String) async throws -> [Food] { [] }
@@ -568,5 +576,95 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertEqual(decoded.weightUnitLabel, "kg")
         XCTAssertEqual(decoded.measurementUnitLabel, "cm")
         XCTAssertEqual(decoded.waterUnitLabel, "ml")
+    }
+
+    // MARK: - Password reset
+
+    @MainActor
+    func testResetSheetOpensOnTheAddressAlreadyTypedIntoLogin() {
+        let viewModel = AuthViewModel(apiClient: StubAPIClient())
+        viewModel.email = "someone@example.com"
+
+        viewModel.preparePasswordReset()
+
+        // Otherwise the one thing they've already typed has to be typed again.
+        XCTAssertEqual(viewModel.resetEmail, "someone@example.com")
+        XCTAssertEqual(viewModel.resetState, .editing)
+    }
+
+    @MainActor
+    func testResetSendsTheTrimmedAddressAndReportsOnlyThatItWasAccepted() async {
+        let stub = StubAPIClient()
+        let viewModel = AuthViewModel(apiClient: stub)
+        viewModel.resetEmail = "  someone@example.com  "
+
+        await viewModel.requestPasswordReset()
+
+        XCTAssertEqual(stub.passwordResetRequests, ["someone@example.com"])
+        // There is no "sent" vs "no such account" outcome to assert, because
+        // the server answers both identically on purpose.
+        XCTAssertEqual(viewModel.resetState, .requested)
+        XCTAssertNil(viewModel.resetError)
+    }
+
+    @MainActor
+    func testResetFailureReturnsToEditingSoItCanBeRetried() async {
+        let stub = StubAPIClient()
+        stub.passwordResetError = APIError.server(message: "Server is down.", code: nil)
+        let viewModel = AuthViewModel(apiClient: stub)
+        viewModel.resetEmail = "someone@example.com"
+
+        await viewModel.requestPasswordReset()
+
+        // A transport failure must not look like a delivered reset link.
+        XCTAssertEqual(viewModel.resetState, .editing)
+        XCTAssertNotNil(viewModel.resetError)
+    }
+
+    @MainActor
+    func testResetRefusesAnAddressThatIsObviouslyNotOne() {
+        let viewModel = AuthViewModel(apiClient: StubAPIClient())
+
+        viewModel.resetEmail = ""
+        XCTAssertFalse(viewModel.canRequestReset)
+        // The server accepts anything and answers 200, so without this the
+        // user would be told a link was on its way to "asdf".
+        viewModel.resetEmail = "asdf"
+        XCTAssertFalse(viewModel.canRequestReset)
+        viewModel.resetEmail = "someone@example.com"
+        XCTAssertTrue(viewModel.canRequestReset)
+    }
+
+    // MARK: - Bundled typefaces
+
+    /// `Font.custom` silently falls back to the system font when a name
+    /// doesn't resolve, so a dropped file or a renamed face degrades into
+    /// something that still looks plausible and ships unnoticed. These are
+    /// PostScript names, which deliberately differ from the filenames (the
+    /// instancer rewrites them to carry a "Roman" infix), so they're exactly
+    /// the kind of string that rots without anything complaining.
+    func testEveryBundledFaceResolves() {
+        for face in [
+            AppFont.Face.sansRegular,
+            AppFont.Face.sansSemiBold,
+            AppFont.Face.sansBold,
+            AppFont.Face.serifSemiBold,
+        ] {
+            XCTAssertNotNil(
+                UIFont(name: face, size: 15),
+                "\(face) did not resolve — check UIAppFonts in Info.plist and the font's PostScript name"
+            )
+        }
+    }
+
+    /// Only three sans cuts are bundled, so every weight has to land on a real
+    /// one; asking for a weight that isn't there makes CoreText synthesise it.
+    func testSansWeightsMapToNearestBundledCut() {
+        XCTAssertEqual(AppFont.sansFace(for: .light), AppFont.Face.sansRegular)
+        XCTAssertEqual(AppFont.sansFace(for: .regular), AppFont.Face.sansRegular)
+        XCTAssertEqual(AppFont.sansFace(for: .medium), AppFont.Face.sansSemiBold)
+        XCTAssertEqual(AppFont.sansFace(for: .semibold), AppFont.Face.sansSemiBold)
+        XCTAssertEqual(AppFont.sansFace(for: .bold), AppFont.Face.sansBold)
+        XCTAssertEqual(AppFont.sansFace(for: .black), AppFont.Face.sansBold)
     }
 }

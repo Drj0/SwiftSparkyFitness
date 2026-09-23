@@ -23,7 +23,7 @@ import SwiftUI
 struct LoginView: View {
     @ObservedObject var viewModel: AuthViewModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var showsForgotPasswordNotice = false
+    @State private var showsForgotPassword = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -66,7 +66,7 @@ struct LoginView: View {
             // Measured 113 x 15.7pt. The target grows to 44pt tall, so the
             // row's own top padding comes off to keep the spacing as drawn.
             Button {
-                showsForgotPasswordNotice = true
+                showsForgotPassword = true
             } label: {
                 Text("Forgot password?")
                     .appBody(13, weight: .semibold)
@@ -76,8 +76,9 @@ struct LoginView: View {
             }
             .buttonStyle(.pressable)
             .frame(maxWidth: .infinity, alignment: .trailing)
-            .alert("Password reset isn't available yet", isPresented: $showsForgotPasswordNotice) {
-                Button("OK", role: .cancel) {}
+            .sheet(isPresented: $showsForgotPassword) {
+                ForgotPasswordSheet(viewModel: viewModel)
+                    .presentationDetents([.medium, .large])
             }
 
             PrimaryButton(title: "Log in", isLoading: viewModel.isLoading) {
@@ -101,7 +102,7 @@ struct LoginView: View {
                 } label: {
                     Text("Create an account")
                         .foregroundStyle(AppColor.accent)
-                        .fontWeight(.semibold)
+                        .appBody(13, weight: .semibold)
                         .frame(minHeight: 44)
                         .contentShape(Rectangle())
                 }
