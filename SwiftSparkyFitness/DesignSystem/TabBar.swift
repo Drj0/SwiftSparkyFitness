@@ -2,18 +2,37 @@
 //  TabBar.swift
 //  SwiftSparkyFitness
 //
-//  The 4-tab bar (Today, Diary, Progress, Settings) from the design. Each
-//  tab is the design's "ringed icon" language — a stroked circle with a
-//  meaning-specific glyph inside — recreated with SF Symbols rather than
-//  hand-transcribing the mockup's raw SVG paths (native icons > custom
-//  Bezier art for the same shape). The design also draws a fake home
-//  indicator bar under the tabs; that's the OS's own home indicator on a
-//  real device, so it's omitted here to avoid a duplicate.
+//  The four tabs. The bar itself is the system's now — see MainTabView for
+//  why the hand-rolled one went.
+//
+//  THE DESIGN'S RINGED ICONS, AS REAL SYMBOLS
+//  ------------------------------------------
+//  The design draws each tab as a stroked circle with a meaning-specific
+//  glyph inside. The hand-rolled bar built that as a ZStack of a `Circle` and
+//  an `Image`, which a system tab bar can't use — it renders one template
+//  image per tab, not an arbitrary view.
+//
+//  The `.circle` variants of the same glyphs carry that language as single
+//  SF Symbols. Two departures from the mockup, both deliberate:
+//
+//    * `slider.horizontal.3` has no `.circle` variant (checked — it doesn't
+//      exist), so Settings uses `gearshape.circle`: a gear rather than
+//      sliders.
+//    * The rings render *filled*, not stroked. A tab bar substitutes the
+//      `.fill` variant of a symbol itself, and `.symbolVariant(.none)` does
+//      not reach it — the bar is UIKit-backed and ignores it (tried; no
+//      effect, so the modifier isn't left in the code pretending otherwise).
+//
+//  Both were worth it: the alternative was authoring a custom `.symbolset`,
+//  or keeping a bar that threw away every screen's state on each switch.
+//
+//  The design also draws a fake home indicator bar under the tabs; that's the
+//  OS's own on a real device, so it was never reproduced.
 //
 
 import SwiftUI
 
-enum AppTab: CaseIterable {
+enum AppTab: CaseIterable, Hashable {
     case today, diary, progress, settings
 
     var label: String {
@@ -27,88 +46,10 @@ enum AppTab: CaseIterable {
 
     var symbol: String {
         switch self {
-        case .today: return "sunrise"
-        case .diary: return "list.bullet"
-        case .progress: return "chart.line.uptrend.xyaxis"
-        case .settings: return "slider.horizontal.3"
+        case .today: return "sunrise.circle"
+        case .diary: return "list.bullet.circle"
+        case .progress: return "chart.line.uptrend.xyaxis.circle"
+        case .settings: return "gearshape.circle"
         }
     }
-}
-
-struct AppTabBar: View {
-    @Binding var selection: AppTab
-
-    /// The ringed-icon treatment is the design's, so it scales with Dynamic
-    /// Type rather than staying a fixed 25pt while its glyph and label grow.
-    @ScaledMetric(relativeTo: .caption2) private var ringSize: CGFloat = 25
-    @ScaledMetric(relativeTo: .caption2) private var glyphSize: CGFloat = 11
-    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
-
-    var body: some View {
-        HStack(spacing: 0) {
-            ForEach(AppTab.allCases, id: \.self) { tab in
-                Button {
-                    if selection != tab {
-                        Haptics.selection()
-                        selection = tab
-                    }
-                } label: {
-                    VStack(spacing: 3) {
-                        ZStack {
-                            Circle()
-                                .stroke(color(for: tab), lineWidth: 1.9)
-                                .frame(width: ringSize, height: ringSize)
-                            Image(systemName: tab.symbol)
-                                .font(.system(size: glyphSize, weight: .semibold))
-                                .foregroundStyle(color(for: tab))
-                        }
-                        // At accessibility sizes the four labels can only
-                        // truncate to "To…"/"Dia…", which tells the user
-                        // nothing the icon doesn't. Drop to icon-only there
-                        // and let VoiceOver/the large-content HUD carry the
-                        // name, the way a native tab bar does.
-                        if !dynamicTypeSize.isAccessibilitySize {
-                            Text(tab.label)
-                                .appBody(11, weight: tab == selection ? .semibold : .medium)
-                                .foregroundStyle(color(for: tab))
-                                .lineLimit(1)
-                                .minimumScaleFactor(0.85)
-                        }
-                    }
-                    // 44pt minimum touch target; the buttons were 41.3pt tall.
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .contentShape(Rectangle())
-                    // The glyph was its own accessibility element announcing
-                    // the SF Symbol's default name — Settings read as "Edit",
-                    // Today as "Sunrise". Hiding the whole label subtree and
-                    // giving the Button an explicit label below is the
-                    // belt-and-braces form of `children: .ignore`.
-                    //
-                    // Note: the simulator's hierarchy dump prints the view
-                    // tree, not VoiceOver's focus order, so it still lists
-                    // these children either way — this needs a real VoiceOver
-                    // pass to confirm, not a dump diff.
-                    .accessibilityHidden(true)
-                }
-                .buttonStyle(.pressable)
-                // No tab ever carried the Selected trait, so VoiceOver could
-                // not say which one you were on.
-                .accessibilityLabel(tab.label)
-                .accessibilityAddTraits(tab == selection ? [.isButton, .isSelected] : .isButton)
-            }
-        }
-        .padding(.top, 8)
-        .padding(.horizontal, 12)
-        .frame(minHeight: 49)
-        .background(AppColor.surface)
-        .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .top)
-    }
-
-    private func color(for tab: AppTab) -> Color {
-        tab == selection ? AppColor.accent : AppColor.inactiveTab
-    }
-}
-
-#Preview {
-    AppTabBar(selection: .constant(.today))
 }

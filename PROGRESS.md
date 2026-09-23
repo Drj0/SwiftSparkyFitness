@@ -247,6 +247,12 @@ The gap the review flagged — food search, custom food and exercise logging wer
 - `showsDivider` exists for Log Food alone: its header is the title bar *plus* a search field and meal chips, and the rule that matters is under all of it — a second rule under just the title cut the block in half.
 - **This caught a font bug.** `WaterCard`'s "Add" button still had `.fontWeight(.semibold)`, missed in the Module 1 sweep — i.e. it was asking CoreText to synthesise a weight on a static custom face. The migration removed it; there are now zero `.fontWeight` calls in the app.
 
+*Native `TabView`*
+
+- The shell was a `switch` inside a `VStack` with a hand-rolled bar, which removed each screen from the hierarchy on every switch and took its `@StateObject` with it. **Verified fixed:** collapsing Diary's Breakfast section, switching to Today and back now leaves it collapsed; before, every screen reset. Scroll position, keyboard traversal and the system's own tab accessibility come with it.
+- The design's ringed icons survive as the `.circle` variants of the same glyphs — see `TabBar.swift` for the two visual departures this costs and why neither was worth a custom `.symbolset`.
+- `AppTabBar` is deleted; `AppTab` remains as the selection type.
+
 *Water overshoot*
 
 - The card's bar filled and stopped at 100%, so 2 litres and 4 litres against a 2 litre goal drew identically. `overshoot` is a second lap over the full bar. `progress` stays clamped deliberately — it's a width, and a width can't overflow.
@@ -268,5 +274,5 @@ The gap the review flagged — food search, custom food and exercise logging wer
 - **Italic and the unbundled weights** — only four static cuts ship (sans regular/semibold/bold, serif semibold), so there is no italic and no light/black. Nothing in the design asks for them; cut more instances from the variable sources in `Resources/Fonts` if that changes.
 - **Test coverage gaps that remain** — the suite is 58 server-free tests and now covers Module 2's view models too. Still untested: `FoodDetailViewModel`'s portion math, `TodayViewModel`/`DiaryViewModel` load/error paths beyond the goal check, and every `View` (there are no snapshot or UI tests at all).
   - Two throwaway techniques from Module 4 worth reusing, since no Xcode MCP tools were available that session: (1) a temporary test that drives the real `APIClient` against the live server — it catches URL/encode/decode mistakes the stub can't; (2) rendering views to PNGs (`/tmp`) and looking at them, which is how the wrong-coloured progress bar and the truncated decimals were caught. Note `ImageRenderer` draws `ScrollView` content as **blank** (verified with a control) — render anything inside one through a `UIHostingController` in a `UIWindow` plus `drawHierarchy(in:afterScreenUpdates:)` instead.
-- **Native `TabView`** — the tab bar is hand-rolled, so switching tabs destroys each tab's `@StateObject` and re-runs its load. Verified live: browse Diary to Sep 20, tap Today, tap Diary → you are back on today, with the collapsed sections and scroll position gone. Re-tapping the active tab also does nothing (no scroll-to-top). Migrating to `TabView` fixes the state loss, scroll-to-top, keyboard traversal and Dynamic Type in the bar together; the cost is the design's ringed-icon treatment, which would need a custom `.symbolset`.
+- **Tab-bar visual departures from the mockup** — the move to a real `TabView` (see below) costs two things: Settings shows a gear rather than sliders (`slider.horizontal.3` has no `.circle` variant), and the rings render filled rather than stroked, because a tab bar substitutes a symbol's `.fill` variant itself and `.symbolVariant(.none)` doesn't reach it. Restoring either means authoring a custom `.symbolset`.
 - **Multi-server support** — the mobile reference app (SparkyFitnessMobile) supports multiple server configs/accounts; this app stores one address (editable in Settings) and one session.
