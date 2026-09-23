@@ -27,7 +27,7 @@ final class TodayViewModel: ObservableObject {
     @Published var isPresentingWaterAmount = false
     @Published var isPresentingLogWeight = false
     @Published var isPresentingLogMeasurements = false
-    @Published var isPresentingGoalNotice = false
+    @Published var isPresentingSetGoals = false
     /// Set by a meal section's "+" so Log Food opens on the meal the user
     /// actually tapped, instead of falling back to the time-of-day guess
     /// (tapping "+" beside Dinner at 9am used to open on Breakfast).
@@ -67,8 +67,12 @@ final class TodayViewModel: ObservableObject {
             .store(in: &cancellables)
     }
 
+    /// Reads the goal *row*, not `calorieBalance.goal` — the latter falls back
+    /// to a server-side default of 2000 for an account that has never set
+    /// one, so asking it made this always true and left the goal-not-set card
+    /// permanently unreachable.
     var hasGoalSet: Bool {
-        (summary?.calorieBalance.goal ?? 0) > 0
+        (summary?.goals.calories ?? 0) > 0
     }
 
     /// Water and body entries count here as of Module 4 — without them,

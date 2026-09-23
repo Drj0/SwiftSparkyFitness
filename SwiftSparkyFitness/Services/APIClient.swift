@@ -45,6 +45,8 @@ protocol APIClientProtocol {
     func updateExerciseEntry(id: String, _ input: ExerciseEntryInput) async throws -> ExerciseSessionSummary
     func deleteExerciseEntry(id: String) async throws
     func userPreferences() async throws -> UserPreferences
+    func goals(date: Date) async throws -> NutritionGoals
+    func saveGoals(_ goals: NutritionGoals, startingOn date: Date) async throws
     func waterTotals(date: Date) async throws -> WaterTotals
     func waterLog(date: Date) async throws -> [WaterLogEntry]
     func adjustWater(date: Date, drinks: Int) async throws -> WaterTotals
@@ -113,6 +115,14 @@ final class APIClient: APIClientProtocol {
         return encoder
     }()
 
+    /// Goals are read and written as an opaque key/value bag so that columns
+    /// this app doesn't model survive a round trip (see NutritionGoals). That
+    /// only works if keys pass through verbatim — the shared coders' snake/
+    /// camel conversion would rewrite them on the way in *and* out, and the
+    /// write keys are `p_`-prefixed, which no conversion rule produces.
+    private let verbatimDecoder = JSONDecoder()
+    private let verbatimEncoder = JSONEncoder()
+
     private let dateFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.dateFormat = "yyyy-MM-dd"
@@ -144,7 +154,8 @@ final class APIClient: APIClientProtocol {
         _ path: String,
         method: String = "GET",
         query: [URLQueryItem] = [],
-        body: Encodable? = nil
+        body: Encodable? = nil,
+        verbatimKeys: Bool = false
     ) async throws -> T {
         guard var components = URLComponents(url: baseURL.appendingPathComponent(path), resolvingAgainstBaseURL: false) else {
             throw APIError.invalidResponse
@@ -156,7 +167,7 @@ final class APIClient: APIClientProtocol {
         request.httpMethod = method
         if let body {
             request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-            request.httpBody = try encoder.encode(body)
+            request.httpBody = try (verbatimKeys ? verbatimEncoder : encoder).encode(body)
         }
 
         let (data, response) = try await session.data(for: request)
@@ -165,7 +176,7 @@ final class APIClient: APIClientProtocol {
         guard (200..<300).contains(http.statusCode) else {
             throw failure(status: http.statusCode, data: data, fallback: "Request failed (\(http.statusCode)).")
         }
-        return try decoder.decode(T.self, from: data)
+        return try (verbatimKeys ? verbatimDecoder : decoder).decode(T.self, from: data)
     }
 
     // MARK: - Auth
@@ -501,6 +512,30 @@ final class APIClient: APIClientProtocol {
     /// UserPreferences for why no conversion happens on top of this.
     func userPreferences() async throws -> UserPreferences {
         try await send("api/user-preferences")
+    }
+
+    // MARK: - Goals
+
+    /// An account that has never set a goal gets a zeroed row here, not a 404
+    /// — `NutritionGoals.isSet` is what distinguishes the two.
+    func goals(date: Date) async throws -> NutritionGoals {
+        try await send(
+            "api/goals/for-date",
+            query: [URLQueryItem(name: "date", value: dateFormatter.string(from: date))],
+            verbatimKeys: true
+        )
+    }
+
+    /// Replaces the whole goal row — see NutritionGoals for why the caller
+    /// must pass back a value it read from the server rather than build one.
+    func saveGoals(_ goals: NutritionGoals, startingOn date: Date) async throws {
+        let payload = goals.writePayload(startingOn: dateFormatter.string(from: date))
+        _ = try await (send(
+            "api/goals/manage-timeline",
+            method: "POST",
+            body: payload,
+            verbatimKeys: true
+        ) as MessageResponse)
     }
 
     // MARK: - Water

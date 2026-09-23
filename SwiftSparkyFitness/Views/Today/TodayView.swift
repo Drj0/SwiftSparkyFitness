@@ -36,7 +36,7 @@ struct TodayView: View {
                         ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
                     } else if let summary = viewModel.summary {
                         if !viewModel.hasGoalSet {
-                            GoalNotSetCard { viewModel.isPresentingGoalNotice = true }
+                            GoalNotSetCard { viewModel.isPresentingSetGoals = true }
                         } else if viewModel.hasLoggedAnything {
                             populated(summary)
                         } else {
@@ -110,10 +110,12 @@ struct TodayView: View {
         .sheet(isPresented: $viewModel.isPresentingLogMeasurements) {
             bodySheet(kind: .measurements)
         }
-        .alert("Goal setting isn't available yet", isPresented: $viewModel.isPresentingGoalNotice) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text("You can still log food, water and weight — your rings fill in once a daily goal is set.")
+        .sheet(isPresented: $viewModel.isPresentingSetGoals) {
+            SetGoalsView(preferences: viewModel.preferences) {
+                Task { await viewModel.load() }
+            }
+            .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
         }
     }
 
@@ -286,10 +288,6 @@ struct TodayView: View {
 }
 
 private struct GoalNotSetCard: View {
-    /// ponytail: the goal-setting screen is a later module. Until it exists
-    /// the button says so out loud — the same honest-dead-end pattern
-    /// LoginView already uses for Forgot Password — rather than silently
-    /// doing nothing when tapped.
     let onSetGoal: () -> Void
 
     var body: some View {

@@ -39,6 +39,13 @@ struct DailySummary: Decodable {
     }
 
     struct Goals: Decodable {
+        /// The goal the user actually set, which is NOT the same number as
+        /// `calorieBalance.goal`: that one falls back to a server-side
+        /// default of 2000 when no goal row exists. Reading the balance to
+        /// decide "has a goal been set?" therefore always answers yes, and
+        /// the goal-not-set state became unreachable — verified live, a row
+        /// with `calories: 0` still reported `calorieBalance.goal: 2000`.
+        let calories: Double?
         let protein: Double?
         let carbs: Double?
         let fat: Double?

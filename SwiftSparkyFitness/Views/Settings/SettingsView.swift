@@ -2,12 +2,12 @@
 //  SettingsView.swift
 //  SwiftSparkyFitness
 //
-//  Minimal Settings: the server address, and signing out.
+//  Settings: the server address, daily goals, and signing out.
 //
-//  This replaces the placeholder tab specifically because the backend URL
+//  This replaced the placeholder tab specifically because the backend URL
 //  stopped being a hardcoded constant — without somewhere to type it, a fresh
-//  install has no way to reach a server at all. The rest of the settings the
-//  design calls for (units, water containers, goals) still belong here later.
+//  install has no way to reach a server at all. Units and water containers
+//  still belong here later.
 //
 
 import SwiftUI
@@ -19,6 +19,7 @@ struct SettingsView: View {
     @AppStorage(ServerConfig.defaultsKey) private var serverURL = ""
     @State private var draft = ""
     @State private var savedNotice = false
+    @State private var isPresentingGoals = false
     @FocusState private var isFieldFocused: Bool
 
     private var effective: String { ServerConfig.urlString }
@@ -62,6 +63,24 @@ struct SettingsView: View {
                     PrimaryButton(title: savedNotice ? "Saved" : "Save server address", action: save)
                 }
 
+                // Today's goal-not-set card is the other way in, but it
+                // disappears the moment a goal exists — without this, a goal
+                // could be set once and never changed again.
+                section("GOALS") {
+                    Text("Daily calorie, macro and water targets. These drive the rings on Today.")
+                        .appBody(13)
+                        .foregroundStyle(AppColor.secondaryText)
+
+                    Button { isPresentingGoals = true } label: {
+                        Text("Edit daily goals")
+                            .appBody(15, weight: .semibold)
+                            .foregroundStyle(AppColor.accent)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.pressable)
+                }
+
                 section("ACCOUNT") {
                     row("Signed in as", user.email)
                     Button(action: onSignOut) {
@@ -84,6 +103,11 @@ struct SettingsView: View {
         .background(AppColor.background)
         .task { draft = effective }
         .onChange(of: draft) { _, _ in savedNotice = false }
+        .sheet(isPresented: $isPresentingGoals) {
+            SetGoalsView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
     }
 
     private func save() {

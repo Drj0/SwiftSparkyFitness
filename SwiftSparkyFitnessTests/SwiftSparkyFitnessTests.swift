@@ -86,7 +86,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         var summaryToReturn = DailySummary(
             calorieBalance: .init(eaten: 0, burned: 0, remaining: 0, goal: 0),
             waterIntake: 0, waterIntakeBreakdown: nil,
-            goals: .init(protein: nil, carbs: nil, fat: nil, waterGoalMl: nil),
+            goals: .init(calories: nil, protein: nil, carbs: nil, fat: nil, waterGoalMl: nil),
             foodEntries: [], exerciseSessions: []
         )
         var totalsToReturn = WaterTotals.zero
@@ -101,6 +101,10 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         var upsertedBodyInputs: [BodyMeasurementsInput] = []
         var passwordResetRequests: [String] = []
         var passwordResetError: Error?
+        var goalsToReturn = NutritionGoals(raw: [:])
+        var goalsLoadError: Error?
+        var goalsSaveError: Error?
+        var savedGoals: [NutritionGoals] = []
 
         func signIn(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
         func signUp(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
@@ -126,6 +130,14 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         func deleteExerciseEntry(id: String) async throws {}
 
         func userPreferences() async throws -> UserPreferences { preferencesToReturn }
+        func goals(date: Date) async throws -> NutritionGoals {
+            if let goalsLoadError { throw goalsLoadError }
+            return goalsToReturn
+        }
+        func saveGoals(_ goals: NutritionGoals, startingOn date: Date) async throws {
+            savedGoals.append(goals)
+            if let goalsSaveError { throw goalsSaveError }
+        }
         func waterTotals(date: Date) async throws -> WaterTotals { totalsToReturn }
         func waterLog(date: Date) async throws -> [WaterLogEntry] { logToReturn }
         func adjustWater(date: Date, drinks: Int) async throws -> WaterTotals {
@@ -191,7 +203,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
             calorieBalance: .init(eaten: 0, burned: 0, remaining: 0, goal: 2000),
             waterIntake: waterMl,
             waterIntakeBreakdown: WaterTotals(waterMl: waterMl, manualMl: manualMl, ledgerMl: manualMl, foodMl: foodMl),
-            goals: .init(protein: nil, carbs: nil, fat: nil, waterGoalMl: goalMl),
+            goals: .init(calories: nil, protein: nil, carbs: nil, fat: nil, waterGoalMl: goalMl),
             foodEntries: [], exerciseSessions: []
         )
     }
@@ -576,6 +588,153 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertEqual(decoded.weightUnitLabel, "kg")
         XCTAssertEqual(decoded.measurementUnitLabel, "cm")
         XCTAssertEqual(decoded.waterUnitLabel, "ml")
+    }
+
+    // MARK: - Goals
+
+    /// A representative row: the five fields the app edits, plus columns it
+    /// has no UI for at all, plus the three macro percentages that must stay
+    /// null.
+    private func sampleGoalsRaw() -> [String: JSONValue] {
+        [
+            "goal_date": .string("2026-09-23"),
+            "calories": .number(2000),
+            "protein": .number(150),
+            "carbs": .number(200),
+            "fat": .number(70),
+            "water_goal_ml": .number(2500),
+            "sodium": .number(2300),
+            "dietary_fiber": .number(30),
+            "target_exercise_calories_burned": .number(400),
+            "protein_percentage": .null,
+            "carbs_percentage": .null,
+            "fat_percentage": .null,
+            "custom_meal_percentages": .object(["breakfast": .number(25)]),
+            "custom_nutrients": .object([:]),
+        ]
+    }
+
+    /// The write replaces the whole row and zeroes anything it isn't sent
+    /// (verified live: sodium 2300 -> 0 from a POST that merely omitted it).
+    /// Editing a calorie goal here must therefore carry the untouched columns
+    /// back out, or it destroys goals set in the web client.
+    @MainActor
+    func testSavingAGoalPreservesColumnsTheAppDoesNotModel() async {
+        let stub = StubAPIClient()
+        stub.goalsToReturn = NutritionGoals(raw: sampleGoalsRaw())
+        let viewModel = GoalsViewModel(date: Date(), apiClient: stub)
+
+        await viewModel.load()
+        viewModel.text[GoalsViewModel.Field.calories.rawValue] = "1800"
+        let saved = await viewModel.save()
+
+        XCTAssertTrue(saved)
+        let payload = stub.savedGoals.last!.writePayload(startingOn: "2026-09-23")
+        XCTAssertEqual(payload["p_calories"], .number(1800))
+        // The point of the test: untouched columns survive.
+        XCTAssertEqual(payload["p_sodium"], .number(2300))
+        XCTAssertEqual(payload["p_dietary_fiber"], .number(30))
+        XCTAssertEqual(payload["p_target_exercise_calories_burned"], .number(400))
+        XCTAssertEqual(payload["custom_meal_percentages"], .object(["breakfast": .number(25)]))
+    }
+
+    /// Three zeroed percentages would count as "all three are numbers", and
+    /// the server then computes macro grams from them and overrides the gram
+    /// fields — so null has to stay null rather than being coerced.
+    func testMacroPercentagesStayNullRatherThanBecomingZero() {
+        let payload = NutritionGoals(raw: sampleGoalsRaw()).writePayload(startingOn: "2026-09-23")
+        XCTAssertEqual(payload["p_protein_percentage"], .null)
+        XCTAssertEqual(payload["p_carbs_percentage"], .null)
+        XCTAssertEqual(payload["p_fat_percentage"], .null)
+    }
+
+    /// Write keys take a `p_` prefix; the two custom objects don't, and
+    /// `goal_date` isn't a write key at all (the write names it
+    /// `p_start_date`). An unprefixed field returns 200 and writes nothing.
+    func testWritePayloadPrefixesEverythingExceptTheDocumentedExceptions() {
+        let payload = NutritionGoals(raw: sampleGoalsRaw()).writePayload(startingOn: "2026-09-23")
+
+        XCTAssertEqual(payload["p_start_date"], .string("2026-09-23"))
+        XCTAssertNil(payload["goal_date"], "goal_date is read-only; the write uses p_start_date")
+        XCTAssertNil(payload["p_goal_date"])
+        XCTAssertNotNil(payload["custom_nutrients"], "must NOT be prefixed")
+        XCTAssertNil(payload["p_custom_nutrients"])
+    }
+
+    /// If the load failed there's no row to mutate, so saving would write a
+    /// five-field row over the user's real one. Save fails closed.
+    @MainActor
+    func testSaveIsRefusedWhenTheCurrentGoalsCouldNotBeRead() async {
+        let stub = StubAPIClient()
+        stub.goalsLoadError = APIError.server(message: "nope", code: nil)
+        let viewModel = GoalsViewModel(date: Date(), apiClient: stub)
+
+        await viewModel.load()
+        XCTAssertTrue(viewModel.loadFailed)
+        XCTAssertFalse(viewModel.canSave)
+
+        viewModel.text[GoalsViewModel.Field.calories.rawValue] = "1800"
+        let saved = await viewModel.save()
+
+        XCTAssertFalse(saved)
+        XCTAssertTrue(stub.savedGoals.isEmpty, "nothing may be written without a loaded row")
+    }
+
+    @MainActor
+    func testCaloriesAreRequiredAndZeroedGoalsPrefillAsEmpty() async {
+        let stub = StubAPIClient()
+        stub.goalsToReturn = NutritionGoals(raw: [
+            "calories": .number(0), "protein": .number(0),
+            "carbs": .number(0), "fat": .number(0), "water_goal_ml": .number(0),
+        ])
+        let viewModel = GoalsViewModel(date: Date(), apiClient: stub)
+
+        await viewModel.load()
+        // A zeroed row is how the server says "no goal set" — showing "0"
+        // would invite saving it back as a real goal of zero.
+        XCTAssertEqual(viewModel.text[GoalsViewModel.Field.calories.rawValue], "")
+
+        let saved = await viewModel.save()
+        XCTAssertFalse(saved)
+        XCTAssertNotNil(viewModel.error(for: .calories))
+        XCTAssertTrue(stub.savedGoals.isEmpty)
+    }
+
+    /// The server fills `calorieBalance.goal` with a default of 2000 for an
+    /// account that has never set one, so asking *that* whether a goal exists
+    /// always answered yes and the goal-not-set card could never appear —
+    /// leaving the user's rings measured against a target they never chose.
+    /// The goal row is the only honest source.
+    @MainActor
+    func testNoGoalIsRecognisedEvenThoughTheServerDefaultsTheBalanceTo2000() async {
+        let stub = StubAPIClient()
+        stub.summaryToReturn = DailySummary(
+            calorieBalance: .init(eaten: 0, burned: 240, remaining: 2240, goal: 2000),
+            waterIntake: 0, waterIntakeBreakdown: nil,
+            goals: .init(calories: 0, protein: 0, carbs: 0, fat: 0, waterGoalMl: 0),
+            foodEntries: [], exerciseSessions: []
+        )
+        let viewModel = TodayViewModel(apiClient: stub)
+
+        await viewModel.load()
+
+        XCTAssertFalse(viewModel.hasGoalSet)
+    }
+
+    @MainActor
+    func testAGoalThatIsActuallySetReadsAsSet() async {
+        let stub = StubAPIClient()
+        stub.summaryToReturn = DailySummary(
+            calorieBalance: .init(eaten: 0, burned: 0, remaining: 1800, goal: 1800),
+            waterIntake: 0, waterIntakeBreakdown: nil,
+            goals: .init(calories: 1800, protein: nil, carbs: nil, fat: nil, waterGoalMl: nil),
+            foodEntries: [], exerciseSessions: []
+        )
+        let viewModel = TodayViewModel(apiClient: stub)
+
+        await viewModel.load()
+
+        XCTAssertTrue(viewModel.hasGoalSet)
     }
 
     // MARK: - Password reset
