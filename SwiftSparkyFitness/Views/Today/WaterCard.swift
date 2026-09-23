@@ -36,7 +36,9 @@ struct WaterCard: View {
     private var perDrinkLabel: String {
         let drinks = viewModel.wholeDrinks
         let noun = drinks == 1 ? "glass" : "glasses"
-        return "\(drinks) \(noun) · \(Int(viewModel.mlPerDrink)) ml each"
+        // The second half names the container when one is set, so a tap that
+        // logs 750 ml doesn't still claim to be worth 250.
+        return "\(drinks) \(noun) · \(viewModel.drinkLabel)"
     }
 
     var body: some View {

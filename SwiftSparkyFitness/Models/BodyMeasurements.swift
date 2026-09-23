@@ -32,6 +32,40 @@ struct BodyMeasurements: Decodable, Equatable, Sendable {
     let hips: Double?
     let height: Double?
     let bodyFatPercentage: Double?
+    /// Smart-scale columns. Typed by hand here rather than device-provided,
+    /// which is why the server's bounds matter — see BodyField.minimum.
+    let muscleMassKg: Double?
+    let boneMassKg: Double?
+    let bodyWaterPercentage: Double?
+    let bmr: Double?
+
+    /// The smart-scale fields default to nil so adding them didn't churn
+    /// every existing construction of this type.
+    init(
+        id: String?,
+        weight: Double?,
+        neck: Double?,
+        waist: Double?,
+        hips: Double?,
+        height: Double?,
+        bodyFatPercentage: Double?,
+        muscleMassKg: Double? = nil,
+        boneMassKg: Double? = nil,
+        bodyWaterPercentage: Double? = nil,
+        bmr: Double? = nil
+    ) {
+        self.id = id
+        self.weight = weight
+        self.neck = neck
+        self.waist = waist
+        self.hips = hips
+        self.height = height
+        self.bodyFatPercentage = bodyFatPercentage
+        self.muscleMassKg = muscleMassKg
+        self.boneMassKg = boneMassKg
+        self.bodyWaterPercentage = bodyWaterPercentage
+        self.bmr = bmr
+    }
 
     static let none = BodyMeasurements(id: nil, weight: nil, neck: nil, waist: nil, hips: nil, height: nil, bodyFatPercentage: nil)
 
@@ -45,6 +79,10 @@ struct BodyMeasurements: Decodable, Equatable, Sendable {
         case .hips: return hips
         case .height: return height
         case .bodyFatPercentage: return bodyFatPercentage
+        case .muscleMassKg: return muscleMassKg
+        case .boneMassKg: return boneMassKg
+        case .bodyWaterPercentage: return bodyWaterPercentage
+        case .bmr: return bmr
         }
     }
 
@@ -60,13 +98,14 @@ struct BodyMeasurements: Decodable, Equatable, Sendable {
 /// The manually-enterable columns of `check_in_measurements`, confirmed
 /// against the live zod schema + table definition.
 ///
-/// Deliberately excluded, with reasons:
-///   * `steps` — activity data (it feeds stepCalories), not a body
-///     measurement; it belongs to a health-sync path, not a typed form.
-///   * `muscle_mass_kg`, `bone_mass_kg`, `body_water_percentage`, `bmr` —
-///     smart-scale columns. The server bounds them (and `bmr` has a
-///     600–6000 CHECK constraint) because they arrive from a device, not a
-///     keyboard.
+/// The smart-scale columns are included: they arrive from a device, but the
+/// device shows you the numbers and there was otherwise no way to record
+/// them. The server bounds them, and `bmr`'s lower bound of 600 is the one
+/// constraint here that isn't "greater than zero" — see `minimum`.
+///
+/// Still excluded: `steps` — activity data feeding stepCalories, not a body
+/// measurement. The Health integration reports active energy instead, which
+/// the server prefers over step-derived calories anyway.
 enum BodyField: String, CaseIterable, Identifiable {
     case weight
     case waist
@@ -74,6 +113,10 @@ enum BodyField: String, CaseIterable, Identifiable {
     case neck
     case height
     case bodyFatPercentage
+    case muscleMassKg
+    case boneMassKg
+    case bodyWaterPercentage
+    case bmr
 
     var id: String { rawValue }
 
@@ -84,6 +127,9 @@ enum BodyField: String, CaseIterable, Identifiable {
     var apiKey: String {
         switch self {
         case .bodyFatPercentage: return "body_fat_percentage"
+        case .muscleMassKg: return "muscle_mass_kg"
+        case .boneMassKg: return "bone_mass_kg"
+        case .bodyWaterPercentage: return "body_water_percentage"
         default: return rawValue
         }
     }
@@ -96,16 +142,21 @@ enum BodyField: String, CaseIterable, Identifiable {
         case .neck: return "Neck"
         case .height: return "Height"
         case .bodyFatPercentage: return "Body fat"
+        case .muscleMassKg: return "Muscle mass"
+        case .boneMassKg: return "Bone mass"
+        case .bodyWaterPercentage: return "Body water"
+        case .bmr: return "BMR"
         }
     }
 
     /// Which server-side unit preference labels this field.
-    enum UnitKind { case weight, length, percent }
+    enum UnitKind { case weight, length, percent, energy }
 
     var unitKind: UnitKind {
         switch self {
-        case .weight: return .weight
-        case .bodyFatPercentage: return .percent
+        case .weight, .muscleMassKg, .boneMassKg: return .weight
+        case .bodyFatPercentage, .bodyWaterPercentage: return .percent
+        case .bmr: return .energy
         default: return .length
         }
     }
@@ -115,6 +166,7 @@ enum BodyField: String, CaseIterable, Identifiable {
         case .weight: return preferences.weightUnitLabel
         case .length: return preferences.measurementUnitLabel
         case .percent: return "%"
+        case .energy: return "kcal"
         }
     }
 
@@ -123,14 +175,26 @@ enum BodyField: String, CaseIterable, Identifiable {
     /// are wide sanity limits that only catch a slipped decimal point.
     var maximum: Double {
         switch self {
-        case .bodyFatPercentage: return 100
+        case .bodyFatPercentage, .bodyWaterPercentage: return 100
         case .weight: return 1000
+        case .bmr: return 6000
         default: return 300
         }
     }
 
+    /// Lower bound the server enforces. Everything here is simply "more than
+    /// zero" except BMR, whose column carries a 600–6000 constraint — without
+    /// modelling it, typing 550 returns a raw 400 ("Too small: expected
+    /// number to be >=600") instead of a field error.
+    var minimum: Double {
+        self == .bmr ? 600 : 0
+    }
+
     static let weightSheetFields: [BodyField] = [.weight]
-    static let measurementSheetFields: [BodyField] = [.waist, .hips, .neck, .height, .bodyFatPercentage]
+    static let measurementSheetFields: [BodyField] = [
+        .waist, .hips, .neck, .height, .bodyFatPercentage,
+        .muscleMassKg, .boneMassKg, .bodyWaterPercentage, .bmr,
+    ]
 }
 
 /// A check-in write. Only the fields in `values` are sent, which is what

@@ -213,6 +213,24 @@ The gap the review flagged — food search, custom food and exercise logging wer
 - **Found a latent bug: the app ignored `is_visible` entirely.** The endpoint returns hidden categories too (it has to, so the management screen can list them), so every other consumer has to filter — and none did. Now `visibleOnly` gates what the logging sheets offer, while `entriesByMeal` keeps a hidden meal on any day that already has food in it. Hiding a meal stops it being *offered*; it must not bury what's already logged there, which would read as data loss.
 - Verified live end-to-end: hiding Snacks removed it from Log Food's meal chips, adding "Supper" placed it after dinner at sort order 50, and deleting it removed it from both the screen and the server.
 
+**Module 4 completion pass** — water containers and the smart-scale columns.
+
+*Water containers (Settings › Water)*
+
+- **Setting a primary container changes nothing on its own.** This is the fact the whole feature turns on, and it's counter-intuitive: with a 750 ml primary configured, a bare `change_drinks: 1` still logged the server's generic 250 ml. The server never consults the primary — the app has to send `container_id` explicitly. Without that, a management screen would let someone configure a container that silently did nothing.
+- Add / set-primary / delete, via `GET|POST /api/water-containers` and `PUT /:id/set-primary`. The first container added is made primary automatically, for the same reason: otherwise adding one appears to do nothing until you also tap "Use this".
+- **Only an addition names a container.** The decrement deletes the most recent `source = 'manual'` rows whatever they were logged from, so passing an id there would imply a precision it doesn't have.
+- **Volume is stored in the user's unit and converted server-side** — a 24 oz container logged 709.764 ml, i.e. 29.5735 ml/oz. `WaterContainer.mlPerServing` mirrors those factors *only* to label a tap before making it; the stored number is always the server's. The app creates containers in ml and displays existing ones in whatever unit they carry.
+- The card's subtitle and the "+" button's VoiceOver label both name the container now ("1 glass · Probe Bottle · 750 ml", "Add a 750 millilitre drink") rather than claiming a figure that would be wrong.
+- **The throwaway-container trick is still there for custom amounts** and still correct — the backend has no raw-millilitre write. It's now the fallback it was always meant to become, rather than the only path.
+- Verified live: a tap logged exactly 750 ml with `container_id: 3` and `container_name: "Probe Bottle"` on the ledger row, and the undo removed that row.
+
+*Smart-scale measurements*
+
+- `muscle_mass_kg`, `bone_mass_kg`, `body_water_percentage` and `bmr` are on the Measurements sheet now. They arrive from a device, but the device *shows* you the numbers and there was no way to record them.
+- **BMR is the one field whose lower bound isn't "more than zero"** — the column carries a 600–6000 constraint, so `BodyField.minimum` exists for it alone. Without that, typing 550 returned a raw `400 "Too small: expected number to be >=600"` instead of a field error. Percentages are bounded at 100 server-side.
+- `steps` stays deliberately unwritten — see the Apple Health notes for why active energy is the better signal.
+
 ## Not yet built
 
 - **Progress tab** — placeholder only.

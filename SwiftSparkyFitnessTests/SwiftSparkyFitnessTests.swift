@@ -127,6 +127,12 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         var updatedMealTypes: [(id: String, input: MealTypeInput)] = []
         var deletedMealTypeIds: [String] = []
         var mealTypeWriteError: Error?
+        var containersToReturn: [WaterContainer] = []
+        var createdContainers: [WaterContainerInput] = []
+        var setPrimaryIds: [Int] = []
+        var deletedContainerIds: [Int] = []
+        var containerWriteError: Error?
+        var adjustCalls: [(drinks: Int, containerId: Int?)] = []
 
         func signIn(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
         func signUp(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
@@ -211,6 +217,24 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         }
         func waterTotals(date: Date) async throws -> WaterTotals { totalsToReturn }
         func waterLog(date: Date) async throws -> [WaterLogEntry] { logToReturn }
+        func waterContainers() async throws -> [WaterContainer] { containersToReturn }
+        func createWaterContainer(_ input: WaterContainerInput) async throws -> WaterContainer {
+            createdContainers.append(input)
+            if let containerWriteError { throw containerWriteError }
+            return WaterContainer(id: 99, name: input.name, volume: input.volume, unit: input.unit, isPrimary: false, servingsPerContainer: input.servingsPerContainer)
+        }
+        func setPrimaryWaterContainer(id: Int) async throws {
+            setPrimaryIds.append(id)
+            if let containerWriteError { throw containerWriteError }
+        }
+        func deleteWaterContainer(id: Int) async throws {
+            deletedContainerIds.append(id)
+            if let containerWriteError { throw containerWriteError }
+        }
+        func adjustWater(date: Date, drinks: Int, containerId: Int?) async throws -> WaterTotals {
+            adjustCalls.append((drinks, containerId))
+            return try await adjustWater(date: date, drinks: drinks)
+        }
         func adjustWater(date: Date, drinks: Int) async throws -> WaterTotals {
             drinkAdjustments.append(drinks)
             return totalsToReturn
@@ -659,6 +683,151 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertEqual(decoded.weightUnitLabel, "kg")
         XCTAssertEqual(decoded.measurementUnitLabel, "cm")
         XCTAssertEqual(decoded.waterUnitLabel, "ml")
+    }
+
+    // MARK: - Water containers
+
+    private func container(_ id: Int, _ name: String, _ volume: Double, unit: String = "ml", primary: Bool = false, servings: Int = 1) -> WaterContainer {
+        WaterContainer(id: id, name: name, volume: volume, unit: unit, isPrimary: primary, servingsPerContainer: servings)
+    }
+
+    /// The server converts on write — a 24 oz container logged 709.764 ml —
+    /// and this mirrors it only so the card can say what a tap is worth
+    /// *before* making it.
+    func testContainerVolumeConvertsToMillilitresPerServing() {
+        XCTAssertEqual(container(1, "Bottle", 750).mlPerServing, 750)
+        XCTAssertEqual(container(2, "Oz", 24, unit: "oz").mlPerServing, 24 * 29.5735, accuracy: 0.001)
+        XCTAssertEqual(container(3, "Litre", 1.5, unit: "liter").mlPerServing, 1500)
+        // Split into servings: a 1 L flask drunk as 4 cups is 250 ml a tap.
+        XCTAssertEqual(container(4, "Flask", 1000, servings: 4).mlPerServing, 250)
+        // An unrecognised unit is treated as millilitres rather than guessed.
+        XCTAssertEqual(container(5, "Odd", 300, unit: "cups").mlPerServing, 300)
+    }
+
+    /// The whole reason containers are modelled: the server does NOT consult
+    /// the primary container on its own. Verified live — with a 750 ml
+    /// primary set, a bare `change_drinks: 1` still logged 250 ml. If the app
+    /// stops sending the id, setting a container silently does nothing.
+    @MainActor
+    func testQuickAddSendsThePrimaryContainerId() async {
+        let stub = StubAPIClient()
+        stub.containersToReturn = [container(7, "Bottle", 750, primary: true)]
+        stub.totalsToReturn = WaterTotals(waterMl: 750, manualMl: 750, ledgerMl: 750, foodMl: 0)
+        let viewModel = WaterViewModel(date: Date(), apiClient: stub)
+
+        await viewModel.loadPrimaryContainer()
+        XCTAssertEqual(viewModel.mlPerDrink, 750)
+        await viewModel.adjust(drinks: 1)
+
+        XCTAssertEqual(stub.adjustCalls.first?.containerId, 7)
+    }
+
+    /// The decrement deletes the most recent manual rows whatever container
+    /// they came from, so naming one would imply a precision it hasn't got.
+    @MainActor
+    func testUndoDoesNotNameAContainer() async {
+        let stub = StubAPIClient()
+        stub.containersToReturn = [container(7, "Bottle", 750, primary: true)]
+        let viewModel = WaterViewModel(date: Date(), apiClient: stub)
+        await viewModel.loadPrimaryContainer()
+
+        await viewModel.adjust(drinks: -1)
+
+        XCTAssertEqual(stub.adjustCalls.first?.drinks, -1)
+        XCTAssertNil(stub.adjustCalls.first?.containerId)
+    }
+
+    @MainActor
+    func testWithoutAContainerATapIsStillTheServersDefault() async {
+        let stub = StubAPIClient()
+        let viewModel = WaterViewModel(date: Date(), apiClient: stub)
+
+        await viewModel.loadPrimaryContainer()
+
+        XCTAssertNil(viewModel.primaryContainer)
+        XCTAssertEqual(viewModel.mlPerDrink, Water.defaultMlPerDrink)
+        XCTAssertEqual(viewModel.drinkLabel, "250 ml each")
+    }
+
+    /// Adding the first container makes it primary — otherwise it would
+    /// appear to do nothing until the user also tapped "Use this".
+    @MainActor
+    func testTheFirstContainerAddedBecomesPrimary() async {
+        let stub = StubAPIClient()
+        let viewModel = WaterContainersViewModel(apiClient: stub)
+        await viewModel.load()
+
+        viewModel.newName = "Water bottle"
+        viewModel.newVolume = "750"
+        await viewModel.create()
+        XCTAssertEqual(stub.setPrimaryIds, [99])
+
+        // A later one doesn't steal primary from whatever is already set.
+        stub.containersToReturn = [container(1, "Existing", 500, primary: true)]
+        await viewModel.load()
+        viewModel.newName = "Mug"
+        viewModel.newVolume = "300"
+        await viewModel.create()
+        XCTAssertEqual(stub.setPrimaryIds, [99], "unchanged")
+    }
+
+    @MainActor
+    func testContainerVolumeMustBeARealNumberInRange() async {
+        let viewModel = WaterContainersViewModel(apiClient: StubAPIClient())
+        viewModel.newName = "Bottle"
+
+        viewModel.newVolume = ""
+        XCTAssertFalse(viewModel.canCreate)
+        viewModel.newVolume = "abc"
+        XCTAssertFalse(viewModel.canCreate)
+        viewModel.newVolume = "0"
+        XCTAssertFalse(viewModel.canCreate)
+        viewModel.newVolume = "99999"
+        XCTAssertFalse(viewModel.canCreate, "server bounds volume at 9999.999")
+        viewModel.newVolume = "750"
+        XCTAssertTrue(viewModel.canCreate)
+        // Comma decimals are typed on plenty of keyboards.
+        viewModel.newVolume = "1,5"
+        XCTAssertEqual(viewModel.parsedVolume, 1.5)
+    }
+
+    // MARK: - Smart-scale measurements
+
+    /// BMR is the one field whose lower bound isn't just "more than zero":
+    /// the column carries a 600–6000 constraint, and without modelling it the
+    /// server answers a raw 400 for an otherwise plausible number.
+    @MainActor
+    func testBMRIsRejectedBelowTheServersLowerBound() async {
+        let stub = StubAPIClient()
+        let viewModel = LogBodyViewModel(
+            kind: .measurements, date: Date(), minDate: Date(), maxDate: Date(), apiClient: stub
+        )
+
+        viewModel.text[BodyField.bmr.rawValue] = "550"
+        var saved = await viewModel.save()
+        XCTAssertFalse(saved)
+        XCTAssertEqual(viewModel.error(for: .bmr), "Must be at least 600")
+        XCTAssertTrue(stub.upsertedBodyInputs.isEmpty)
+
+        viewModel.text[BodyField.bmr.rawValue] = "1650"
+        saved = await viewModel.save()
+        XCTAssertTrue(saved)
+        XCTAssertEqual(stub.upsertedBodyInputs.first?.values[.bmr] ?? nil, 1650)
+    }
+
+    func testSmartScaleFieldsCarryTheServersColumnNamesAndUnits() {
+        XCTAssertEqual(BodyField.muscleMassKg.apiKey, "muscle_mass_kg")
+        XCTAssertEqual(BodyField.boneMassKg.apiKey, "bone_mass_kg")
+        XCTAssertEqual(BodyField.bodyWaterPercentage.apiKey, "body_water_percentage")
+        XCTAssertEqual(BodyField.bmr.apiKey, "bmr")
+
+        let prefs = UserPreferences.serverDefaults
+        XCTAssertEqual(BodyField.muscleMassKg.unitLabel(prefs), prefs.weightUnitLabel)
+        XCTAssertEqual(BodyField.bodyWaterPercentage.unitLabel(prefs), "%")
+        XCTAssertEqual(BodyField.bmr.unitLabel(prefs), "kcal")
+        // Percentages are bounded at 100 server-side.
+        XCTAssertEqual(BodyField.bodyWaterPercentage.maximum, 100)
+        XCTAssertEqual(BodyField.bmr.maximum, 6000)
     }
 
     // MARK: - Meal categories

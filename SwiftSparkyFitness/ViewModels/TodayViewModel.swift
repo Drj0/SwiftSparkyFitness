@@ -145,6 +145,9 @@ final class TodayViewModel: ObservableObject {
             let loadedSummary = try await summaryTask
             summary = loadedSummary
             water.adopt(summary: loadedSummary)
+            // Quick-add has to name the primary container explicitly, so the
+            // screen needs to know which one that is before the first tap.
+            await water.loadPrimaryContainer()
             mealTypes = try await mealTypesTask
             bodyMeasurements = try await bodyTask
             preferences = try await preferencesTask

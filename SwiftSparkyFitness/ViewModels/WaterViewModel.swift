@@ -41,7 +41,28 @@ final class WaterViewModel: ObservableObject {
         self.apiClient = apiClient
     }
 
-    var mlPerDrink: Double { Water.defaultMlPerDrink }
+    /// The user's primary container, once loaded. Quick-add sends its id,
+    /// because the server does **not** consult the primary on its own — with
+    /// a 750 ml primary configured, a bare `change_drinks: 1` still logs the
+    /// generic 250 ml (verified live). Without this the management screen
+    /// would let someone set a container that then changed nothing.
+    @Published private(set) var primaryContainer: WaterContainer?
+
+    var mlPerDrink: Double {
+        primaryContainer?.mlPerServing ?? Water.defaultMlPerDrink
+    }
+
+    /// What one tap adds, for the card's subtitle.
+    var drinkLabel: String {
+        guard let primaryContainer else { return "\(Int(Water.defaultMlPerDrink)) ml each" }
+        return "\(primaryContainer.name) · \(Int(mlPerDrink.rounded())) ml"
+    }
+
+    /// Best-effort: a failure here just leaves quick-add on the server's
+    /// default, which is what it did before containers existed.
+    func loadPrimaryContainer() async {
+        primaryContainer = (try? await apiClient.waterContainers())?.first { $0.isPrimary }
+    }
 
     /// Whole drinks logged, for the "3 glasses · 250 ml each" label. Derived
     /// from the total rather than the entry count so a custom 300 ml amount
@@ -131,7 +152,14 @@ final class WaterViewModel: ObservableObject {
             let batch = unsentDrinks
             unsentDrinks = 0
             do {
-                apply(try await apiClient.adjustWater(date: date, drinks: batch))
+                // Only an *addition* names a container. The decrement deletes
+                // the most recent manual rows whatever they were logged from,
+                // so naming one there would imply a precision it doesn't have.
+                apply(try await apiClient.adjustWater(
+                    date: date,
+                    drinks: batch,
+                    containerId: batch > 0 ? primaryContainer?.id : nil
+                ))
                 // The server's total predates anything tapped while the call
                 // was in flight, so those taps have to go back on top of it
                 // or the number would visibly fall back mid-flurry.

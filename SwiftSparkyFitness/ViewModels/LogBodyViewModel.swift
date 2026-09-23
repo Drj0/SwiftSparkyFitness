@@ -155,6 +155,10 @@ final class LogBodyViewModel: ObservableObject {
             }
             if parsed <= 0 {
                 errors[field.rawValue] = "Must be more than 0"
+            } else if parsed < field.minimum {
+                // Only BMR has a real lower bound (600). Without this the
+                // server answers a raw 400 for an otherwise sensible number.
+                errors[field.rawValue] = "Must be at least \(Int(field.minimum))"
             } else if parsed > field.maximum {
                 errors[field.rawValue] = "That looks too high"
             }

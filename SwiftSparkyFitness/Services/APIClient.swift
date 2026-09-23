@@ -54,8 +54,15 @@ protocol APIClientProtocol {
     func waterTotals(date: Date) async throws -> WaterTotals
     func waterLog(date: Date) async throws -> [WaterLogEntry]
     func adjustWater(date: Date, drinks: Int) async throws -> WaterTotals
+    /// Passing a container is what makes a tap worth that container's volume
+    /// — the server does not consult the primary on its own.
+    func adjustWater(date: Date, drinks: Int, containerId: Int?) async throws -> WaterTotals
     func logWaterAmount(date: Date, milliliters: Double) async throws -> WaterTotals
     func deleteWaterLogEntry(id: String) async throws
+    func waterContainers() async throws -> [WaterContainer]
+    func createWaterContainer(_ input: WaterContainerInput) async throws -> WaterContainer
+    func setPrimaryWaterContainer(id: Int) async throws
+    func deleteWaterContainer(id: Int) async throws
     func syncActiveEnergy(kilocalories: Double, date: Date) async throws
     func bodyMeasurements(date: Date) async throws -> BodyMeasurements
     func upsertBodyMeasurements(_ input: BodyMeasurementsInput) async throws -> BodyMeasurements
@@ -643,7 +650,7 @@ final class APIClient: APIClientProtocol {
         try await adjustWater(date: date, drinks: drinks, containerId: nil)
     }
 
-    private func adjustWater(date: Date, drinks: Int, containerId: Int?) async throws -> WaterTotals {
+    func adjustWater(date: Date, drinks: Int, containerId: Int?) async throws -> WaterTotals {
         let clamped = max(-Water.maxDrinksPerRequest, min(Water.maxDrinksPerRequest, drinks))
         return try await send(
             waterPath(""), method: "POST",
@@ -695,7 +702,23 @@ final class APIClient: APIClientProtocol {
         }
     }
 
-    private func deleteWaterContainer(id: Int) async throws {
+    // MARK: - Water containers
+
+    func waterContainers() async throws -> [WaterContainer] {
+        try await send("api/water-containers")
+    }
+
+    func createWaterContainer(_ input: WaterContainerInput) async throws -> WaterContainer {
+        try await send("api/water-containers", method: "POST", body: input)
+    }
+
+    /// Exactly one container is primary; the server clears the flag on the
+    /// others rather than requiring two calls.
+    func setPrimaryWaterContainer(id: Int) async throws {
+        _ = try await (send("api/water-containers/\(id)/set-primary", method: "PUT") as MessageResponse)
+    }
+
+    func deleteWaterContainer(id: Int) async throws {
         _ = try await (send("api/water-containers/\(id)", method: "DELETE") as MessageResponse)
     }
 

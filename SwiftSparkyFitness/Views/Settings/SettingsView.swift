@@ -21,6 +21,7 @@ struct SettingsView: View {
     @State private var savedNotice = false
     @State private var isPresentingGoals = false
     @State private var isPresentingMeals = false
+    @State private var isPresentingWater = false
     @AppStorage(HealthSync.defaultsKey) private var healthSyncEnabled = false
     @FocusState private var isFieldFocused: Bool
 
@@ -108,6 +109,21 @@ struct SettingsView: View {
                     .buttonStyle(.pressable)
                 }
 
+                section("WATER") {
+                    Text("The container the “+” logs from. Without one it adds the server's default 250 ml.")
+                        .appBody(13)
+                        .foregroundStyle(AppColor.secondaryText)
+
+                    Button { isPresentingWater = true } label: {
+                        Text("Edit containers")
+                            .appBody(15, weight: .semibold)
+                            .foregroundStyle(AppColor.accent)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.pressable)
+                }
+
                 section("APPLE HEALTH") {
                     Text("Counts the active energy Health has recorded towards your daily burn. Your logged workouts still count — the server takes whichever total is higher, so nothing is counted twice.")
                         .appBody(13)
@@ -169,6 +185,11 @@ struct SettingsView: View {
         }
         .sheet(isPresented: $isPresentingMeals) {
             MealCategoriesView()
+                .presentationDetents([.large])
+                .presentationDragIndicator(.visible)
+        }
+        .sheet(isPresented: $isPresentingWater) {
+            WaterContainersView()
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
