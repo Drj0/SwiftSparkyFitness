@@ -265,6 +265,39 @@ final class SwiftSparkyFitnessTests: XCTestCase {
             return bodyToReturn
         }
         func deleteBodyMeasurements(id: String) async throws { deletedBodyIds.append(id) }
+
+        // MARK: Module 6 — range reads
+
+        var foodEntryRowsToReturn: [FoodEntryRangeRow] = []
+        var goalsRangeToReturn: [String: NutritionGoals] = [:]
+        var bodyRangeToReturn: [DatedBodyMeasurements] = []
+        var exerciseSummaryToReturn = ExerciseRangeSummary(
+            totals: .init(totalDurationMinutes: 0, totalCaloriesBurned: 0, workoutCount: 0),
+            intervalsBreakdown: []
+        )
+        var rangeRequests: [(start: Date, end: Date)] = []
+        var foodRangeError: Error?
+        var goalsRangeError: Error?
+        var bodyRangeError: Error?
+        var exerciseRangeError: Error?
+
+        func foodEntries(from start: Date, to end: Date) async throws -> [FoodEntryRangeRow] {
+            rangeRequests.append((start, end))
+            if let foodRangeError { throw foodRangeError }
+            return foodEntryRowsToReturn
+        }
+        func goals(from start: Date, to end: Date) async throws -> [String: NutritionGoals] {
+            if let goalsRangeError { throw goalsRangeError }
+            return goalsRangeToReturn
+        }
+        func bodyMeasurements(from start: Date, to end: Date) async throws -> [DatedBodyMeasurements] {
+            if let bodyRangeError { throw bodyRangeError }
+            return bodyRangeToReturn
+        }
+        func exerciseSummary(from start: Date, to end: Date) async throws -> ExerciseRangeSummary {
+            if let exerciseRangeError { throw exerciseRangeError }
+            return exerciseSummaryToReturn
+        }
     }
 
     @MainActor
@@ -1966,5 +1999,374 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertEqual(AppFont.sansFace(for: .semibold), AppFont.Face.sansSemiBold)
         XCTAssertEqual(AppFont.sansFace(for: .bold), AppFont.Face.sansBold)
         XCTAssertEqual(AppFont.sansFace(for: .black), AppFont.Face.sansBold)
+    }
+
+    // MARK: - Module 6: Progress
+
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.calendar = Calendar(identifier: .gregorian)
+        return formatter
+    }()
+
+    private func day(_ string: String) -> Date {
+        Calendar.current.startOfDay(for: Self.dayFormatter.date(from: string)!)
+    }
+
+    @MainActor
+    private func progressViewModel(
+        createdDaysAgo: Int = 400,
+        _ configure: (SwiftSparkyFitnessTests.StubAPIClient) -> Void = { _ in }
+    ) -> (ProgressViewModel, StubAPIClient) {
+        let stub = StubAPIClient()
+        configure(stub)
+        let createdAt = Calendar.current.date(byAdding: .day, value: -createdDaysAgo, to: Date())!
+        let user = SessionUser(email: "demo@sparkyfitness.com", name: "Demo", createdAt: createdAt)
+        return (ProgressViewModel(user: user, apiClient: stub), stub)
+    }
+
+    /// The whole reason Progress sums raw entries instead of reading the
+    /// server's trend endpoints: the aggregates re-scale nutrition the app
+    /// already wrote pre-scaled. Summing the rows must reproduce exactly
+    /// what Today and Diary show for the same day.
+    func testNutritionIsSummedPerDayFromRawEntries() {
+        let rows = [
+            FoodEntryRangeRow(entryDate: "2026-09-20", calories: 300, protein: 22.5, carbs: 30, fat: 12),
+            FoodEntryRangeRow(entryDate: "2026-09-20", calories: 200, protein: 15, carbs: 20, fat: 8),
+            FoodEntryRangeRow(entryDate: "2026-09-22", calories: 500, protein: 37.5, carbs: 50, fat: 20),
+        ]
+        let daily = ProgressViewModel.daily(from: rows, formatter: Self.dayFormatter)
+
+        XCTAssertEqual(daily.count, 2)
+        XCTAssertEqual(daily[0].date, day("2026-09-20"))
+        XCTAssertEqual(daily[0].calories, 500)
+        XCTAssertEqual(daily[0].protein, 37.5)
+        XCTAssertEqual(daily[1].calories, 500)
+    }
+
+    /// A missing macro is a zero, not a dropped entry — the same rule
+    /// `macroTotals` applies on the day screens.
+    func testNutritionTreatsMissingMacrosAsZeroWithoutDroppingTheEntry() {
+        let rows = [
+            FoodEntryRangeRow(entryDate: "2026-09-20", calories: 120, protein: nil, carbs: nil, fat: nil)
+        ]
+        let daily = ProgressViewModel.daily(from: rows, formatter: Self.dayFormatter)
+
+        XCTAssertEqual(daily.count, 1)
+        XCTAssertEqual(daily[0].calories, 120)
+        XCTAssertEqual(daily[0].protein, 0)
+    }
+
+    /// A day with nothing logged must NOT become a zero point. Zeroing it
+    /// would claim the user ate nothing and would drag the average down.
+    func testUnloggedDaysAreAbsentFromNutritionRatherThanZero() {
+        let rows = [
+            FoodEntryRangeRow(entryDate: "2026-09-20", calories: 400, protein: 0, carbs: 0, fat: 0),
+            FoodEntryRangeRow(entryDate: "2026-09-23", calories: 800, protein: 0, carbs: 0, fat: 0),
+        ]
+        let daily = ProgressViewModel.daily(from: rows, formatter: Self.dayFormatter)
+
+        XCTAssertEqual(daily.map(\.date), [day("2026-09-20"), day("2026-09-23")])
+        XCTAssertFalse(daily.contains { $0.calories == 0 })
+    }
+
+    /// Exercise is the opposite case: a day with no workout really did burn
+    /// nothing, so the sparse buckets the server returns get padded.
+    func testExerciseDaysAreZeroFilledAcrossTheRange() {
+        let summary = ExerciseRangeSummary(
+            totals: .init(totalDurationMinutes: 70, totalCaloriesBurned: 460, workoutCount: 2),
+            intervalsBreakdown: [
+                .init(startDate: "2026-09-22", durationMinutes: 70, caloriesBurned: 460, workoutCount: 2)
+            ]
+        )
+        let window = ProgressDateRange(start: day("2026-09-20"), end: day("2026-09-23"))
+        let daily = ProgressViewModel.daily(from: summary, over: window, formatter: Self.dayFormatter)
+
+        XCTAssertEqual(daily.count, 4)
+        XCTAssertEqual(daily.map(\.caloriesBurned), [0, 0, 460, 0])
+        XCTAssertEqual(daily.first(where: { $0.date == day("2026-09-22") })?.workoutCount, 2)
+    }
+
+    /// Goals are date-versioned, so the goal series must step with them
+    /// rather than reporting one constant across the range.
+    @MainActor
+    func testGoalLineStepsWhenTheGoalChangesMidRange() async {
+        let (viewModel, _) = progressViewModel { stub in
+            stub.goalsRangeToReturn = [
+                "2026-09-08": NutritionGoals(raw: ["calories": .number(2000)]),
+                "2026-09-09": NutritionGoals(raw: ["calories": .number(2000)]),
+                "2026-09-10": NutritionGoals(raw: ["calories": .number(2400)]),
+            ]
+        }
+        viewModel.customStart = day("2026-09-08")
+        viewModel.customEnd = day("2026-09-10")
+        viewModel.preset = .custom
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.goal(on: day("2026-09-09"), for: .calories), 2000)
+        XCTAssertEqual(viewModel.goal(on: day("2026-09-10"), for: .calories), 2400)
+        XCTAssertTrue(viewModel.hasGoalLine)
+    }
+
+    /// A goal that never changes must be reported as constant, so the chart
+    /// draws a rule instead of a LineMark — a one-day range has a single goal
+    /// point, and a one-point line renders as nothing at all while the legend
+    /// still claims a goal. Found in the simulator.
+    @MainActor
+    func testConstantGoalIsDetectedSoAOneDayRangeStillDrawsIt() async {
+        let today = Self.dayFormatter.string(from: Date())
+        let (viewModel, _) = progressViewModel(createdDaysAgo: 0) { stub in
+            stub.goalsRangeToReturn = [today: NutritionGoals(raw: ["calories": .number(2250)])]
+        }
+        viewModel.preset = .week
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.range.dayCount, 1, "account created today floors the range to one day")
+        XCTAssertEqual(viewModel.goalLine.count, 1)
+        XCTAssertEqual(viewModel.constantGoal, 2250)
+    }
+
+    /// When the goal genuinely steps mid-range it is NOT constant, so the
+    /// stepped line is drawn rather than a flat rule.
+    @MainActor
+    func testSteppedGoalIsNotReportedAsConstant() async {
+        let (viewModel, _) = progressViewModel { stub in
+            stub.goalsRangeToReturn = [
+                "2026-09-08": NutritionGoals(raw: ["calories": .number(2000)]),
+                "2026-09-09": NutritionGoals(raw: ["calories": .number(2400)]),
+            ]
+        }
+        viewModel.customStart = day("2026-09-08")
+        viewModel.customEnd = day("2026-09-09")
+        viewModel.preset = .custom
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.goalLine.count, 2)
+        XCTAssertNil(viewModel.constantGoal)
+    }
+
+    /// An account that never set a goal gets a zeroed row back rather than a
+    /// 404, and drawing a goal line off that would invent a target the user
+    /// never chose — the same trap that made Today's goal-not-set card
+    /// unreachable in Module 2.
+    @MainActor
+    func testNoGoalLineWhenTheGoalRowIsUnset() async {
+        let (viewModel, _) = progressViewModel { stub in
+            stub.goalsRangeToReturn = [
+                "2026-09-10": NutritionGoals(raw: ["calories": .number(0)])
+            ]
+        }
+        await viewModel.load()
+
+        XCTAssertNil(viewModel.goal(on: day("2026-09-10"), for: .calories))
+        XCTAssertFalse(viewModel.hasGoalLine)
+    }
+
+    /// The endpoints behind this screen have no server-side range cap, so a
+    /// silly custom span has to be clamped here or the request never returns.
+    @MainActor
+    func testCustomRangeIsClampedToTheMaximumSpan() {
+        let (viewModel, _) = progressViewModel(createdDaysAgo: 5000)
+        viewModel.customStart = Calendar.current.date(byAdding: .year, value: -8, to: Date())!
+        viewModel.customEnd = Date()
+        viewModel.preset = .custom
+
+        XCTAssertEqual(viewModel.range.dayCount, ProgressDateRange.maximumDays)
+        XCTAssertTrue(viewModel.didClampCustomRange)
+    }
+
+    /// Nothing may be charted from before the account existed.
+    @MainActor
+    func testRangeNeverStartsBeforeTheAccountWasCreated() {
+        let (viewModel, _) = progressViewModel(createdDaysAgo: 3)
+        viewModel.preset = .threeMonths
+
+        XCTAssertEqual(viewModel.range.start, viewModel.minDate)
+        XCTAssertLessThanOrEqual(viewModel.range.end, viewModel.maxDate)
+    }
+
+    /// One failing read must not empty the whole tab — the other three cards
+    /// still have data, and the banner names what's missing.
+    @MainActor
+    func testOneFailedReadStillLeavesTheOtherCardsPopulated() async {
+        struct Boom: Error {}
+        let (viewModel, _) = progressViewModel { stub in
+            stub.bodyRangeError = Boom()
+            stub.foodEntryRowsToReturn = [
+                FoodEntryRangeRow(entryDate: Self.dayFormatter.string(from: Date()), calories: 400, protein: 10, carbs: 20, fat: 5)
+            ]
+        }
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.nutrition.count, 1)
+        XCTAssertTrue(viewModel.bodyRows.isEmpty)
+        XCTAssertNotNil(viewModel.errorMessage)
+        XCTAssertTrue(viewModel.errorMessage?.contains("weight") == true)
+    }
+
+    /// The average is over logged days only; including unlogged days would
+    /// report an intake nobody ate.
+    @MainActor
+    func testAverageIgnoresDaysWithNothingLogged() async {
+        let today = Self.dayFormatter.string(from: Date())
+        let yesterday = Self.dayFormatter.string(
+            from: Calendar.current.date(byAdding: .day, value: -1, to: Date())!
+        )
+        let (viewModel, _) = progressViewModel { stub in
+            stub.foodEntryRowsToReturn = [
+                FoodEntryRangeRow(entryDate: today, calories: 1000, protein: 0, carbs: 0, fat: 0),
+                FoodEntryRangeRow(entryDate: yesterday, calories: 2000, protein: 0, carbs: 0, fat: 0),
+            ]
+        }
+        viewModel.preset = .month
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.loggedDayCount, 2)
+        XCTAssertEqual(viewModel.average(for: .calories), 1500)
+    }
+
+    /// A single weigh-in is not a trend; reporting a change of zero for it
+    /// would imply the weight held steady.
+    @MainActor
+    func testChangeNeedsTwoReadings() async {
+        let (viewModel, _) = progressViewModel { stub in
+            stub.bodyRangeToReturn = [
+                DatedBodyMeasurements(
+                    entryDate: "2026-09-20",
+                    measurements: BodyMeasurements(
+                        id: "a", weight: 80, neck: nil, waist: nil, hips: nil,
+                        height: nil, bodyFatPercentage: nil
+                    )
+                )
+            ]
+        }
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.weightPoints.count, 1)
+        XCTAssertNil(viewModel.change(for: .weight))
+    }
+
+    @MainActor
+    func testChangeIsLastMinusFirstAcrossTheRange() async {
+        let (viewModel, _) = progressViewModel { stub in
+            stub.bodyRangeToReturn = [
+                // The server returns these newest-first; the view model sorts.
+                DatedBodyMeasurements(
+                    entryDate: "2026-09-23",
+                    measurements: BodyMeasurements(id: "b", weight: 79.3, neck: nil, waist: nil, hips: nil, height: nil, bodyFatPercentage: nil)
+                ),
+                DatedBodyMeasurements(
+                    entryDate: "2026-09-20",
+                    measurements: BodyMeasurements(id: "a", weight: 82.0, neck: nil, waist: nil, hips: nil, height: nil, bodyFatPercentage: nil)
+                ),
+            ]
+        }
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.weightPoints.map(\.value), [82.0, 79.3])
+        XCTAssertEqual(viewModel.change(for: .weight)!, -2.7, accuracy: 0.0001)
+    }
+
+    /// The measurements card only offers fields that have something to draw,
+    /// and weight is excluded because it has its own card.
+    @MainActor
+    func testPopulatedBodyFieldsExcludeWeightAndEmptyColumns() async {
+        let (viewModel, _) = progressViewModel { stub in
+            stub.bodyRangeToReturn = [
+                DatedBodyMeasurements(
+                    entryDate: "2026-09-20",
+                    measurements: BodyMeasurements(
+                        id: "a", weight: 80, neck: nil, waist: 86.5, hips: nil,
+                        height: nil, bodyFatPercentage: nil
+                    )
+                )
+            ]
+        }
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.populatedBodyFields, [.waist])
+    }
+
+    /// The raw range row decodes through the shared snake_case decoder, and
+    /// its numbers arrive as JSON numbers rather than strings — verified on
+    /// the wire against the running server.
+    func testFoodEntryRangeRowDecodesSnakeCaseNumbers() throws {
+        let json = Data("""
+        [{"entry_date":"2026-09-23","calories":500,"protein":37.5,"carbs":50,"fat":20,"food_name":"Probe"}]
+        """.utf8)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let rows = try decoder.decode([FoodEntryRangeRow].self, from: json)
+
+        XCTAssertEqual(rows.count, 1)
+        XCTAssertEqual(rows[0].entryDate, "2026-09-23")
+        XCTAssertEqual(rows[0].calories, 500)
+        XCTAssertEqual(rows[0].protein, 37.5)
+    }
+
+    /// The check-in range row carries entry_date alongside the measurement
+    /// columns, and both halves have to come out of the one payload.
+    func testDatedBodyMeasurementsDecodesDateAndColumnsTogether() throws {
+        let json = Data("""
+        [{"id":"x","entry_date":"2026-09-23","weight":79.3,"waist":86.5,"neck":null,
+          "hips":null,"height":null,"body_fat_percentage":null,"steps":9004}]
+        """.utf8)
+        let decoder = JSONDecoder()
+        decoder.keyDecodingStrategy = .convertFromSnakeCase
+        let rows = try decoder.decode([DatedBodyMeasurements].self, from: json)
+
+        XCTAssertEqual(rows[0].entryDate, "2026-09-23")
+        XCTAssertEqual(rows[0].measurements.weight, 79.3)
+        XCTAssertEqual(rows[0].measurements.waist, 86.5)
+        XCTAssertNil(rows[0].measurements.hips)
+    }
+
+    /// `interval=day` buckets come back camelCase from a service that has
+    /// already coerced every number.
+    func testExerciseRangeSummaryDecodes() throws {
+        let json = Data("""
+        {"totals":{"totalDurationMinutes":70,"totalCaloriesBurned":460,"workoutCount":2},
+         "intervalsBreakdown":[{"label":"2026-09-22","startDate":"2026-09-22","endDate":"2026-09-22",
+          "durationMinutes":70,"caloriesBurned":460,"workoutCount":2}]}
+        """.utf8)
+        let summary = try JSONDecoder().decode(ExerciseRangeSummary.self, from: json)
+
+        XCTAssertEqual(summary.totals.workoutCount, 2)
+        XCTAssertEqual(summary.intervalsBreakdown.first?.caloriesBurned, 460)
+    }
+
+    /// The goals range read is a dictionary keyed by date, so it has to go
+    /// through the verbatim decoder — `convertFromSnakeCase` would rewrite
+    /// both the date keys and the goal column names.
+    func testGoalsRangeDecodesAsADateKeyedDictionary() throws {
+        let json = Data("""
+        {"2026-09-09":{"calories":2000,"protein":150,"water_goal_ml":null},
+         "2026-09-10":{"calories":2400,"protein":180,"water_goal_ml":2500}}
+        """.utf8)
+        let goals = try JSONDecoder().decode([String: NutritionGoals].self, from: json)
+
+        XCTAssertEqual(goals["2026-09-09"]?.calories, 2000)
+        XCTAssertEqual(goals["2026-09-10"]?.calories, 2400)
+        XCTAssertEqual(goals["2026-09-10"]?.waterGoalMl, 2500)
+        XCTAssertNil(goals["2026-09-09"]?.waterGoalMl)
+    }
+
+    @MainActor
+    func testRangePresetDayCounts() {
+        let (viewModel, _) = progressViewModel()
+        for (preset, expected) in [(ProgressRangePreset.week, 7), (.month, 30), (.threeMonths, 90)] {
+            viewModel.preset = preset
+            XCTAssertEqual(viewModel.range.dayCount, expected, "\(preset.label)")
+        }
+    }
+
+    /// `allDays` drives the exercise zero-fill and the x-axis, so an
+    /// off-by-one here would silently drop or duplicate a day.
+    func testAllDaysIsInclusiveOfBothEnds() {
+        let window = ProgressDateRange(start: day("2026-09-20"), end: day("2026-09-23"))
+        XCTAssertEqual(window.allDays.count, 4)
+        XCTAssertEqual(window.allDays.first, day("2026-09-20"))
+        XCTAssertEqual(window.allDays.last, day("2026-09-23"))
     }
 }

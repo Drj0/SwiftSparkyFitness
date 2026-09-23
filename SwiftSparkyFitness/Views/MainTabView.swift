@@ -45,7 +45,7 @@ struct MainTabView: View {
             }
 
             Tab(value: AppTab.progress) {
-                PlaceholderView(title: "Progress")
+                ProgressTabView(user: user)
             } label: {
                 Label(AppTab.progress.label, systemImage: AppTab.progress.symbol)
             }

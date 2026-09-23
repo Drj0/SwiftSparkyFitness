@@ -82,6 +82,10 @@ protocol APIClientProtocol {
     func bodyMeasurements(date: Date) async throws -> BodyMeasurements
     func upsertBodyMeasurements(_ input: BodyMeasurementsInput) async throws -> BodyMeasurements
     func deleteBodyMeasurements(id: String) async throws
+    func foodEntries(from start: Date, to end: Date) async throws -> [FoodEntryRangeRow]
+    func goals(from start: Date, to end: Date) async throws -> [String: NutritionGoals]
+    func bodyMeasurements(from start: Date, to end: Date) async throws -> [DatedBodyMeasurements]
+    func exerciseSummary(from start: Date, to end: Date) async throws -> ExerciseRangeSummary
 }
 
 struct CustomFoodInput {
@@ -845,5 +849,79 @@ final class APIClient: APIClientProtocol {
 
     func deleteBodyMeasurements(id: String) async throws {
         _ = try await (send("api/measurements/check-in/\(id)", method: "DELETE") as MessageResponse)
+    }
+
+    // MARK: - Progress (Module 6) — range reads
+
+    /// The raw food-entry rows for a date range, exactly as stored.
+    ///
+    /// Deliberately NOT one of the `/api/reports` trend endpoints: those
+    /// re-apply `quantity / serving_size` to nutrition the app already wrote
+    /// pre-scaled, so a 250 g entry of a 100 g / 200 kcal food aggregates to
+    /// 1250 kcal where the stored truth — and what Today and Diary render —
+    /// is 500. This endpoint is a plain per-row select with no aggregation,
+    /// so summing these gives the same number the day screens show.
+    /// See the header of `ProgressTrends.swift` for the full measurement.
+    func foodEntries(from start: Date, to end: Date) async throws -> [FoodEntryRangeRow] {
+        let path = "api/food-entries/range/\(dateFormatter.string(from: start))/\(dateFormatter.string(from: end))"
+        return try await send(path)
+    }
+
+    /// Goals for every day in a range, keyed by `yyyy-MM-dd`.
+    ///
+    /// Goals are date-versioned: `user_goals` carries one row per effective
+    /// date and the server carries the most recent one forward, so the goal
+    /// line on a chart steps rather than running flat. Verified live — a goal
+    /// written effective 2026-09-10 reads back as the new value on 09-10
+    /// onwards and the previous one before it.
+    ///
+    /// `verbatimKeys` for the same reason `goals(date:)` uses it: the payload
+    /// is a dictionary whose keys are dates and whose values are the
+    /// type-erased goal bag, and `convertFromSnakeCase` would rewrite both.
+    ///
+    /// `adjust` is deliberately not sent, matching `goals(date:)`. With it the
+    /// server recomputes the calorie target per day from adaptive TDEE and
+    /// weekly goal plans — neither of which this app exposes — so passing it
+    /// would draw a goal line the Goals screen can't explain.
+    func goals(from start: Date, to end: Date) async throws -> [String: NutritionGoals] {
+        try await send(
+            "api/goals/for-date",
+            query: [
+                URLQueryItem(name: "date", value: dateFormatter.string(from: start)),
+                URLQueryItem(name: "end_date", value: dateFormatter.string(from: end)),
+            ],
+            verbatimKeys: true
+        )
+    }
+
+    /// Every check-in row in a range, newest first (the server's order).
+    ///
+    /// At most one row per calendar day — `check_in_measurements` is
+    /// UNIQUE (user_id, entry_date) and the write is an upsert — so this
+    /// needs no per-day deduplication.
+    func bodyMeasurements(from start: Date, to end: Date) async throws -> [DatedBodyMeasurements] {
+        let path = "api/measurements/check-in-measurements-range/"
+            + "\(dateFormatter.string(from: start))/\(dateFormatter.string(from: end))"
+        return try await send(path)
+    }
+
+    /// Per-day exercise totals for a range.
+    ///
+    /// `interval=day` buckets `intervalsBreakdown` by calendar day. Days with
+    /// no exercise are omitted rather than zeroed, so the caller pads.
+    ///
+    /// Not `/api/exercise-stats/query`: without a category or distance filter
+    /// that endpoint quietly restricts itself to cardio-looking entries and
+    /// drops everything else from a 200 response — verified live, a logged
+    /// "Bench Press" was missing from `/query` while `/summary` counted it.
+    func exerciseSummary(from start: Date, to end: Date) async throws -> ExerciseRangeSummary {
+        try await send(
+            "api/exercise-stats/summary",
+            query: [
+                URLQueryItem(name: "startDate", value: dateFormatter.string(from: start)),
+                URLQueryItem(name: "endDate", value: dateFormatter.string(from: end)),
+                URLQueryItem(name: "interval", value: "day"),
+            ]
+        )
     }
 }
