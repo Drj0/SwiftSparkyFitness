@@ -53,10 +53,10 @@ struct SettingsView: View {
 
                 // ───────────────────────────────────────────────────────
                 // Grouped by what an item is to the user, not by the module
-                // that added it. Three modules each appended a section here
-                // and nobody had stepped back; the result was eight one-line
-                // groups in arrival order. See PROGRESS.md for where new
-                // items belong.
+                // that added it, and each group is a list of rows rather
+                // than a stack of paragraphs: a row names the thing and
+                // opens it, and the explaining happens inside. See
+                // PROGRESS.md for where new items belong.
                 // ───────────────────────────────────────────────────────
 
                 // First, because in local mode it is the most consequential
@@ -81,79 +81,37 @@ struct SettingsView: View {
                     // Today's goal-not-set card is the other way in, but it
                     // disappears the moment a goal exists — without this, a
                     // goal could be set once and never changed again.
-                    Text("Daily calorie, macro and water targets. These drive the rings on Today.")
-                        .appBody(13)
-                        .foregroundStyle(AppColor.secondaryText)
-
-                    Button { isPresentingGoals = true } label: {
-                        Text("Edit daily goals")
-                            .appBody(15, weight: .semibold)
-                            .foregroundStyle(AppColor.accent)
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.pressable)
-
-                    Text("How weights, measurements and water are labelled.")
-                        .appBody(13)
-                        .foregroundStyle(AppColor.secondaryText)
-                        .padding(.top, 8)
-
-                    Button { isPresentingUnits = true } label: {
-                        Text("Edit units")
-                            .appBody(15, weight: .semibold)
-                            .foregroundStyle(AppColor.accent)
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.pressable)
+                    linkRow("Daily goals", "Calories, macros and water") { isPresentingGoals = true }
+                    rowDivider
+                    linkRow("Units", "How weights and water are labelled") { isPresentingUnits = true }
                 }
 
                 // Both of these shape what logging a thing does.
                 section("LOGGING") {
-                    Text("The meals food is logged into. Add your own, or hide any you don't use.")
-                        .appBody(13)
-                        .foregroundStyle(AppColor.secondaryText)
-
-                    Button { isPresentingMeals = true } label: {
-                        Text("Edit meals")
-                            .appBody(15, weight: .semibold)
-                            .foregroundStyle(AppColor.accent)
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.pressable)
-
-                    Text("The container the “+” logs from. Without one it adds \(isLocal ? "the standard" : "the server's default") 250 ml.")
-                        .appBody(13)
-                        .foregroundStyle(AppColor.secondaryText)
-                        .padding(.top, 8)
-
-                    Button { isPresentingWater = true } label: {
-                        Text("Edit containers")
-                            .appBody(15, weight: .semibold)
-                            .foregroundStyle(AppColor.accent)
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.pressable)
+                    linkRow("Meals", "The meals food is logged into") { isPresentingMeals = true }
+                    rowDivider
+                    linkRow("Water containers", "What one tap of “+” logs") { isPresentingWater = true }
                 }
 
                 // Its own section rather than folded into LOGGING: this one
                 // is a connection to another app with its own permission
                 // state, not a preference about this one.
+                //
+                // Deliberately just the switch and one line. The paragraph
+                // that used to sit here explained the max(Health, logged)
+                // rule in full, which is a thing to know *if* you turn this
+                // on — not a wall to read before deciding to.
                 section("APPLE HEALTH") {
-                    // Who does the taking differs by mode; that the rule is
-                    // the same in both is the point worth stating.
-                    Text("Counts the active energy Health has recorded towards your daily burn. Your logged workouts still count — whichever total is higher wins, so nothing is counted twice.")
-                        .appBody(13)
-                        .foregroundStyle(AppColor.secondaryText)
-
                     if healthAvailable {
                         Toggle(isOn: $healthSyncEnabled) {
-                            Text("Use Apple Health")
-                                .appBody(15, weight: .semibold)
-                                .foregroundStyle(AppColor.ink)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text("Sync Apple Health")
+                                    .appBody(15, weight: .semibold)
+                                    .foregroundStyle(AppColor.ink)
+                                Text("Counts active energy towards your daily burn.")
+                                    .appBody(12)
+                                    .foregroundStyle(AppColor.placeholder)
+                            }
                         }
                         .tint(AppColor.accent)
                         .frame(minHeight: 44)
@@ -162,10 +120,12 @@ struct SettingsView: View {
                             Task { await connectHealth() }
                         }
 
-                        // Health won't report whether a read was granted, so
-                        // this can't say "connected" — only that we asked.
+                        // Only once it's on, because only then can it be
+                        // wrong in this particular way. Health won't report
+                        // whether a read was granted, so this can't say
+                        // "connected" — only that we asked.
                         if healthSyncEnabled {
-                            Text("If your burn doesn't change, check SwiftSparkyFitness is allowed to read Active Energy in Health › Sharing › Apps.")
+                            Text("Logged workouts still count — whichever total is higher wins. If your burn doesn't change, check SwiftSparkyFitness is allowed to read Active Energy in Health › Sharing › Apps.")
                                 .appBody(12)
                                 .foregroundStyle(AppColor.placeholder)
                         }
@@ -265,17 +225,16 @@ struct SettingsView: View {
     /// weaker: it accepted any string `URL(string:)` would parse, host or not.
     private var serverSection: some View {
         section("YOUR DATA") {
-            Text("SwiftSparkyFitness talks to a SparkyFitness server you run yourself.")
-                .appBody(13)
-                .foregroundStyle(AppColor.secondaryText)
-
             // Read so that saving in the sheet re-renders this row. The value
             // shown is still ServerConfig's, since a SERVER_URL in the
             // environment outranks whatever is stored.
             let _ = serverURL
-            Text(effective)
-                .appBody(14, weight: .semibold)
-                .foregroundStyle(AppColor.ink)
+
+            // The field itself lives in ServerAddressSheet, which the offline
+            // screen also presents. Two copies meant two validation paths,
+            // and this was the weaker: it accepted any string URL(string:)
+            // would parse, host or not.
+            linkRow("Server", effective) { isPresentingServer = true }
 
             if ServerConfig.isUnconfigured {
                 Text("No server set yet — using the placeholder, so nothing will load.")
@@ -283,23 +242,8 @@ struct SettingsView: View {
                     .foregroundStyle(AppColor.destructive)
             }
 
-            Button { isPresentingServer = true } label: {
-                Text("Edit server address")
-                    .appBody(15, weight: .semibold)
-                    .foregroundStyle(AppColor.accent)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.pressable)
-
-            Button { switchMode(to: .local) } label: {
-                Text("Use this device only instead")
-                    .appBody(15, weight: .semibold)
-                    .foregroundStyle(AppColor.accent)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.pressable)
+            rowDivider
+            actionRow("Use this device only instead") { switchMode(to: .local) }
         }
     }
 
@@ -315,11 +259,11 @@ struct SettingsView: View {
                 .appBody(13)
                 .foregroundStyle(AppColor.secondaryText)
 
-            // The warning is conditional now, and that is the point of
-            // Module 11: with iCloud syncing this is no longer a single
-            // copy, and saying otherwise would be untrue. When syncing
-            // isn't happening the original warning stands unchanged,
-            // because then it is still exactly true.
+            // The warning is conditional, and that is the point of Module
+            // 11: with iCloud syncing this is no longer a single copy, and
+            // saying otherwise would be untrue. When syncing isn't
+            // happening the original warning stands unchanged, because
+            // then it is still exactly true.
             if sync.state.backsUpTheDiary {
                 Text("Backed up to iCloud, and shared with your other devices signed into the same account.")
                     .appBody(12)
@@ -330,20 +274,11 @@ struct SettingsView: View {
                     .foregroundStyle(AppColor.destructive)
             }
 
+            rowDivider
             iCloudStatus
+            rowDivider
 
-            // Switching is allowed and deliberately non-destructive: the local
-            // rows stay on disk and come back if the user returns. Syncing the
-            // two together is a separate piece of work that doesn't exist yet,
-            // so the copy promises separation, not merging.
-            Button { switchMode(to: .server) } label: {
-                Text("Connect to a server instead")
-                    .appBody(15, weight: .semibold)
-                    .foregroundStyle(AppColor.accent)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.pressable)
+            actionRow("Connect to a server instead") { switchMode(to: .server) }
 
             Text("Your on-device data stays here and isn't sent to the server. It reappears if you switch back.")
                 .appBody(12)
@@ -451,6 +386,66 @@ struct SettingsView: View {
         .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
     }
 
+    /// A row that opens something. The chevron is the promise that there
+    /// is more behind it, which is what lets the subtitle stay to one line
+    /// — the explaining belongs on the screen it opens, not in front of it.
+    private func linkRow(
+        _ title: String,
+        _ subtitle: String? = nil,
+        action: @escaping () -> Void
+    ) -> some View {
+        Button(action: action) {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(title)
+                        .appBody(15, weight: .semibold)
+                        .foregroundStyle(AppColor.ink)
+                    if let subtitle {
+                        Text(subtitle)
+                            .appBody(12)
+                            .foregroundStyle(AppColor.placeholder)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AppColor.placeholder)
+                    // Decoration: the Button already announces itself, and
+                    // VoiceOver saying "chevron right" after every row is
+                    // noise.
+                    .accessibilityHidden(true)
+            }
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable)
+        // Title and subtitle read as one thing rather than two stops.
+        .accessibilityElement(children: .combine)
+    }
+
+    /// A row that does something here rather than opening a screen, so it
+    /// has no chevron — the difference is worth keeping visible.
+    private func actionRow(_ title: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Text(title)
+                .appBody(15, weight: .semibold)
+                .foregroundStyle(AppColor.accent)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable)
+    }
+
+    /// Separates rows inside one section, so a group of them reads as a
+    /// list rather than as a run-on stack.
+    private var rowDivider: some View {
+        Rectangle()
+            .fill(AppColor.hairline)
+            .frame(height: 1)
+            .accessibilityHidden(true)
+    }
+
     private func row(_ label: String, _ value: String) -> some View {
         HStack {
             Text(label).appBody(14).foregroundStyle(AppColor.secondaryText)
@@ -460,4 +455,16 @@ struct SettingsView: View {
         .frame(minHeight: 28)
         .accessibilityElement(children: .combine)
     }
+}
+
+// Local mode, which is the arrangement with the most in it: the iCloud row
+// and the wipe only exist here.
+#Preview("Settings — local mode") {
+    SettingsView(user: SessionUser(email: "On this device", name: nil, createdAt: Date()))
+        .onAppear { UserDefaults.standard.set(AppMode.local.rawValue, forKey: AppMode.defaultsKey) }
+}
+
+#Preview("Settings — server mode") {
+    SettingsView(user: SessionUser(email: "you@example.com", name: nil, createdAt: Date()))
+        .onAppear { UserDefaults.standard.set(AppMode.server.rawValue, forKey: AppMode.defaultsKey) }
 }
