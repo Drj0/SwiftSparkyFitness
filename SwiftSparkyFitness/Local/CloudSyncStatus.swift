@@ -295,6 +295,31 @@ extension CloudSyncStatus.State {
         }
     }
 
+    /// The consequence, in red, under the sync row — or nil when the diary
+    /// genuinely has a second copy.
+    ///
+    /// Split out of `backsUpTheDiary` because "hasn't synced yet" and "isn't
+    /// going to sync" are not the same warning, and Settings was printing the
+    /// second one for both: `.waiting` showed "Nothing is backed up. Deleting
+    /// the app … deletes your diary with it." directly above that state's own
+    /// "Your diary will back up to iCloud and appear on your other devices."
+    /// A screen that contradicts itself in two adjacent lines teaches the
+    /// reader to believe neither, which costs the warning its only job.
+    ///
+    /// `.waiting` still warns, and that's the point of the split rather than
+    /// an argument against it: nothing has confirmed a copy exists, so the
+    /// line says what is true *now* without denying what is about to happen.
+    var dataLossWarning: String? {
+        switch self {
+        case .synced, .syncing:
+            return nil
+        case .waiting:
+            return "Until that first sync finishes, this iPhone holds the only copy of your diary."
+        case .failed, .unavailable:
+            return "Nothing is backed up. Deleting the app, or erasing this iPhone, deletes your diary with it."
+        }
+    }
+
     /// Whether to colour the state as something wrong rather than something
     /// in progress.
     var isProblem: Bool {

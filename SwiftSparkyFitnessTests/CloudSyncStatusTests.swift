@@ -213,4 +213,38 @@ final class CloudSyncStatusTests: XCTestCase {
         XCTAssertFalse(CloudSyncStatus.State.waiting.backsUpTheDiary)
         XCTAssertFalse(CloudSyncStatus.State.waiting.detail().contains("Last backed up"))
     }
+
+    /// Settings prints `detail()` and `dataLossWarning` one under the other,
+    /// so the pair has to be readable as a single sentence. `.waiting` is the
+    /// case that broke: it promises a backup is coming, and the blunt warning
+    /// sat above it saying nothing was backed up.
+    func testWaitingWarnsWithoutContradictingItsOwnDetail() {
+        let state = CloudSyncStatus.State.waiting
+
+        let warning = try? XCTUnwrap(state.dataLossWarning)
+        XCTAssertNotNil(warning, "an unconfirmed copy still has to warn")
+        XCTAssertFalse(
+            state.dataLossWarning?.contains("Nothing is backed up") ?? true,
+            "contradicts detail(), which says the diary will back up"
+        )
+    }
+
+    func testStatesThatReachedICloudDoNotWarn() {
+        XCTAssertNil(CloudSyncStatus.State.synced(Date()).dataLossWarning)
+        XCTAssertNil(CloudSyncStatus.State.syncing.dataLossWarning)
+    }
+
+    func testStatesThatCannotSyncGetTheBluntWarning() {
+        for state: CloudSyncStatus.State in [
+            .unavailable(.notSignedIn),
+            .unavailable(.notConfigured),
+            .failed("whatever the framework said")
+        ] {
+            XCTAssertEqual(
+                state.dataLossWarning,
+                "Nothing is backed up. Deleting the app, or erasing this iPhone, deletes your diary with it.",
+                "\(state) can't produce a second copy, so the warning shouldn't be softened"
+            )
+        }
+    }
 }
