@@ -96,14 +96,14 @@ struct WaterCard: View {
                 HStack(spacing: 8) {
                     stepperButton(
                         systemName: "minus", label: "Remove the last drink",
-                        isEnabled: viewModel.canUndo, prominent: false
+                        isEnabled: viewModel.canUndo
                     ) {
                         Haptics.light()
                         Task { await viewModel.adjust(drinks: -1) }
                     }
                     stepperButton(
                         systemName: "plus", label: addLabel,
-                        isEnabled: true, prominent: true
+                        isEnabled: true
                     ) {
                         // Fired here rather than after the write lands: a tap
                         // has to be felt in the same frame it happens, and the
@@ -155,33 +155,28 @@ struct WaterCard: View {
         .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.85), value: viewModel.overshoot)
     }
 
-    /// `prominent` (the "+") is a solid filled circle, matching the design;
-    /// `"-"` stays the quieter outline treatment it always had — it's an
-    /// undo, not the card's primary action.
+    /// Both buttons share one look now — matched size, filled blue circle,
+    /// white icon — rather than "+" being prominent and "-" a quieter
+    /// outline; the two are equally common taps (undo a drink, add one), so
+    /// nothing here should read as more or less important than the other.
     private func stepperButton(
-        systemName: String, label: String, isEnabled: Bool, prominent: Bool, action: @escaping () -> Void
+        systemName: String, label: String, isEnabled: Bool, action: @escaping () -> Void
     ) -> some View {
-        // Both shrunk, and closer together in size than the first pass —
-        // "+" was the odd one out at 44pt next to "-"'s 34pt. Still two
-        // sizes, not one: "+" stays the card's primary action, "-" the
-        // quieter undo, same distinction the fill-vs-outline styling
-        // already carries.
-        let diameter: CGFloat = prominent ? 36 : 30
-        // Both circles are under the 44pt minimum touch target now that
-        // they've shrunk, so both grow a tappable area back out to it —
-        // horizontally this time: side by side, it's the row's *width*
-        // that would otherwise overshoot the declared 8pt spacing, not its
-        // height. Handing that growth back is the same trick this app
-        // already uses everywhere a visual size and a touch target differ
-        // (see the meal-row "+" in TodayView).
+        // Smaller than the old "+" (36pt), which was the larger of the two.
+        let diameter: CGFloat = 32
+        // Under the 44pt minimum touch target, so pad a tappable area back
+        // out to it — horizontally, since side by side it's the row's
+        // *width* that would otherwise overshoot the declared 8pt spacing,
+        // not its height. Same trick this app uses everywhere a visual size
+        // and a touch target differ (see the meal-row "+" in TodayView).
         let growth = (44 - diameter) / 2
         return Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: prominent ? 14 : 12, weight: .bold))
-                .foregroundStyle(prominent ? .white : (isEnabled ? AppColor.water : AppColor.placeholder))
+                .font(.system(size: 13, weight: .bold))
+                .foregroundStyle(.white)
                 .frame(width: diameter, height: diameter)
-                .background(prominent ? AppColor.water : AppColor.surface, in: Circle())
-                .opacity(prominent ? (isEnabled ? 1 : 0.5) : 1)
+                .background(AppColor.water, in: Circle())
+                .opacity(isEnabled ? 1 : 0.5)
                 // The visual circle is the design's size; the tappable area
                 // is padded out to the 44pt minimum a thumb needs.
                 .frame(minWidth: 44, minHeight: 44)

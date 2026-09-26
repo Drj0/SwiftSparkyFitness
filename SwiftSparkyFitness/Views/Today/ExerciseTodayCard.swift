@@ -50,10 +50,6 @@ struct ExerciseTodayCard: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-            // Same hit-area trick BodyCard's weight button uses: the padding
-            // grows the tappable area to the card's own edges without
-            // changing the laid-out spacing.
-            .padding(.vertical, 4)
             .contentShape(Rectangle())
         }
         .buttonStyle(.pressable)

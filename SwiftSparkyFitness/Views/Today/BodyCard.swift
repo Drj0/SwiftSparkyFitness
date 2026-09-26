@@ -47,7 +47,7 @@ struct BodyCard: View {
 
     var body: some View {
         Button(action: onLogWeight) {
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 10) {
                 // Capped like the ring's centre label elsewhere in this app
                 // (fixed geometry that shouldn't spill) — an uncapped
                 // "⚖️ Weight" wraps mid-word ("Weig" / "ht") once this card
