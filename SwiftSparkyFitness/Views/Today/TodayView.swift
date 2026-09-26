@@ -110,9 +110,16 @@ struct TodayView: View {
         .sheet(isPresented: $viewModel.isPresentingLogMeasurements) {
             bodySheet(kind: .measurements)
         }
+        // Wrapped in a stack because the goals screen is a page now: it wears
+        // a navigation title and puts Save in the toolbar, which needs a bar
+        // to put them in. It still opens as a sheet from here — from a card
+        // that says "no goal yet", setting one is an interruption, not a trip
+        // to Settings — and the view adds its own Cancel when presented.
         .sheet(isPresented: $viewModel.isPresentingSetGoals) {
-            SetGoalsView {
-                Task { await viewModel.load() }
+            NavigationStack {
+                SetGoalsView(showsCancel: true) {
+                    Task { await viewModel.load() }
+                }
             }
             .presentationDetents([.large])
             .presentationDragIndicator(.visible)

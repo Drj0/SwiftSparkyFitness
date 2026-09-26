@@ -52,6 +52,11 @@ final class GoalsViewModel: ObservableObject {
         }
     }
 
+    /// Where the calorie picker starts when there is no goal yet. Not a
+    /// recommendation — the app knows nothing about the person — just the
+    /// figure the rest of the app already falls back to.
+    static let suggestedCalories: Double = 2000
+
     let date: Date
 
     @Published var text: [String: String] = [:]
@@ -96,6 +101,68 @@ final class GoalsViewModel: ObservableObject {
         )
     }
 
+    // MARK: - Numeric access
+    //
+    // The form drives pickers and steppers rather than keyboards now, but the
+    // stored value is still the string `text` dictionary: `validate()` and
+    // `save()` read it, and rewriting them to hold Doubles would mean
+    // rewriting the one path in this app that can silently wipe a goal row.
+    // These convert at the edge instead.
+
+    /// The field's current value, or `fallback` when it isn't set. A goal of
+    /// zero and an unset goal are the same thing here (see `display`).
+    func value(for field: Field, fallback: Double = 0) -> Double {
+        guard let parsed = parsed(field), parsed > 0 else { return fallback }
+        return parsed
+    }
+
+    func setValue(_ value: Double, for field: Field) {
+        // Zero means "no target" for every one of these, and writing "0" back
+        // would save a real goal of zero instead of clearing it.
+        text[field.rawValue] = value > 0 ? String(Int(value.rounded())) : ""
+        fieldErrors[field.rawValue] = nil
+    }
+
+    func numericBinding(for field: Field, fallback: Double = 0) -> Binding<Double> {
+        Binding(
+            get: { self.value(for: field, fallback: fallback) },
+            set: { self.setValue($0, for: field) }
+        )
+    }
+
+    /// kcal per gram, for turning a macro target into its share of the day.
+    static func caloriesPerGram(_ field: Field) -> Double {
+        field == .fat ? 9 : 4
+    }
+
+    /// What the three macro targets add up to, in kcal. Shown live because a
+    /// macro goal that doesn't fit the calorie goal is the mistake this form
+    /// makes easiest to make and hardest to see.
+    var macroCalories: Double {
+        [Field.protein, .carbs, .fat].reduce(0) { total, field in
+            total + value(for: field) * Self.caloriesPerGram(field)
+        }
+    }
+
+    /// Sets all three macros from a percentage split of the calorie goal.
+    /// Percentages are the way people talk about a diet ("40/30/30"); grams
+    /// are what the column stores, so the conversion happens here once.
+    func applySplit(protein: Double, carbs: Double, fat: Double) {
+        let calories = value(for: .calories)
+        guard calories > 0 else { return }
+        setValue(toNearestFive((calories * protein / 100) / 4), for: .protein)
+        setValue(toNearestFive((calories * carbs / 100) / 4), for: .carbs)
+        setValue(toNearestFive((calories * fat / 100) / 9), for: .fat)
+    }
+
+    /// Splits land on the same 5 g grid the steppers move on. Exact division
+    /// gives numbers like 66.67 g of fat, which reads as a measurement rather
+    /// than a target — and rounding *up* from one pushed the total past the
+    /// calorie goal, so applying a preset immediately flagged itself as over.
+    private func toNearestFive(_ value: Double) -> Double {
+        (value / 5).rounded(.down) * 5
+    }
+
     func error(for field: Field) -> String? { fieldErrors[field.rawValue] }
 
     func load() async {
@@ -113,6 +180,17 @@ final class GoalsViewModel: ObservableObject {
                 Field.fat.rawValue: Self.display(goals.fat),
                 Field.water.rawValue: Self.display(goals.waterGoalMl),
             ]
+
+            // A goal nobody has set opens on a number instead of a blank.
+            // This screen is reached from a card that says the goal isn't
+            // set, and the picker that replaced the keyboard has no empty
+            // position to sit at — it would have to show *something* and then
+            // refuse to save it. 2000 is the same figure the rest of the app
+            // already falls back to, and the footer says it's a starting
+            // point rather than a recommendation.
+            if (goals.calories ?? 0) <= 0 {
+                text[Field.calories.rawValue] = String(Int(Self.suggestedCalories))
+            }
         } catch {
             loadFailed = true
             bannerMessage = error.localizedDescription
