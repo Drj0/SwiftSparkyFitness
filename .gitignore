@@ -43,3 +43,11 @@ Carthage/Build/
 
 # ---- Claude Code worktrees --------------------------------------------
 .claude/worktrees/
+
+# ---- Local working notes -----------------------------------------------
+# PROGRESS.md is the running engineering log for this port. Deliberately
+# untracked: it is working notes, not something to publish. Removing it
+# from the index stops it being pushed from here on — note it is still in
+# the repository's existing history on GitHub, which only a history
+# rewrite and a force-push would remove.
+PROGRESS.md
