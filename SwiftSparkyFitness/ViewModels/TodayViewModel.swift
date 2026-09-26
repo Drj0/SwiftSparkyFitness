@@ -44,6 +44,12 @@ final class TodayViewModel: ObservableObject {
     @Published private(set) var preferences: UserPreferences = .serverDefaults
     /// The day's single check-in row (weight + measurements).
     @Published private(set) var bodyMeasurements: BodyMeasurements = .none
+    /// The most recent weight from an earlier day, when today's is nil —
+    /// so BodyCard can show a real number instead of a bare "Log today's →"
+    /// on a day the user simply hasn't weighed in yet. `nil` whenever
+    /// today's own weight exists, so it's unambiguous which figure a
+    /// non-nil `bodyMeasurements.weight` vs. this represents.
+    @Published private(set) var lastLoggedWeight: (value: Double, date: Date)?
     /// Water is its own small view model so Today's card and Diary's water
     /// section share one set of rules.
     let water: WaterViewModel
@@ -182,6 +188,7 @@ final class TodayViewModel: ObservableObject {
             mealTypes = try await mealTypesTask
             bodyMeasurements = try await bodyTask
             preferences = try await preferencesTask
+            await loadLastLoggedWeightIfNeeded()
         } catch {
             errorMessage = error.localizedDescription
             Haptics.error()
@@ -193,8 +200,41 @@ final class TodayViewModel: ObservableObject {
     func reloadBodyMeasurements() async {
         do {
             bodyMeasurements = try await apiClient.bodyMeasurements(date: today)
+            await loadLastLoggedWeightIfNeeded()
         } catch {
             errorMessage = error.localizedDescription
         }
+    }
+
+    private static let dayFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateFormat = "yyyy-MM-dd"
+        formatter.calendar = Calendar(identifier: .gregorian)
+        return formatter
+    }()
+
+    /// Only fetched when today has nothing logged — a day that already has
+    /// its own weight never needs a fallback. A year is generous for "most
+    /// recent weigh-in"; the range endpoint has no server-side cap, so the
+    /// client is what bounds this, same rule Progress already applies to
+    /// its own range reads.
+    private func loadLastLoggedWeightIfNeeded() async {
+        guard bodyMeasurements.weight == nil else {
+            lastLoggedWeight = nil
+            return
+        }
+        guard let start = Calendar.current.date(byAdding: .day, value: -365, to: today) else { return }
+        // Best-effort: this is a nice-to-have fallback display, not
+        // something worth surfacing its own error banner for.
+        guard let rows = try? await apiClient.bodyMeasurements(from: start, to: today) else { return }
+        // Newest first, per the server's own order (confirmed live) — the
+        // first row carrying a weight is the most recent one.
+        for row in rows {
+            guard let weight = row.measurements.weight,
+                  let date = Self.dayFormatter.date(from: row.entryDate) else { continue }
+            lastLoggedWeight = (weight, date)
+            return
+        }
+        lastLoggedWeight = nil
     }
 }

@@ -292,9 +292,9 @@ struct TodayView: View {
         HStack(alignment: .top, spacing: 12) {
             BodyCard(
                 measurements: viewModel.bodyMeasurements,
+                lastLoggedWeight: viewModel.lastLoggedWeight,
                 preferences: viewModel.preferences,
-                onLogWeight: { viewModel.isPresentingLogWeight = true },
-                onLogMeasurements: { viewModel.isPresentingLogMeasurements = true }
+                onLogWeight: { viewModel.isPresentingLogWeight = true }
             )
 
             ExerciseTodayCard(

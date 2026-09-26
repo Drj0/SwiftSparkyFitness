@@ -695,6 +695,76 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertTrue(viewModel.bodyMeasurements.populatedFields.isEmpty)
     }
 
+    // MARK: - Module 12: BodyCard's fallback to the last logged weight
+
+    /// A day with nothing logged yet falls back to the most recent earlier
+    /// weigh-in — verified live that the alternative (a bare "Log today's
+    /// →" every single morning before the day's own entry exists) reads
+    /// worse than showing the real, still-relevant number.
+    @MainActor
+    func testFallsBackToTheMostRecentEarlierWeight() async {
+        let stub = StubAPIClient()
+        stub.bodyToReturn = .none
+        stub.bodyRangeToReturn = [
+            // Newest first, the server's own order — the view model must
+            // not just take the first *populated-weight* row blindly if a
+            // more recent row with no weight sorts before it, so this also
+            // pins that a nil-weight row is skipped rather than winning.
+            DatedBodyMeasurements(
+                entryDate: "2026-09-26",
+                measurements: BodyMeasurements(id: "b", weight: nil, neck: nil, waist: 80, hips: nil, height: nil, bodyFatPercentage: nil)
+            ),
+            DatedBodyMeasurements(
+                entryDate: "2026-09-24",
+                measurements: BodyMeasurements(id: "a", weight: 73.1, neck: nil, waist: nil, hips: nil, height: nil, bodyFatPercentage: nil)
+            ),
+        ]
+        let viewModel = TodayViewModel(apiClient: stub)
+
+        await viewModel.load()
+
+        XCTAssertNil(viewModel.bodyMeasurements.weight, "today itself has nothing logged")
+        let fallback = try? XCTUnwrap(viewModel.lastLoggedWeight)
+        XCTAssertEqual(fallback?.value, 73.1)
+        let expectedDate = Calendar(identifier: .gregorian).date(from: DateComponents(year: 2026, month: 9, day: 24))
+        XCTAssertEqual(fallback.map { Calendar.current.startOfDay(for: $0.date) }, expectedDate.map { Calendar.current.startOfDay(for: $0) })
+    }
+
+    /// The fallback must never shadow a real value — a day that already has
+    /// its own weight has nothing to fall back to.
+    @MainActor
+    func testDoesNotFallBackWhenTodayHasItsOwnWeight() async {
+        let stub = StubAPIClient()
+        stub.bodyToReturn = BodyMeasurements(id: "today", weight: 70, neck: nil, waist: nil, hips: nil, height: nil, bodyFatPercentage: nil)
+        stub.bodyRangeToReturn = [
+            DatedBodyMeasurements(
+                entryDate: "2026-09-20",
+                measurements: BodyMeasurements(id: "old", weight: 73.1, neck: nil, waist: nil, hips: nil, height: nil, bodyFatPercentage: nil)
+            )
+        ]
+        let viewModel = TodayViewModel(apiClient: stub)
+
+        await viewModel.load()
+
+        XCTAssertEqual(viewModel.bodyMeasurements.weight, 70)
+        XCTAssertNil(viewModel.lastLoggedWeight, "today's own weight must win outright, not be annotated with an older one")
+    }
+
+    /// Nothing ever logged, in today's row or in the whole lookback window —
+    /// the card's plain "Log today's →" prompt, not a crash or a stale
+    /// value from a request that came back empty.
+    @MainActor
+    func testNoFallbackWhenNothingHasEverBeenLogged() async {
+        let stub = StubAPIClient()
+        stub.bodyToReturn = .none
+        stub.bodyRangeToReturn = []
+        let viewModel = TodayViewModel(apiClient: stub)
+
+        await viewModel.load()
+
+        XCTAssertNil(viewModel.lastLoggedWeight)
+    }
+
     // MARK: - Module 4: unit labels come from the server
 
     func testUnitLabelsFollowTheServerPreference() {

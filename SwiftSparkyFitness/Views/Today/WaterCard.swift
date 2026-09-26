@@ -87,13 +87,20 @@ struct WaterCard: View {
                     .accessibilityValue(totalAccessibilityValue)
                 }
 
-                // Stacked rather than side by side, and centred on the card's
-                // full height by the HStack above rather than pinned under
-                // the bar — the old row sat hard against the bottom edge with
-                // the "Enter amount" button underneath it; removing that
-                // button left the stepper looking stranded down there instead
-                // of rising with it.
-                VStack(spacing: 10) {
+                // Side by side, not stacked — a vertical column read as
+                // "on top of and below each other" rather than the paired
+                // stepper this is; a horizontal pair also reads as one
+                // control at a glance, the way "-" and "+" normally do next
+                // to each other. Centred on the card's full height by the
+                // HStack above, same as before.
+                HStack(spacing: 8) {
+                    stepperButton(
+                        systemName: "minus", label: "Remove the last drink",
+                        isEnabled: viewModel.canUndo, prominent: false
+                    ) {
+                        Haptics.light()
+                        Task { await viewModel.adjust(drinks: -1) }
+                    }
                     stepperButton(
                         systemName: "plus", label: addLabel,
                         isEnabled: true, prominent: true
@@ -103,13 +110,6 @@ struct WaterCard: View {
                         // round trip is 200–400 ms away.
                         Haptics.light()
                         Task { await viewModel.adjust(drinks: 1) }
-                    }
-                    stepperButton(
-                        systemName: "minus", label: "Remove the last drink",
-                        isEnabled: viewModel.canUndo, prominent: false
-                    ) {
-                        Haptics.light()
-                        Task { await viewModel.adjust(drinks: -1) }
                     }
                 }
             }
@@ -161,27 +161,32 @@ struct WaterCard: View {
     private func stepperButton(
         systemName: String, label: String, isEnabled: Bool, prominent: Bool, action: @escaping () -> Void
     ) -> some View {
-        let diameter: CGFloat = prominent ? 44 : 34
-        // "-" (34pt) grows to the same 44pt tap target as "+" below, which
-        // would otherwise make the VStack's declared 10pt spacing read as
-        // 15pt in practice — the growth is real screen space to the parent
-        // stack even though nothing is drawn in it. Handing it back is the
-        // same trick this app already uses everywhere a visual size and a
-        // touch target differ (see the meal-row "+" in TodayView).
+        // Both shrunk, and closer together in size than the first pass —
+        // "+" was the odd one out at 44pt next to "-"'s 34pt. Still two
+        // sizes, not one: "+" stays the card's primary action, "-" the
+        // quieter undo, same distinction the fill-vs-outline styling
+        // already carries.
+        let diameter: CGFloat = prominent ? 36 : 30
+        // Both circles are under the 44pt minimum touch target now that
+        // they've shrunk, so both grow a tappable area back out to it —
+        // horizontally this time: side by side, it's the row's *width*
+        // that would otherwise overshoot the declared 8pt spacing, not its
+        // height. Handing that growth back is the same trick this app
+        // already uses everywhere a visual size and a touch target differ
+        // (see the meal-row "+" in TodayView).
         let growth = (44 - diameter) / 2
         return Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: prominent ? 16 : 13, weight: .bold))
+                .font(.system(size: prominent ? 14 : 12, weight: .bold))
                 .foregroundStyle(prominent ? .white : (isEnabled ? AppColor.water : AppColor.placeholder))
                 .frame(width: diameter, height: diameter)
                 .background(prominent ? AppColor.water : AppColor.surface, in: Circle())
                 .opacity(prominent ? (isEnabled ? 1 : 0.5) : 1)
                 // The visual circle is the design's size; the tappable area
-                // is padded out to the 44pt minimum a thumb needs, which for
-                // "-" is bigger than its own circle.
+                // is padded out to the 44pt minimum a thumb needs.
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
-                .padding(.vertical, -growth)
+                .padding(.horizontal, -growth)
         }
         .buttonStyle(.pressableCompact)
         .disabled(!isEnabled)

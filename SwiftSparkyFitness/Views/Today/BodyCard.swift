@@ -3,215 +3,108 @@
 //  SwiftSparkyFitness
 //
 //  Today's weight stub ("Log today's →", which went nowhere) made real.
-//  Shows the day's check-in row: the weight as the headline, any logged
-//  measurements as chips beneath it. Because a day holds exactly one
-//  check-in row, this is never a list — it's either the day's numbers or
-//  the prompt to add them.
+//
+//  Weight-only now, sized and shaped to match ExerciseTodayCard beside it —
+//  measurement chips (waist/hips/neck/...) used to render here too, but
+//  their variable count made this card grow taller than its sibling and,
+//  at accessibility text sizes, overflow it. Measurements are still
+//  logged the same way as before (the FAB's "Body Measurements" choice
+//  opens the exact same sheet this card's own "+ Measurements" link used
+//  to), just not surfaced in this compact a card.
+//
+//  If today has nothing logged, this shows the most recent weight from any
+//  earlier day instead of a bare prompt — with a small "logged 3 days ago"
+//  caption so it's never mistaken for today's — rather than making a fresh
+//  user stare at "Log today's →" when they weighed in yesterday and the
+//  number hasn't materially changed.
 //
 
 import SwiftUI
 
 struct BodyCard: View {
     let measurements: BodyMeasurements
+    /// The most recent day (before today) with a weight logged, if today
+    /// itself has none. `nil` when today has a weight, or nothing has ever
+    /// been logged.
+    let lastLoggedWeight: (value: Double, date: Date)?
     let preferences: UserPreferences
     let onLogWeight: () -> Void
-    let onLogMeasurements: () -> Void
 
-    private var otherFields: [(field: BodyField, value: Double)] {
-        measurements.populatedFields.filter { $0.field != .weight }
+    private var displayWeight: Double? {
+        measurements.weight ?? lastLoggedWeight?.value
     }
 
-    private var chipsAccessibilityValue: String {
-        otherFields.map { chipText($0.field, $0.value) }.joined(separator: ", ")
+    private var isShowingStaleWeight: Bool {
+        measurements.weight == nil && lastLoggedWeight != nil
+    }
+
+    private var staleCaption: String? {
+        guard isShowingStaleWeight, let date = lastLoggedWeight?.date else { return nil }
+        let formatter = RelativeDateTimeFormatter()
+        formatter.unitsStyle = .short
+        return formatter.localizedString(for: date, relativeTo: Date())
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(alignment: .firstTextBaseline) {
+        Button(action: onLogWeight) {
+            VStack(alignment: .leading, spacing: 8) {
                 // Capped like the ring's centre label elsewhere in this app
-                // (fixed geometry that shouldn't spill) — verified live that
-                // an uncapped "⚖️ Weight" wraps mid-word ("Weig" / "ht") once
-                // this card is half-width at accessibility text sizes, which
-                // it wasn't before Module 12 put it beside ExerciseTodayCard.
+                // (fixed geometry that shouldn't spill) — an uncapped
+                // "⚖️ Weight" wraps mid-word ("Weig" / "ht") once this card
+                // sits half-width beside ExerciseTodayCard at accessibility
+                // text sizes.
                 Text("⚖️ Weight")
                     .appBody(13, weight: .semibold)
                     .foregroundStyle(AppColor.ink)
                     .dynamicTypeSize(...DynamicTypeSize.xLarge)
-                Spacer()
-                Button(action: onLogMeasurements) {
-                    Text(otherFields.isEmpty ? "+ Measurements" : "Edit")
-                        .appBody(12, weight: .semibold)
+
+                if let displayWeight {
+                    // Was a `Text + Text` concatenation, which can't take a
+                    // view modifier — and the scaling font has to be one. An
+                    // HStack on .firstTextBaseline keeps the identical look
+                    // (unit sitting on the number's baseline) while letting
+                    // both halves scale with Dynamic Type.
+                    HStack(alignment: .firstTextBaseline, spacing: 0) {
+                        Text(preferences.formatted(displayWeight))
+                            .appBody(20, weight: .bold)
+                            .foregroundStyle(AppColor.ink)
+                        Text(" \(preferences.weightUnitLabel)")
+                            .appBody(13)
+                            .foregroundStyle(AppColor.secondaryText)
+                    }
+                    .contentTransition(.numericText())
+
+                    // Small and out of the way on purpose — this is a
+                    // fallback figure standing in for today's, and the one
+                    // job of this line is to stop it being mistaken for one.
+                    if let staleCaption {
+                        Text("Logged \(staleCaption)")
+                            .appBody(10)
+                            .foregroundStyle(AppColor.placeholder)
+                    }
+                } else {
+                    Text("Log today's →")
+                        .appBody(13, weight: .semibold)
                         .foregroundStyle(AppColor.accent)
-                        .dynamicTypeSize(...DynamicTypeSize.xLarge)
-                        // A 14pt line of text was a 14pt target. Padding the
-                        // hit area out and subtracting the same amount back
-                        // grows only what's tappable — the label keeps its
-                        // position and the header its height, which a
-                        // `.frame(minWidth:)` couldn't promise for two labels
-                        // of different widths.
-                        //
-                        // Lopsided on purpose: upwards it uses the card's own
-                        // padding, downwards it reaches over the weight
-                        // button. The label measures 11.7pt, not the 14 its
-                        // point size suggests, so 14 + 11.7 + 19 clears 44.
-                        //
-                        // That overlap used to be why this stopped at 34pt:
-                        // the weight button is a later sibling, so it drew on
-                        // top and took the taps. The header carries a zIndex
-                        // now, which reorders hit-testing without reordering
-                        // layout — and the region they share is the top-right
-                        // corner, where this button's own label is and where
-                        // the weight value (left-aligned) never reaches.
-                        // 13, not 12: the short "Edit" label left the target
-                        // 43pt wide, a point under the minimum.
-                        .padding(.horizontal, 13)
-                        .padding(.top, 14)
-                        .padding(.bottom, 19)
-                        .contentShape(Rectangle())
-                        .padding(.horizontal, -13)
-                        .padding(.top, -14)
-                        .padding(.bottom, -19)
                 }
-                .buttonStyle(.pressable)
             }
-            // Above the weight button for hit-testing only; the layout is
-            // unchanged. See the padding note above.
-            .zIndex(1)
-
-            Button(action: onLogWeight) {
-                // Grouped only so the hit-area padding below can wrap both
-                // branches at once.
-                Group {
-                    if let weight = measurements.weight {
-                        // Was a `Text + Text` concatenation, which can't take
-                        // a view modifier — and the scaling font has to be
-                        // one. An HStack on .firstTextBaseline keeps the
-                        // identical look (unit sitting on the number's
-                        // baseline) while letting both halves scale with
-                        // Dynamic Type.
-                        HStack(alignment: .firstTextBaseline, spacing: 0) {
-                            Text(preferences.formatted(weight))
-                                .appBody(20, weight: .bold)
-                                .foregroundStyle(AppColor.ink)
-                            Text(" \(preferences.weightUnitLabel)")
-                                .appBody(13)
-                                .foregroundStyle(AppColor.secondaryText)
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    } else {
-                        Text("Log today's →")
-                            .appBody(13, weight: .semibold)
-                            .foregroundStyle(AppColor.accent)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                // Same trick as the button above, mirrored: it takes its room
-                // downwards (the chips and the card's own padding aren't
-                // tappable, so nothing is stolen) and leaves the header
-                // button the space above.
-                .padding(.top, 4)
-                .padding(.bottom, 17)
-                .contentShape(Rectangle())
-                .padding(.top, -4)
-                .padding(.bottom, -17)
-            }
-            .buttonStyle(.pressable)
-            .accessibilityLabel(measurements.weight == nil ? "Log today's weight" : "Weight")
-            .accessibilityValue(measurements.weight.map { "\(preferences.formatted($0)) \(preferences.weightUnitLabel)" } ?? "Not logged")
-
-            if !otherFields.isEmpty {
-                // Wraps rather than scrolls: five measurements at most, and
-                // a horizontal scroller inside a vertical ScrollView is a
-                // gesture conflict for no benefit.
-                FlowRow(spacing: 6) {
-                    ForEach(otherFields, id: \.field.id) { entry in
-                        chip(entry.field, entry.value)
-                    }
-                }
-                // Five chips were five VoiceOver stops between the weight and
-                // whatever follows the card; they're one list of numbers.
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel("Measurements")
-                .accessibilityValue(chipsAccessibilityValue)
-            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.pressable)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel(displayWeight == nil ? "Log today's weight" : "Weight")
+        .accessibilityValue(accessibilityValue)
         .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
         .background(AppColor.surface)
         .overlay(RoundedRectangle(cornerRadius: AppRadius.md).stroke(AppColor.hairline, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
     }
 
-    /// Shared with the chips' accessibility value so the spoken list and the
-    /// visible chips can't drift apart.
-    private func chipText(_ field: BodyField, _ value: Double) -> String {
-        "\(field.label) \(preferences.formatted(value))\(field.unitKind == .percent ? "%" : " \(field.unitLabel(preferences))")"
-    }
-
-    private func chip(_ field: BodyField, _ value: Double) -> some View {
-        Text(chipText(field, value))
-            .appBody(12)
-            .foregroundStyle(AppColor.secondaryText)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 5)
-            .background(AppColor.inputBackground)
-            .clipShape(Capsule())
-    }
-}
-
-/// Minimal wrapping row — SwiftUI has no built-in "flow layout" before
-/// iOS 16's Layout protocol, and this app targets the same baseline as the
-/// rest of its custom controls, so it's implemented directly.
-struct FlowRow: Layout {
-    var spacing: CGFloat = 6
-
-    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
-        let maxWidth = proposal.width ?? .infinity
-        var rowWidth: CGFloat = 0
-        var rowHeight: CGFloat = 0
-        var totalHeight: CGFloat = 0
-        var widest: CGFloat = 0
-
-        for subview in subviews {
-            // Measured against the row's own width, not `.unspecified` — a
-            // chip's *natural* single-line width can exceed the whole row
-            // at large accessibility text sizes (verified live: "Waist 80
-            // cm" next to Exercise, both now half-width cards, at AX3), and
-            // an unconstrained measurement never gives Text a reason to
-            // wrap, so it just overflowed the card and got clipped by its
-            // `clipShape`. Proposing the row width lets an over-long chip
-            // wrap onto a second line inside its own capsule instead.
-            let size = subview.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil))
-            if rowWidth > 0, rowWidth + spacing + size.width > maxWidth {
-                widest = max(widest, rowWidth)
-                totalHeight += rowHeight + spacing
-                rowWidth = size.width
-                rowHeight = size.height
-            } else {
-                rowWidth += rowWidth > 0 ? spacing + size.width : size.width
-                rowHeight = max(rowHeight, size.height)
-            }
-        }
-        widest = max(widest, rowWidth)
-        totalHeight += rowHeight
-        return CGSize(width: min(widest, maxWidth), height: totalHeight)
-    }
-
-    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
-        var x = bounds.minX
-        var y = bounds.minY
-        var rowHeight: CGFloat = 0
-
-        for subview in subviews {
-            let size = subview.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
-            if x > bounds.minX, x + size.width > bounds.maxX {
-                x = bounds.minX
-                y += rowHeight + spacing
-                rowHeight = 0
-            }
-            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(width: bounds.width, height: nil))
-            x += size.width + spacing
-            rowHeight = max(rowHeight, size.height)
-        }
+    private var accessibilityValue: String {
+        guard let displayWeight else { return "Not logged" }
+        let base = "\(preferences.formatted(displayWeight)) \(preferences.weightUnitLabel)"
+        guard let staleCaption else { return base }
+        return "\(base), logged \(staleCaption)"
     }
 }
