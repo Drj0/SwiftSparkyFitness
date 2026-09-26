@@ -44,9 +44,13 @@ struct WaterCard: View {
     /// No longer shown as a caption (the design keeps this card to the
     /// number, the bar and the two stepper buttons) — folded into the "+"
     /// button's own accessibility label instead, so the container/drink-size
-    /// information isn't lost, only the visible line.
-    private func addLabel(_ drinks: Int) -> String {
-        "Add a \(Int(viewModel.mlPerDrink)) millilitre drink · \(viewModel.drinkLabel)"
+    /// information isn't lost, only the visible line. `drinkLabel` already
+    /// carries the ml figure ("250 ml each" / "Probe Bottle · 750 ml"), so
+    /// it's the whole suffix — prefixing a second, separately-computed "X
+    /// millilitre drink" here read as "Add a 250 millilitre drink · 250 ml
+    /// each", the same number said twice.
+    private var addLabel: String {
+        "Add a drink — \(viewModel.drinkLabel)"
     }
 
     var body: some View {
@@ -91,7 +95,7 @@ struct WaterCard: View {
                 // of rising with it.
                 VStack(spacing: 10) {
                     stepperButton(
-                        systemName: "plus", label: addLabel(viewModel.wholeDrinks + 1),
+                        systemName: "plus", label: addLabel,
                         isEnabled: true, prominent: true
                     ) {
                         // Fired here rather than after the write lands: a tap
@@ -158,6 +162,13 @@ struct WaterCard: View {
         systemName: String, label: String, isEnabled: Bool, prominent: Bool, action: @escaping () -> Void
     ) -> some View {
         let diameter: CGFloat = prominent ? 44 : 34
+        // "-" (34pt) grows to the same 44pt tap target as "+" below, which
+        // would otherwise make the VStack's declared 10pt spacing read as
+        // 15pt in practice — the growth is real screen space to the parent
+        // stack even though nothing is drawn in it. Handing it back is the
+        // same trick this app already uses everywhere a visual size and a
+        // touch target differ (see the meal-row "+" in TodayView).
+        let growth = (44 - diameter) / 2
         return Button(action: action) {
             Image(systemName: systemName)
                 .font(.system(size: prominent ? 16 : 13, weight: .bold))
@@ -170,6 +181,7 @@ struct WaterCard: View {
                 // "-" is bigger than its own circle.
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
+                .padding(.vertical, -growth)
         }
         .buttonStyle(.pressableCompact)
         .disabled(!isEnabled)

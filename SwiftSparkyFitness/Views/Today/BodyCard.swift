@@ -28,14 +28,21 @@ struct BodyCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
+                // Capped like the ring's centre label elsewhere in this app
+                // (fixed geometry that shouldn't spill) — verified live that
+                // an uncapped "⚖️ Weight" wraps mid-word ("Weig" / "ht") once
+                // this card is half-width at accessibility text sizes, which
+                // it wasn't before Module 12 put it beside ExerciseTodayCard.
                 Text("⚖️ Weight")
                     .appBody(13, weight: .semibold)
                     .foregroundStyle(AppColor.ink)
+                    .dynamicTypeSize(...DynamicTypeSize.xLarge)
                 Spacer()
                 Button(action: onLogMeasurements) {
                     Text(otherFields.isEmpty ? "+ Measurements" : "Edit")
                         .appBody(12, weight: .semibold)
                         .foregroundStyle(AppColor.accent)
+                        .dynamicTypeSize(...DynamicTypeSize.xLarge)
                         // A 14pt line of text was a 14pt target. Padding the
                         // hit area out and subtracting the same amount back
                         // grows only what's tappable — the label keeps its
@@ -166,7 +173,15 @@ struct FlowRow: Layout {
         var widest: CGFloat = 0
 
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            // Measured against the row's own width, not `.unspecified` — a
+            // chip's *natural* single-line width can exceed the whole row
+            // at large accessibility text sizes (verified live: "Waist 80
+            // cm" next to Exercise, both now half-width cards, at AX3), and
+            // an unconstrained measurement never gives Text a reason to
+            // wrap, so it just overflowed the card and got clipped by its
+            // `clipShape`. Proposing the row width lets an over-long chip
+            // wrap onto a second line inside its own capsule instead.
+            let size = subview.sizeThatFits(ProposedViewSize(width: maxWidth, height: nil))
             if rowWidth > 0, rowWidth + spacing + size.width > maxWidth {
                 widest = max(widest, rowWidth)
                 totalHeight += rowHeight + spacing
@@ -188,13 +203,13 @@ struct FlowRow: Layout {
         var rowHeight: CGFloat = 0
 
         for subview in subviews {
-            let size = subview.sizeThatFits(.unspecified)
+            let size = subview.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
             if x > bounds.minX, x + size.width > bounds.maxX {
                 x = bounds.minX
                 y += rowHeight + spacing
                 rowHeight = 0
             }
-            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(size))
+            subview.place(at: CGPoint(x: x, y: y), proposal: ProposedViewSize(width: bounds.width, height: nil))
             x += size.width + spacing
             rowHeight = max(rowHeight, size.height)
         }

@@ -19,9 +19,13 @@ struct ExerciseTodayCard: View {
     var body: some View {
         Button(action: onTap) {
             VStack(alignment: .leading, spacing: 10) {
+                // Capped the same way BodyCard's header is, for the same
+                // reason: half-width next to a sibling card, this label
+                // wraps mid-word at accessibility text sizes otherwise.
                 Text("🏃 Exercise")
                     .appBody(13, weight: .semibold)
                     .foregroundStyle(AppColor.ink)
+                    .dynamicTypeSize(...DynamicTypeSize.xLarge)
 
                 if hasLogged {
                     // "30 min · -180" — the calorie figure is a deficit

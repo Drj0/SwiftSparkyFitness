@@ -284,7 +284,12 @@ struct TodayView: View {
     private func statRow() -> some View {
         WaterCard(viewModel: viewModel.water)
 
-        HStack(spacing: 12) {
+        // `.top`, not the default `.center`: BodyCard grows taller than
+        // ExerciseTodayCard the moment a measurement chip wraps onto a
+        // second line, and centring would float the shorter card in the
+        // middle of that extra height instead of keeping both cards'
+        // headers flush with each other.
+        HStack(alignment: .top, spacing: 12) {
             BodyCard(
                 measurements: viewModel.bodyMeasurements,
                 preferences: viewModel.preferences,
