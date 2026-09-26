@@ -256,6 +256,12 @@ struct BodyTrendPoint: Identifiable, Equatable {
 /// is a real `exercise_entries` row with `duration_minutes: 0` that Today and
 /// Diary already filter out by name. Summing `/api/reports`'s `exerciseEntries`
 /// instead would have counted it as a workout.
+/// Response shape re-verified live on 2026-09-26 against a running server
+/// (not just the OpenAPI doc): the endpoint carries a lot more than this
+/// models — a period-over-period `comparisonWithPreviousPeriod` and a
+/// `heartRateZoneDistribution` — but distance and lifted volume are the two
+/// additions worth surfacing here, now that logging can actually produce
+/// them (cardio distance, strength sets/reps/weight).
 struct ExerciseRangeSummary: Decodable {
     let totals: Totals
     let intervalsBreakdown: [Bucket]
@@ -264,6 +270,8 @@ struct ExerciseRangeSummary: Decodable {
         let totalDurationMinutes: Double
         let totalCaloriesBurned: Double
         let workoutCount: Int
+        var totalDistanceMeters: Double? = nil
+        var totalLiftedVolumeKg: Double? = nil
     }
 
     /// One bucket per interval — a day, for `interval=day`. Buckets with no
@@ -273,6 +281,8 @@ struct ExerciseRangeSummary: Decodable {
         let durationMinutes: Double
         let caloriesBurned: Double
         let workoutCount: Int
+        var distanceMeters: Double? = nil
+        var totalLiftedVolumeKg: Double? = nil
     }
 }
 

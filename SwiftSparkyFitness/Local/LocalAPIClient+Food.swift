@@ -279,7 +279,46 @@ extension LocalAPIClient {
             .filter { $0.name != sentinel }
             .filter { $0.name.localizedCaseInsensitiveContains(trimmed) }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
-            .map { Exercise(id: $0.id, name: $0.name, category: $0.category) }
+            .map(LocalAPIClient.exercise)
+    }
+
+    /// Local mode's most-recently-logged distinct exercises — there is no
+    /// server-side `usage_count` to rank by, so recency of the last entry
+    /// stands in for it.
+    func recentExercises() async throws -> [Exercise] {
+        let sentinel = ExerciseSessionSummary.healthActiveEnergyName
+        let recentIds = store.all(LocalExerciseEntry.self)
+            .filter { $0.name != sentinel }
+            .sorted { $0.entryDate > $1.entryDate }
+            .map(\.exerciseId)
+        var seen = Set<String>()
+        let orderedIds = recentIds.filter { seen.insert($0).inserted }.prefix(10)
+        let exercisesById = Dictionary(uniqueKeysWithValues: store.all(LocalExercise.self).map { ($0.id, $0) })
+        return orderedIds.compactMap { exercisesById[$0] }.map(LocalAPIClient.exercise)
+    }
+
+    /// No server means no Free Exercise DB/Wger call — the same quiet
+    /// degrade `searchUsdaFoods` already uses for "this deployment has no
+    /// provider configured".
+    func searchExternalExercises(query: String) async throws -> [ExternalExerciseResult] { [] }
+
+    /// Never actually reached in local mode (searchExternalExercises always
+    /// returns empty), but implemented honestly rather than left throwing —
+    /// materializes straight into the local library, matching what the
+    /// server's materialize call does.
+    func materializeExternalExercise(_ result: ExternalExerciseResult) async throws -> Exercise {
+        try await createCustomExercise(CustomExerciseInput(
+            name: result.name, category: result.category ?? "Other",
+            modality: result.modality ?? .duration,
+            equipment: result.equipment, muscleGroups: result.primaryMuscles + result.secondaryMuscles,
+            instructions: result.instructions
+        ))
+    }
+
+    func createCustomExercise(_ input: CustomExerciseInput) async throws -> Exercise {
+        let row = LocalExercise(name: input.name, category: input.category, modality: input.modality.rawValue)
+        store.insert(row)
+        return LocalAPIClient.exercise(row)
     }
 
     /// Matches on the whole name, case-insensitively, so logging "Running"
@@ -287,11 +326,16 @@ extension LocalAPIClient {
     func findOrCreateExercise(named name: String) async throws -> Exercise {
         let trimmed = name.trimmingCharacters(in: .whitespaces)
         if let existing = store.all(LocalExercise.self).first(where: { $0.name.caseInsensitiveCompare(trimmed) == .orderedSame }) {
-            return Exercise(id: existing.id, name: existing.name, category: existing.category)
+            return LocalAPIClient.exercise(existing)
         }
         let row = LocalExercise(name: trimmed, category: "Other")
         store.insert(row)
-        return Exercise(id: row.id, name: row.name, category: row.category)
+        return LocalAPIClient.exercise(row)
+    }
+
+    private static func setsJSON(_ sets: [ExerciseSetInput]) -> String? {
+        guard !sets.isEmpty, let data = try? JSONEncoder().encode(sets) else { return nil }
+        return String(data: data, encoding: .utf8)
     }
 
     func createExerciseEntry(_ input: ExerciseEntryInput) async throws -> ExerciseSessionSummary {
@@ -301,8 +345,14 @@ extension LocalAPIClient {
             entryDate: input.entryDate,
             exerciseId: input.exerciseId,
             name: name,
-            durationMinutes: input.durationMinutes,
-            caloriesBurned: input.caloriesBurned
+            durationMinutes: input.durationMinutes ?? 0,
+            caloriesBurned: input.caloriesBurned,
+            modality: input.modality.rawValue,
+            distance: input.distance,
+            avgHeartRate: input.avgHeartRate,
+            notes: input.notes,
+            entryTime: input.entryTime,
+            setsJSON: Self.setsJSON(input.sets)
         )
         store.insert(row)
         return LocalAPIClient.exerciseSummary(row)
@@ -317,8 +367,14 @@ extension LocalAPIClient {
         let exerciseId = input.exerciseId
         row.exerciseId = exerciseId
         row.name = store.fetch(LocalExercise.self, where: #Predicate { $0.id == exerciseId }).first?.name ?? row.name
-        row.durationMinutes = input.durationMinutes
+        row.durationMinutes = input.durationMinutes ?? 0
         row.caloriesBurned = input.caloriesBurned
+        row.modality = input.modality.rawValue
+        row.distance = input.distance
+        row.avgHeartRate = input.avgHeartRate
+        row.notes = input.notes
+        row.entryTime = input.entryTime
+        row.setsJSON = Self.setsJSON(input.sets)
         store.save()
         return LocalAPIClient.exerciseSummary(row)
     }

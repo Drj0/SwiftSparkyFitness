@@ -106,7 +106,7 @@ struct ContentView: View {
             // Naming the host turns the most likely first-run failure — a
             // build pointing at a machine you aren't on — from a mystery into
             // something diagnosable.
-            Text("Couldn't connect to \(APIClient.shared.baseURL.host ?? "the server"). Check that it's running and you're on the same network.")
+            Text("Couldn't connect to \(APIClient.shared.baseURL.host ?? "the server"). Check that it's running and that this phone can reach it.")
                 .appBody(13)
                 .foregroundStyle(AppColor.secondaryText)
                 .multilineTextAlignment(.center)

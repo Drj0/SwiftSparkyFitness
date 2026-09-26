@@ -9,21 +9,33 @@
 //  the one deliberate exception, and only because native swipe-to-delete
 //  (`.swipeActions`) requires one. Row insets/separators/backgrounds are
 //  stripped so it still reads as the same card-based design, not a system
-//  list. Tapping a row reopens Module 2's own FoodDetailView/LogExerciseView
-//  pre-loaded for editing rather than building new edit UI.
+//  list. Tapping a food row reopens Module 2's own FoodDetailView pre-loaded
+//  for editing rather than building new edit UI. (Exercise entries moved to
+//  ExerciseDiaryView, the Exercise tab's other segment, in Module 12.)
 //
 
 import SwiftUI
 
+/// Module 12: the "Food & Water" half of the Exercise tab's segmented
+/// control. Formerly a standalone tab named "Diary" — the day-paging, meal
+/// sections and water/body sections are unchanged, only the exercise
+/// section moved out (to `ExerciseDiaryView`, the tab's other segment) and
+/// the header lost its own big title, since the segmented control above it
+/// already says which half of the day this is.
 struct DiaryView: View {
-    let user: SessionUser
-    @StateObject private var viewModel: DiaryViewModel
+    @ObservedObject private var viewModel: DiaryViewModel
     @State private var isPresentingDatePicker = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
+    /// Standalone use (previews, tests) builds its own view model; the
+    /// Exercise tab passes one down so both segments share a single day's
+    /// data and date position instead of loading it twice.
     init(user: SessionUser) {
-        self.user = user
-        _viewModel = StateObject(wrappedValue: DiaryViewModel(user: user))
+        _viewModel = ObservedObject(wrappedValue: DiaryViewModel(user: user))
+    }
+
+    init(viewModel: DiaryViewModel) {
+        _viewModel = ObservedObject(wrappedValue: viewModel)
     }
 
     private var dateLabel: String {
@@ -68,15 +80,6 @@ struct DiaryView: View {
         .sheet(item: $viewModel.editingFoodEntry, onDismiss: { Task { await viewModel.load() } }) { entry in
             editFoodSheet(entry)
         }
-        .sheet(item: $viewModel.editingExerciseEntry, onDismiss: { Task { await viewModel.load() } }) { entry in
-            LogExerciseView(
-                editingEntryId: entry.id, exerciseId: entry.exerciseId ?? "", name: entry.name ?? "",
-                durationMinutes: entry.durationMinutes ?? 0, caloriesBurned: entry.caloriesBurned ?? 0,
-                entryDate: viewModel.selectedDate
-            ) {}
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-        }
         .sheet(isPresented: $isPresentingDatePicker) {
             DiaryDatePickerSheet(initialDate: viewModel.selectedDate, minDate: viewModel.minDate, maxDate: viewModel.maxDate) { picked in
                 viewModel.jumpToDate(picked)
@@ -120,7 +123,6 @@ struct DiaryView: View {
                 ForEach(viewModel.entriesByMeal, id: \.mealType.id) { group in
                     mealSection(group.mealType, group.entries)
                 }
-                exerciseSection(summary.exerciseSessions.userLogged)
                 waterSection()
                 bodySection()
             } else {
@@ -208,9 +210,10 @@ struct DiaryView: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
-            Text("Diary")
-                .appDisplay(26)
-                .foregroundStyle(AppColor.ink)
+            // No big title here any more — the segmented control above this
+            // (ExerciseTabView) already says "Food & Water", and repeating
+            // it as a second, page-style title read as two headers stacked
+            // for one screen.
             // The chevron glyphs were their own 6.7 x 11.7pt tap targets —
             // ~4% of the 44x44 minimum, and sitting a few points from the
             // date button, so a near-miss silently opened the date picker.
@@ -351,66 +354,6 @@ struct DiaryView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(entry.foodName), \(Int(entry.quantity))\(entry.unit)")
         .accessibilityValue("\(Int(entry.calories)) calories")
-        .accessibilityHint("Opens for editing")
-    }
-
-    // MARK: - Exercise
-
-    private func exerciseSection(_ sessions: [ExerciseSessionSummary]) -> some View {
-        let total = sessions.reduce(0.0) { $0 + ($1.caloriesBurned ?? 0) }
-        return Section {
-            if !viewModel.isCollapsed("exercise") {
-                if sessions.isEmpty {
-                    Text("Nothing logged")
-                        .appBody(13)
-                        .foregroundStyle(AppColor.placeholder)
-                        .padding(.horizontal, AppSpacing.screenPad)
-                        .diaryRow()
-                } else {
-                    ForEach(sessions) { session in
-                        exerciseRow(session)
-                            .padding(.horizontal, AppSpacing.screenPad)
-                            .diaryRow()
-                            .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    Haptics.warning()
-                                    Task { await viewModel.deleteExerciseEntry(session) }
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
-                                }
-                            }
-                    }
-                }
-            }
-        } header: {
-            sectionHeader(id: "exercise", title: "Exercise · \(Int(total)) kcal")
-        }
-    }
-
-    private func exerciseRow(_ session: ExerciseSessionSummary) -> some View {
-        Button {
-            guard session.exerciseId != nil else { return }
-            viewModel.editingExerciseEntry = session
-        } label: {
-            HStack {
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(session.name ?? "Exercise").appBody(15, weight: .semibold).foregroundStyle(AppColor.ink)
-                    Text("\(Int(session.durationMinutes ?? 0)) min").appBody(12).foregroundStyle(AppColor.secondaryText)
-                }
-                Spacer()
-                Text("\(Int(session.caloriesBurned ?? 0))").appBody(14, weight: .semibold).foregroundStyle(AppColor.energy)
-            }
-            .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .background(AppColor.surface)
-            .overlay(RoundedRectangle(cornerRadius: 14).stroke(AppColor.hairline, lineWidth: 1))
-            .clipShape(RoundedRectangle(cornerRadius: 14))
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressable)
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(session.name ?? "Exercise"), \(Int(session.durationMinutes ?? 0)) minutes")
-        .accessibilityValue("\(Int(session.caloriesBurned ?? 0)) calories burned")
         .accessibilityHint("Opens for editing")
     }
 
@@ -620,7 +563,9 @@ struct DiaryView: View {
 /// Strips List's default row chrome (insets/separator/background) so rows
 /// read as plain content on `AppColor.background`, not a system list —
 /// applied to every row since `List` has no "turn all this off" switch.
-private extension View {
+/// Not `private`: `ExerciseDiaryView` (Module 12's other segment) is a
+/// separate `List`-based day view that needs the exact same treatment.
+extension View {
     func diaryRow() -> some View {
         listRowInsets(EdgeInsets())
             .listRowSeparator(.hidden)

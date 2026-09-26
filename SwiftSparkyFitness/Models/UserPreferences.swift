@@ -23,13 +23,28 @@ struct UserPreferences: Decodable, Equatable, Sendable {
     let defaultMeasurementUnit: String?
     let waterDisplayUnit: String?
     let measurementDecimalPlaces: Int?
+    /// Module 12: exercise-side preferences, parallel to the three above —
+    /// same table, same "the server doesn't validate these" caveat, same
+    /// partial-merge PUT. `defaultDistanceUnit` labels cardio distance
+    /// (`km` default, confirmed against the migration); `activityLevel` and
+    /// `exerciseCaloriePercentage` feed the server's TDEE/goal math and have
+    /// no display use in this app yet, but round-trip safely either way.
+    // `var`, not `let`, despite the default: a `let` with an initial value is
+    // silently skipped by synthesized `Decodable` (Swift assigns the default
+    // once and never calls decode for it), which would make every response
+    // from the server look like it never sent these three fields. Caught by
+    // the build, not by reading the docs — worth remembering elsewhere too.
+    var defaultDistanceUnit: String? = nil
+    var activityLevel: String? = nil
+    var exerciseCaloriePercentage: Double? = nil
 
     /// Used until the real preferences land (and if the call fails) — the
     /// same defaults the `user_preferences` table itself declares, so a
     /// failed fetch shows the same labels the server would have sent.
     static let serverDefaults = UserPreferences(
         defaultWeightUnit: "kg", defaultMeasurementUnit: "cm",
-        waterDisplayUnit: "ml", measurementDecimalPlaces: 0
+        waterDisplayUnit: "ml", measurementDecimalPlaces: 0,
+        defaultDistanceUnit: "km", activityLevel: "sedentary", exerciseCaloriePercentage: 100
     )
 
     /// Short label for a weight field, e.g. "kg". `st_lbs`/`ft_in` are
@@ -63,6 +78,13 @@ struct UserPreferences: Decodable, Equatable, Sendable {
         }
     }
 
+    var distanceUnitLabel: String {
+        switch defaultDistanceUnit {
+        case "miles": return "mi"
+        default: return "km"
+        }
+    }
+
     /// How many decimals a measurement is shown with — the server tracks
     /// this per user (defaults to 0) so lists and cards agree.
     var decimals: Int { max(0, min(3, measurementDecimalPlaces ?? 0)) }
@@ -84,6 +106,10 @@ struct UserPreferences: Decodable, Equatable, Sendable {
 
     enum Setting: String, CaseIterable, Identifiable {
         case weight, measurement, water, decimals
+        // Module 12 — exercise-side, same "Goals & Units" section (per the
+        // Module 11 reorganisation: this is "how is the app set up for me",
+        // not a new area).
+        case distance, activityLevel, exerciseCaloriePercentage
 
         var id: String { rawValue }
 
@@ -93,6 +119,9 @@ struct UserPreferences: Decodable, Equatable, Sendable {
             case .measurement: return "Measurements"
             case .water: return "Water"
             case .decimals: return "Decimal places"
+            case .distance: return "Distance"
+            case .activityLevel: return "Activity level"
+            case .exerciseCaloriePercentage: return "Exercise calorie credit"
             }
         }
 
@@ -103,6 +132,20 @@ struct UserPreferences: Decodable, Equatable, Sendable {
             case .measurement: return [("cm", "cm"), ("inches", "in")]
             case .water: return [("ml", "ml"), ("oz", "oz"), ("liter", "L")]
             case .decimals: return [("0", "0"), ("1", "1"), ("2", "2")]
+            case .distance: return [("km", "km"), ("miles", "mi")]
+            // The five "backend keys" `ACTIVITY_MULTIPLIERS` actually reads
+            // (confirmed in the shared constants file) — the server's own
+            // default, `not_much`, is a legacy alias for `sedentary` and
+            // isn't offered, matching the "value set elsewhere" fallback
+            // every other picker here already relies on.
+            case .activityLevel:
+                return [
+                    ("sedentary", "Sedentary"), ("lightly_active", "Lightly active"),
+                    ("moderately_active", "Moderately active"), ("very_active", "Very active"),
+                    ("extra_active", "Extra active"),
+                ]
+            case .exerciseCaloriePercentage:
+                return [("50", "50%"), ("75", "75%"), ("100", "100%"), ("125", "125%"), ("150", "150%")]
             }
         }
 
@@ -114,7 +157,18 @@ struct UserPreferences: Decodable, Equatable, Sendable {
             case .measurement: return "default_measurement_unit"
             case .water: return "water_display_unit"
             case .decimals: return "measurement_decimal_places"
+            case .distance: return "default_distance_unit"
+            case .activityLevel: return "activity_level"
+            case .exerciseCaloriePercentage: return "exercise_calorie_percentage"
             }
+        }
+
+        /// Whether this setting's value is a JSON number rather than a
+        /// string — `updateUserPreference` needs to know which encoder to
+        /// use, since sending a numeric preference as a string stores a
+        /// string.
+        var isNumeric: Bool {
+            self == .decimals || self == .exerciseCaloriePercentage
         }
     }
 
@@ -124,6 +178,9 @@ struct UserPreferences: Decodable, Equatable, Sendable {
         case .measurement: return defaultMeasurementUnit ?? "cm"
         case .water: return waterDisplayUnit ?? "ml"
         case .decimals: return String(decimals)
+        case .distance: return defaultDistanceUnit ?? "km"
+        case .activityLevel: return activityLevel ?? "sedentary"
+        case .exerciseCaloriePercentage: return String(Int(exerciseCaloriePercentage ?? 100))
         }
     }
 

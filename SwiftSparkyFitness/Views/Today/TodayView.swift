@@ -95,7 +95,10 @@ struct TodayView: View {
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $viewModel.isPresentingLogExercise, onDismiss: { Task { await viewModel.load() } }) {
-            LogExerciseView()
+            // Module 12: search-and-materialize now stands between "Log
+            // Exercise" and the entry editor, since a logged entry has to
+            // reference an exercise already in the user's own library.
+            ExerciseSearchView()
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }

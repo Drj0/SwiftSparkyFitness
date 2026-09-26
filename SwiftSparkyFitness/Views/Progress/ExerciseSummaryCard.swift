@@ -60,20 +60,44 @@ struct ExerciseSummaryCard: View {
         // ViewThatFits so the row collapses to a column at large text sizes
         // rather than truncating — the same fallback the macro row and ring
         // legend use.
-        ViewThatFits(in: .horizontal) {
+        //
+        // Module 12: distance/volume are a fourth stat, not always shown —
+        // a range with only strength work has no distance, and one with
+        // only cardio has no lifted volume. Real numbers only became
+        // possible once logging could carry them at all; server units are
+        // shown as-is (meters -> km, kg), matching this app's existing
+        // "label from the preference, never convert" rule elsewhere, though
+        // no preference-driven relabel is wired up for this stat yet.
+        let fourthStat = distanceOrVolumeStat(totals)
+        return ViewThatFits(in: .horizontal) {
             HStack(spacing: 0) {
                 stat(Self.duration(totals.totalDurationMinutes), "Time")
                 rule
                 stat("\(totals.workoutCount)", "Sessions")
                 rule
                 stat(Self.perSession(totals), "Avg / session")
+                if let fourthStat { rule; fourthStat }
             }
             VStack(alignment: .leading, spacing: 8) {
                 stat(Self.duration(totals.totalDurationMinutes), "Time")
                 stat("\(totals.workoutCount)", "Sessions")
                 stat(Self.perSession(totals), "Avg / session")
+                fourthStat
             }
         }
+    }
+
+    /// Distance takes priority when both are present — a mixed range still
+    /// needs to pick one, and cardio distance is the more visually familiar
+    /// number.
+    private func distanceOrVolumeStat(_ totals: ExerciseRangeSummary.Totals) -> AnyView? {
+        if let meters = totals.totalDistanceMeters, meters > 0 {
+            return AnyView(stat(String(format: "%.1f km", meters / 1000), "Distance"))
+        }
+        if let volume = totals.totalLiftedVolumeKg, volume > 0 {
+            return AnyView(stat("\(Int(volume.rounded())) kg", "Volume"))
+        }
+        return nil
     }
 
     private var rule: some View {

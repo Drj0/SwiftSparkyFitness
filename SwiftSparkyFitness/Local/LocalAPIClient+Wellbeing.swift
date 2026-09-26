@@ -373,11 +373,19 @@ extension LocalAPIClient {
 
         let buckets = byDay.keys.sorted().map { key -> ExerciseRangeSummary.Bucket in
             let day = byDay[key] ?? []
+            let distance = day.reduce(0.0) { $0 + ($1.distance ?? 0) }
             return ExerciseRangeSummary.Bucket(
                 startDate: key,
                 durationMinutes: day.reduce(0.0) { $0 + $1.durationMinutes },
                 caloriesBurned: day.reduce(0.0) { $0 + $1.caloriesBurned },
-                workoutCount: day.count
+                workoutCount: day.count,
+                // The server reports distance in meters; local mode logs it
+                // in the user's own distance unit, same "no conversion"
+                // rule Module 5 already applies to weight/measurements — so
+                // this total is unit-less and the card should treat it as
+                // such, not assume meters.
+                distanceMeters: distance > 0 ? distance : nil,
+                totalLiftedVolumeKg: nil
             )
         }
 
@@ -385,7 +393,9 @@ extension LocalAPIClient {
             totals: .init(
                 totalDurationMinutes: buckets.reduce(0.0) { $0 + $1.durationMinutes },
                 totalCaloriesBurned: buckets.reduce(0.0) { $0 + $1.caloriesBurned },
-                workoutCount: buckets.reduce(0) { $0 + $1.workoutCount }
+                workoutCount: buckets.reduce(0) { $0 + $1.workoutCount },
+                totalDistanceMeters: buckets.compactMap(\.distanceMeters).reduce(0, +),
+                totalLiftedVolumeKg: nil
             ),
             intervalsBreakdown: buckets
         )

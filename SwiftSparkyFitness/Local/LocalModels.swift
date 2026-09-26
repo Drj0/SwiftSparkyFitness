@@ -151,11 +151,18 @@ final class LocalExercise {
     var id: String = UUID().uuidString
     var name: String = ""
     var category: String?
+    /// Additive (Module 12): the real taxonomy the server keys logging UI
+    /// off of. Stored as the raw string, not `ExerciseModality`, so the
+    /// CloudKit schema never has to model an enum.
+    var modality: String?
+    var caloriesPerHour: Double?
 
-    init(id: String = UUID().uuidString, name: String, category: String? = nil) {
+    init(id: String = UUID().uuidString, name: String, category: String? = nil, modality: String? = nil, caloriesPerHour: Double? = nil) {
         self.id = id
         self.name = name
         self.category = category
+        self.modality = modality
+        self.caloriesPerHour = caloriesPerHour
     }
 }
 
@@ -168,6 +175,17 @@ final class LocalExerciseEntry {
     var name: String = ""
     var durationMinutes: Double = 0
     var caloriesBurned: Double = 0
+    /// Additive (Module 12), all optional/defaulted so the CloudKit schema
+    /// stays additive-only. `setsJSON` is a flat JSON-encoded
+    /// `[ExerciseSetInput]` rather than a relationship — SwiftData's
+    /// CloudKit mirroring can't express one (see Module 10/11), and a
+    /// handful of sets per entry never needs querying on its own.
+    var modality: String?
+    var distance: Double?
+    var avgHeartRate: Int?
+    var notes: String?
+    var entryTime: String?
+    var setsJSON: String?
 
     init(
         id: String = UUID().uuidString,
@@ -175,7 +193,13 @@ final class LocalExerciseEntry {
         exerciseId: String,
         name: String,
         durationMinutes: Double,
-        caloriesBurned: Double
+        caloriesBurned: Double,
+        modality: String? = nil,
+        distance: Double? = nil,
+        avgHeartRate: Int? = nil,
+        notes: String? = nil,
+        entryTime: String? = nil,
+        setsJSON: String? = nil
     ) {
         self.id = id
         self.entryDate = entryDate
@@ -184,6 +208,12 @@ final class LocalExerciseEntry {
         self.name = name
         self.durationMinutes = durationMinutes
         self.caloriesBurned = caloriesBurned
+        self.modality = modality
+        self.distance = distance
+        self.avgHeartRate = avgHeartRate
+        self.notes = notes
+        self.entryTime = entryTime
+        self.setsJSON = setsJSON
     }
 }
 
@@ -289,6 +319,10 @@ final class LocalPreferences {
     var waterDisplayUnit: String = "ml"
     var measurementDecimalPlaces: Int = 0
     var itemDisplayLimit: Int = 10
+    /// Additive (Module 12), matching the server's own defaults.
+    var defaultDistanceUnit: String = "km"
+    var activityLevel: String = "sedentary"
+    var exerciseCaloriePercentage: Double = 100
 
     init() {}
 }

@@ -111,6 +111,10 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         var createdExerciseEntries: [ExerciseEntryInput] = []
         var updatedExerciseEntries: [(id: String, input: ExerciseEntryInput)] = []
         var exerciseWriteError: Error?
+        var recentExercisesToReturn: [Exercise] = []
+        var externalExerciseResultsToReturn: [ExternalExerciseResult] = []
+        var materializedExternalExercises: [ExternalExerciseResult] = []
+        var createdCustomExercises: [CustomExerciseInput] = []
         var localFoodsToReturn: [Food] = []
         var externalFoodsToReturn: [Food] = []
         var localSearchError: Error?
@@ -196,6 +200,16 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         func updateFoodEntry(id: String, _ input: FoodEntryInput) async throws {}
         func deleteFoodEntry(id: String) async throws {}
         func searchExercises(query: String) async throws -> [Exercise] { [] }
+        func recentExercises() async throws -> [Exercise] { recentExercisesToReturn }
+        func searchExternalExercises(query: String) async throws -> [ExternalExerciseResult] { externalExerciseResultsToReturn }
+        func materializeExternalExercise(_ result: ExternalExerciseResult) async throws -> Exercise {
+            materializedExternalExercises.append(result)
+            return Exercise(id: "materialized-\(result.id)", name: result.name, category: result.category, modality: result.modality)
+        }
+        func createCustomExercise(_ input: CustomExerciseInput) async throws -> Exercise {
+            createdCustomExercises.append(input)
+            return Exercise(id: "custom-\(input.name)", name: input.name, category: input.category, modality: input.modality)
+        }
         func findOrCreateExercise(named name: String) async throws -> Exercise {
             lookedUpExerciseNames.append(name)
             return Exercise(id: "exercise-1", name: name, category: nil)
@@ -203,12 +217,17 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         func createExerciseEntry(_ input: ExerciseEntryInput) async throws -> ExerciseSessionSummary {
             createdExerciseEntries.append(input)
             if let exerciseWriteError { throw exerciseWriteError }
-            return ExerciseSessionSummary(id: "session-1", name: nil, caloriesBurned: input.caloriesBurned, durationMinutes: input.durationMinutes, exerciseId: input.exerciseId)
+            return ExerciseSessionSummary(
+                id: "session-1", name: nil, caloriesBurned: input.caloriesBurned, durationMinutes: input.durationMinutes,
+                exerciseId: input.exerciseId, distance: input.distance, avgHeartRate: input.avgHeartRate,
+                sets: input.sets.map { ExerciseSet(id: nil, setNumber: $0.setNumber, setType: $0.setType, reps: $0.reps, weight: $0.weight, duration: nil, restTime: nil, notes: $0.notes, rpe: $0.rpe, isPr: false, distance: nil) },
+                modality: input.modality
+            )
         }
         func updateExerciseEntry(id: String, _ input: ExerciseEntryInput) async throws -> ExerciseSessionSummary {
             updatedExerciseEntries.append((id, input))
             if let exerciseWriteError { throw exerciseWriteError }
-            return ExerciseSessionSummary(id: id, name: nil, caloriesBurned: input.caloriesBurned, durationMinutes: input.durationMinutes, exerciseId: input.exerciseId)
+            return ExerciseSessionSummary(id: id, name: nil, caloriesBurned: input.caloriesBurned, durationMinutes: input.durationMinutes, exerciseId: input.exerciseId, modality: input.modality)
         }
         func deleteExerciseEntry(id: String) async throws {}
 
@@ -1750,97 +1769,195 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertEqual(viewModel.bannerMessage, "Food already exists.")
     }
 
-    // MARK: - Log exercise
+    // MARK: - Log exercise (modality-driven form)
+    //
+    // Module 12: the real backend schema is modality-driven — weightReps/
+    // repsOnly log a list of sets, duration/durationDistance don't — and
+    // `duration_minutes`/`calories_burned` are required for every modality
+    // regardless. These pin each modality producing the correct payload
+    // shape, since that's the part most likely to have a subtle bug given
+    // how different this schema is from the flat trio it replaced.
 
     @MainActor
-    func testExerciseRequiresBothAnActivityAndADuration() async {
+    func testExerciseRequiresDurationAndCalories() async {
         let stub = StubAPIClient()
-        let viewModel = LogExerciseViewModel(apiClient: stub)
+        let viewModel = ExerciseEntryEditorViewModel(exercise: Exercise.previewSquat, apiClient: stub)
+
+        let saved = await viewModel.save()
+        XCTAssertFalse(saved)
+        XCTAssertNotNil(viewModel.durationError)
+        XCTAssertNotNil(viewModel.caloriesError)
+        XCTAssertTrue(stub.createdExerciseEntries.isEmpty)
+    }
+
+    /// `weightReps` — every non-blank row becomes a set; a blank row (never
+    /// touched) is dropped rather than sent as an empty set.
+    @MainActor
+    func testExerciseWeightRepsBuildsASetsPayload() async {
+        let stub = StubAPIClient()
+        let viewModel = ExerciseEntryEditorViewModel(exercise: Exercise.previewSquat, apiClient: stub)
+        viewModel.durationMinutesText = "20"
+        viewModel.caloriesText = "150"
+        viewModel.setRows[0].repsText = "10"
+        viewModel.setRows[0].weightText = "100"
+        viewModel.addSet()
+        viewModel.setRows[1].repsText = "8"
+        viewModel.setRows[1].weightText = "105"
+        viewModel.setRows[1].rpeText = "8"
+
+        let saved = await viewModel.save()
+        XCTAssertTrue(saved)
+
+        let sent = try? XCTUnwrap(stub.createdExerciseEntries.first)
+        XCTAssertEqual(sent?.modality, .weightReps)
+        XCTAssertEqual(sent?.durationMinutes, 20)
+        XCTAssertEqual(sent?.caloriesBurned, 150)
+        XCTAssertEqual(sent?.sets.count, 2)
+        XCTAssertEqual(sent?.sets[0].reps, 10)
+        XCTAssertEqual(sent?.sets[0].weight, 100)
+        XCTAssertEqual(sent?.sets[1].rpe, 8)
+        XCTAssertNil(sent?.distance)
+        XCTAssertNil(sent?.avgHeartRate)
+    }
+
+    /// `weightReps`/`repsOnly` both require at least one usable set — a form
+    /// with duration/calories filled in but every set row still blank must
+    /// not silently log zero sets.
+    @MainActor
+    func testExerciseWeightRepsRequiresAtLeastOneSet() async {
+        let stub = StubAPIClient()
+        let viewModel = ExerciseEntryEditorViewModel(exercise: Exercise.previewSquat, apiClient: stub)
+        viewModel.durationMinutesText = "20"
+        viewModel.caloriesText = "150"
+
+        let saved = await viewModel.save()
+        XCTAssertFalse(saved)
+        XCTAssertNotNil(viewModel.setsError)
+        XCTAssertTrue(stub.createdExerciseEntries.isEmpty)
+    }
+
+    /// `repsOnly` — same set list, but weight is never sent even if typed
+    /// into a row (the field isn't shown for this modality, but the row
+    /// model still carries the string, so the builder — not the UI — has to
+    /// be the thing that drops it).
+    @MainActor
+    func testExerciseRepsOnlyOmitsWeight() async {
+        let stub = StubAPIClient()
+        let pullUps = Exercise(id: "pullups", name: "Pull-ups", category: "strength", modality: .repsOnly)
+        let viewModel = ExerciseEntryEditorViewModel(exercise: pullUps, apiClient: stub)
+        viewModel.durationMinutesText = "10"
+        viewModel.caloriesText = "60"
+        viewModel.setRows[0].repsText = "12"
+
+        let saved = await viewModel.save()
+        XCTAssertTrue(saved)
+
+        let sent = try? XCTUnwrap(stub.createdExerciseEntries.first)
+        XCTAssertEqual(sent?.modality, .repsOnly)
+        XCTAssertEqual(sent?.sets.first?.reps, 12)
+    }
+
+    /// `duration` — nothing extra: no sets, no distance.
+    @MainActor
+    func testExercisePlainDurationSendsNoSetsOrDistance() async {
+        let stub = StubAPIClient()
+        let plank = Exercise(id: "plank", name: "Plank", category: "core", modality: .duration)
+        let viewModel = ExerciseEntryEditorViewModel(exercise: plank, apiClient: stub)
+        viewModel.durationMinutesText = "5"
+        viewModel.caloriesText = "20"
+
+        let saved = await viewModel.save()
+        XCTAssertTrue(saved)
+
+        let sent = try? XCTUnwrap(stub.createdExerciseEntries.first)
+        XCTAssertEqual(sent?.modality, .duration)
+        XCTAssertTrue(sent?.sets.isEmpty ?? false)
+        XCTAssertNil(sent?.distance)
+    }
+
+    /// `durationDistance` — distance is required; heart rate is optional.
+    @MainActor
+    func testExerciseDurationDistanceRequiresDistance() async {
+        let stub = StubAPIClient()
+        let viewModel = ExerciseEntryEditorViewModel(exercise: Exercise.previewRun, apiClient: stub)
+        viewModel.durationMinutesText = "30"
+        viewModel.caloriesText = "300"
 
         var saved = await viewModel.save()
         XCTAssertFalse(saved)
-        XCTAssertNotNil(viewModel.activityError)
-        XCTAssertNotNil(viewModel.durationError)
+        XCTAssertNotNil(viewModel.distanceError)
 
-        viewModel.activityName = "Cycling"
-        // Zero is not a duration — it would log a session burning nothing.
-        viewModel.durationMinutesText = "0"
+        viewModel.distanceText = "5.2"
+        viewModel.avgHeartRateText = "150"
         saved = await viewModel.save()
-        XCTAssertFalse(saved)
-        XCTAssertNotNil(viewModel.durationError)
-
-        XCTAssertTrue(stub.createdExerciseEntries.isEmpty)
-    }
-
-    @MainActor
-    func testExerciseCreateLooksUpTheActivityThenLogsTheEstimatedBurn() async {
-        let stub = StubAPIClient()
-        let viewModel = LogExerciseViewModel(apiClient: stub)
-        viewModel.activityName = "Cycling"
-        viewModel.durationMinutesText = "45"
-        viewModel.intensity = .vigorous
-
-        XCTAssertEqual(viewModel.estimatedCalories, 45 * 12)
-        let saved = await viewModel.save()
         XCTAssertTrue(saved)
 
-        XCTAssertEqual(stub.lookedUpExerciseNames, ["Cycling"])
         let sent = try? XCTUnwrap(stub.createdExerciseEntries.first)
-        XCTAssertEqual(sent?.exerciseId, "exercise-1")
-        XCTAssertEqual(sent?.durationMinutes, 45)
-        XCTAssertEqual(sent?.caloriesBurned, 540)
-        XCTAssertTrue(stub.updatedExerciseEntries.isEmpty)
+        XCTAssertEqual(sent?.modality, .durationDistance)
+        XCTAssertEqual(sent?.distance, 5.2)
+        XCTAssertEqual(sent?.avgHeartRate, 150)
+        XCTAssertTrue(sent?.sets.isEmpty ?? false)
     }
 
-    /// Diary's edit path already knows the exercise id, so it must PUT
-    /// against it rather than doing a redundant find-or-create — which would
-    /// also risk creating a second exercise if the name had been edited.
+    /// The calorie default only fills an *empty* field, and only once a
+    /// materialized exercise's own rate is known — it must never overwrite
+    /// something the user already typed.
     @MainActor
-    func testExerciseEditUpdatesInPlaceWithoutRecreatingTheActivity() async {
+    func testExerciseCalorieEstimateFillsOnlyWhenEmpty() {
         let stub = StubAPIClient()
-        let entryDate = Date(timeIntervalSince1970: 1_700_000_000)
-        let viewModel = LogExerciseViewModel(
-            editingEntryId: "entry-9", exerciseId: "exercise-7", name: "Running",
-            durationMinutes: 30, caloriesBurned: 240, entryDate: entryDate,
-            apiClient: stub
-        )
+        let viewModel = ExerciseEntryEditorViewModel(exercise: Exercise.previewSquat, apiClient: stub)
+        viewModel.durationMinutesText = "60"
+        // previewSquat.caloriesPerHour == 368, so one hour estimates 368.
+        XCTAssertEqual(viewModel.estimatedCalories, 368)
+        viewModel.applyEstimateIfNeeded()
+        XCTAssertEqual(viewModel.caloriesText, "368")
 
-        // 240/30 = 8 kcal/min, which is exactly the moderate preset.
-        XCTAssertEqual(viewModel.intensity, .moderate)
-        XCTAssertEqual(viewModel.durationMinutesText, "30")
+        viewModel.caloriesText = "999"
+        viewModel.durationMinutesText = "30"
+        XCTAssertNil(viewModel.estimatedCalories, "a non-empty field must not be treated as needing a default")
+    }
+
+    /// Diary/the Exercise tab's edit path already knows the exercise, so it
+    /// must PUT against the existing entry rather than creating a new one,
+    /// and it must reopen with the actually-logged sets/distance — not the
+    /// live catalog exercise's current defaults.
+    @MainActor
+    func testExerciseEditPrefillsFromTheLoggedEntryAndUpdatesInPlace() async {
+        let stub = StubAPIClient()
+        let entry = ExerciseSessionSummary(
+            id: "entry-9", name: "Barbell Full Squat", caloriesBurned: 240, durationMinutes: 30,
+            exerciseId: "exercise-7",
+            sets: [ExerciseSet(id: 1, setNumber: 1, setType: "Working Set", reps: 5, weight: 100, duration: nil, restTime: nil, notes: nil, rpe: 7, isPr: false, distance: nil)],
+            modality: .weightReps
+        )
+        let viewModel = ExerciseEntryEditorViewModel(editing: entry, exercise: entry.asExercise, apiClient: stub)
+
         XCTAssertTrue(viewModel.isEditing)
+        XCTAssertEqual(viewModel.durationMinutesText, "30")
+        XCTAssertEqual(viewModel.caloriesText, "240")
+        XCTAssertEqual(viewModel.setRows.first?.repsText, "5")
+        XCTAssertEqual(viewModel.setRows.first?.weightText, "100")
 
         let saved = await viewModel.save()
         XCTAssertTrue(saved)
-
-        XCTAssertTrue(stub.lookedUpExerciseNames.isEmpty, "editing must not create another exercise")
-        XCTAssertTrue(stub.createdExerciseEntries.isEmpty)
+        XCTAssertTrue(stub.createdExerciseEntries.isEmpty, "editing must not also create a new entry")
         let update = try? XCTUnwrap(stub.updatedExerciseEntries.first)
         XCTAssertEqual(update?.id, "entry-9")
         XCTAssertEqual(update?.input.exerciseId, "exercise-7")
-        XCTAssertEqual(update?.input.entryDate, entryDate, "an edit must not silently move the entry to today")
     }
 
-    /// Intensity isn't stored — it's reverse-derived from the logged
-    /// kcal/minute, so the preset that reopens is the nearest one, not
-    /// necessarily the one originally chosen.
+    /// `effectiveModality` falls back to the snapshot when the raw entry
+    /// carries no top-level `modality` (true of `daily-summary`'s shape,
+    /// verified live) — an edit must still branch to the right set editor.
     @MainActor
-    func testExerciseEditPicksTheNearestIntensityPreset() {
-        let stub = StubAPIClient()
-        let nearlyLight = LogExerciseViewModel(
-            editingEntryId: "e", exerciseId: "x", name: "Walk",
-            durationMinutes: 60, caloriesBurned: 260, entryDate: Date(), apiClient: stub
+    func testExerciseEffectiveModalityFallsBackToSnapshot() {
+        let snapshot = ExerciseSnapshot(
+            id: "x", name: "Running, Treadmill", category: "cardio", modality: .durationDistance,
+            equipment: nil, primaryMuscles: nil, secondaryMuscles: nil, instructions: nil, images: nil,
+            force: nil, level: nil, mechanic: nil
         )
-        // 4.33 kcal/min sits nearest the light preset (4), not moderate (8).
-        XCTAssertEqual(nearlyLight.intensity, .light)
-
-        let zeroDuration = LogExerciseViewModel(
-            editingEntryId: "e", exerciseId: "x", name: "Odd",
-            durationMinutes: 0, caloriesBurned: 100, entryDate: Date(), apiClient: stub
-        )
-        // Guards the divide-by-zero rather than producing a NaN rate.
-        XCTAssertEqual(zeroDuration.intensity, .moderate)
-        XCTAssertEqual(zeroDuration.durationMinutesText, "")
+        let entry = ExerciseSessionSummary(id: "e", name: "Running, Treadmill", caloriesBurned: 300, durationMinutes: 30, exerciseId: "x", exerciseSnapshot: snapshot)
+        XCTAssertEqual(entry.effectiveModality, .durationDistance)
     }
 
     // MARK: - Goals
@@ -2318,7 +2435,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         let local = makeLocal()
         let exercise = try await local.findOrCreateExercise(named: "Probe Run")
         _ = try await local.createExerciseEntry(
-            ExerciseEntryInput(exerciseId: exercise.id, durationMinutes: 30, caloriesBurned: 300, entryDate: day(0))
+            ExerciseEntryInput(exerciseId: exercise.id, modality: .duration, entryDate: day(0), durationMinutes: 30, caloriesBurned: 300)
         )
         try await local.syncActiveEnergy(kilocalories: 500, date: day(0))
 
@@ -2417,7 +2534,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         let local = makeLocal()
         let exercise = try await local.findOrCreateExercise(named: "Probe Lift")
         _ = try await local.createExerciseEntry(
-            ExerciseEntryInput(exerciseId: exercise.id, durationMinutes: 45, caloriesBurned: 250, entryDate: day(-1))
+            ExerciseEntryInput(exerciseId: exercise.id, modality: .duration, entryDate: day(-1), durationMinutes: 45, caloriesBurned: 250)
         )
         try await local.syncActiveEnergy(kilocalories: 900, date: day(-1))
 

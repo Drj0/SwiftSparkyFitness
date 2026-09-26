@@ -39,7 +39,7 @@ struct MainTabView: View {
             }
 
             Tab(value: AppTab.diary) {
-                DiaryView(user: user)
+                ExerciseTabView(user: user)
             } label: {
                 Label(AppTab.diary.label, systemImage: AppTab.diary.symbol)
             }

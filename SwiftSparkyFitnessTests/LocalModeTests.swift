@@ -172,7 +172,7 @@ final class LocalModeTests: XCTestCase {
         let date = day("2026-09-10")
         let exercise = try await local.findOrCreateExercise(named: "Run")
         _ = try await local.createExerciseEntry(
-            ExerciseEntryInput(exerciseId: exercise.id, durationMinutes: 30, caloriesBurned: 300, entryDate: date)
+            ExerciseEntryInput(exerciseId: exercise.id, modality: .duration, entryDate: date, durationMinutes: 30, caloriesBurned: 300)
         )
 
         let candidates = try await local.dailySummary(date: date).exerciseSessions
@@ -183,7 +183,7 @@ final class LocalModeTests: XCTestCase {
             id: session.id,
             ExerciseEntryInput(
                 exerciseId: try XCTUnwrap(session.exerciseId, "the row is not tap-to-edit"),
-                durationMinutes: 45, caloriesBurned: 450, entryDate: date
+                modality: .duration, entryDate: date, durationMinutes: 45, caloriesBurned: 450
             )
         )
 

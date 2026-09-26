@@ -38,7 +38,12 @@ enum AppTab: CaseIterable, Hashable {
     var label: String {
         switch self {
         case .today: return "Today"
-        case .diary: return "Diary"
+        // Module 12: this tab is now Exercise-first (a segmented control
+        // switches to the old Diary content, retitled "Food & Water") — the
+        // case name stays `diary` since renaming it would ripple through
+        // every view model/test that references the tab, for no behavioural
+        // gain; only the user-visible label and symbol change.
+        case .diary: return "Exercise"
         case .progress: return "Progress"
         case .settings: return "Settings"
         }
@@ -47,7 +52,7 @@ enum AppTab: CaseIterable, Hashable {
     var symbol: String {
         switch self {
         case .today: return "sunrise.circle"
-        case .diary: return "list.bullet.circle"
+        case .diary: return "figure.run.circle"
         case .progress: return "chart.line.uptrend.xyaxis.circle"
         case .settings: return "gearshape.circle"
         }

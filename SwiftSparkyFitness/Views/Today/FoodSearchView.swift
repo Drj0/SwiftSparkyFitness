@@ -305,85 +305,10 @@ struct FoodSearchView: View {
     }
 }
 
-private struct NoResultsView: View {
-    let query: String
-    let onManualEntry: () -> Void
-
-    var body: some View {
-        VStack(spacing: 10) {
-            Text("🔎").font(.system(size: 36))
-            Text("No results for \"\(query)\"")
-                .appDisplay(18)
-                .foregroundStyle(AppColor.ink)
-                .multilineTextAlignment(.center)
-            Text("We couldn't find a match in the food database. You can add it yourself instead.")
-                .appBody(13)
-                .foregroundStyle(AppColor.secondaryText)
-                .multilineTextAlignment(.center)
-                .padding(.bottom, 8)
-            Button(action: onManualEntry) {
-                Text("Enter food manually")
-                    .appBody(15, weight: .semibold)
-                    .foregroundStyle(.white)
-                    .padding(.horizontal, 22)
-                    .padding(.vertical, 12)
-                    .background(AppColor.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-            .buttonStyle(.pressable)
-        }
-        .padding(.horizontal, 44)
-    }
-}
-
-private struct SearchNetworkErrorView: View {
-    let onRetry: () -> Void
-    let onManualEntry: () -> Void
-
-    var body: some View {
-        VStack(spacing: 10) {
-            ZStack {
-                Circle().fill(AppColor.errorBackground).frame(width: 60, height: 60)
-                Image(systemName: "wifi.slash")
-                    .font(.system(size: 22))
-                    .foregroundStyle(AppColor.destructive)
-            }
-            .padding(.bottom, 4)
-            .accessibilityHidden(true)
-            Text("Can't reach the food database")
-                .appDisplay(18)
-                .foregroundStyle(AppColor.ink)
-                .multilineTextAlignment(.center)
-            Text("Check your connection and try again. You can still add this food yourself.")
-                .appBody(13)
-                .foregroundStyle(AppColor.secondaryText)
-                .multilineTextAlignment(.center)
-                .padding(.bottom, 8)
-
-            Button(action: onRetry) {
-                Text("Retry")
-                    .appBody(15, weight: .semibold)
-                    .foregroundStyle(.white)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 13)
-                    .background(AppColor.accent)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-            .buttonStyle(.pressableLarge)
-            Button(action: onManualEntry) {
-                Text("Enter food manually")
-                    .appBody(15, weight: .semibold)
-                    .foregroundStyle(AppColor.ink)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 13)
-                    .background(AppColor.inputBackground)
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-            }
-            .buttonStyle(.pressableLarge)
-        }
-        .padding(.horizontal, 40)
-    }
-}
+// NoResultsView/SearchNetworkErrorView moved to SearchResultStates.swift so
+// ExerciseSearchView (Module 12) could reuse them instead of duplicating —
+// both took a `subject`/`manualEntryLabel` pair so "food database"/"Enter
+// food manually" isn't hardcoded into copy the exercise screen also shows.
 
 #Preview {
     FoodSearchView(mealTypes: [

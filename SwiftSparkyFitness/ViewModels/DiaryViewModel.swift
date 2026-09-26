@@ -40,6 +40,10 @@ final class DiaryViewModel: ObservableObject {
 
     @Published var editingFoodEntry: FoodEntrySummary?
     @Published var editingExerciseEntry: ExerciseSessionSummary?
+    /// Module 12: the Exercise segment's "+" — search-and-materialize lives
+    /// in its own sheet rather than this view model, same separation Today's
+    /// FoodSearchView already has from TodayViewModel.
+    @Published var isPresentingExerciseSearch = false
 
     // MARK: - Module 4
 

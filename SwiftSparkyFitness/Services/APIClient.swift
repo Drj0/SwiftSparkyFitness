@@ -57,8 +57,21 @@ protocol APIClientProtocol {
     func createFoodEntry(_ input: FoodEntryInput) async throws
     func updateFoodEntry(id: String, _ input: FoodEntryInput) async throws
     func deleteFoodEntry(id: String) async throws
+    /// Exercises already in the user's own library (materialized custom or
+    /// external picks) — the only ones an entry can log against.
     func searchExercises(query: String) async throws -> [Exercise]
-    func findOrCreateExercise(named name: String) async throws -> Exercise
+    func recentExercises() async throws -> [Exercise]
+    /// Free Exercise DB + Wger — both keyless and pre-configured on this
+    /// server, confirmed live. Not yet in the user's own library; see
+    /// `materializeExternalExercise`.
+    func searchExternalExercises(query: String) async throws -> [ExternalExerciseResult]
+    /// Copies a search-external result into the user's own `exercises` row
+    /// — required before it can be logged, since `exercise_entries.exercise_id`
+    /// FKs to the user's own table, not the provider's.
+    func materializeExternalExercise(_ result: ExternalExerciseResult) async throws -> Exercise
+    /// For anything not found via search. This is the one exercise endpoint
+    /// that genuinely needs multipart — see APIClient.
+    func createCustomExercise(_ input: CustomExerciseInput) async throws -> Exercise
     func createExerciseEntry(_ input: ExerciseEntryInput) async throws -> ExerciseSessionSummary
     func updateExerciseEntry(id: String, _ input: ExerciseEntryInput) async throws -> ExerciseSessionSummary
     func deleteExerciseEntry(id: String) async throws
@@ -106,11 +119,24 @@ struct FoodEntryInput {
     let entryDate: Date
 }
 
+/// What the app sends to log or edit a session. `calories_burned` and
+/// `duration_minutes` are required and client-supplied — the server stores
+/// whatever is sent verbatim, never recalculating (verified live: sending
+/// 150 kcal against an exercise whose own rate would compute ~123 stored
+/// 150 exactly). `sets` only makes sense for `weightReps`/`repsOnly`;
+/// `distance`/`avgHeartRate` only for `durationDistance`. The view model
+/// builds one of these per modality — see ExerciseEntryEditorViewModel.
 struct ExerciseEntryInput {
     let exerciseId: String
-    let durationMinutes: Double
-    let caloriesBurned: Double
+    let modality: ExerciseModality
     let entryDate: Date
+    var entryTime: String?
+    var durationMinutes: Double?
+    let caloriesBurned: Double
+    var distance: Double?
+    var avgHeartRate: Int?
+    var notes: String?
+    var sets: [ExerciseSetInput] = []
 }
 
 final class APIClient: APIClientProtocol {
@@ -580,25 +606,111 @@ final class APIClient: APIClientProtocol {
 
     // MARK: - Exercise
 
+    /// Exercises already materialized into the user's own library.
     func searchExercises(query: String) async throws -> [Exercise] {
         try await send("api/exercises/search", query: [URLQueryItem(name: "searchTerm", value: query)])
     }
 
-    /// Exercise creation is multipart on this API (a JSON string field
-    /// inside form-data, not a JSON body) — verified live, the plain-JSON
-    /// POST /exercises/ the doc implies returns "Invalid exercise payload."
-    func findOrCreateExercise(named name: String) async throws -> Exercise {
-        let matches = try await searchExercises(query: name)
-        if let existing = matches.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
-            return existing
-        }
+    func recentExercises() async throws -> [Exercise] {
+        try await send("api/exercises/recent")
+    }
 
+    /// Which provider row (id + type) backs each keyless external source.
+    /// Cached the same way `usdaProviderId()` caches food's USDA row — the
+    /// id can't change without a Settings edit this app doesn't expose, and
+    /// a lookup per keystroke would double every search's request count.
+    private actor ExternalExerciseProviderCache {
+        private var providers: [ExternalProvider]?
+
+        func all(loading: () async throws -> [ExternalProvider]) async -> [ExternalProvider] {
+            if let providers { return providers }
+            let resolved = (try? await loading()) ?? []
+            providers = resolved
+            return resolved
+        }
+    }
+
+    private let externalExerciseProviderCache = ExternalExerciseProviderCache()
+
+    /// Free Exercise DB and Wger — both keyless and pre-configured on this
+    /// server (verified live: `is_active: true`, `is_public: true`, no
+    /// stored credentials). Garmin is also an `external_data_providers` row
+    /// but is a full OAuth device-sync integration, not a search source, so
+    /// it's excluded here.
+    private func exerciseProviders() async -> [ExternalProvider] {
+        await externalExerciseProviderCache.all {
+            let all: [ExternalProvider] = try await send("api/external-providers")
+            return all.filter { ["free-exercise-db", "wger"].contains($0.providerType) && $0.isActive != false }
+        }
+    }
+
+    /// Alternates the two providers' results the same way food alternates
+    /// USDA/OpenFoodFacts (Module 8) — concatenating buried whichever source
+    /// the query actually meant.
+    func searchExternalExercises(query: String) async throws -> [ExternalExerciseResult] {
+        let providers = await exerciseProviders()
+        guard !providers.isEmpty else { return [] }
+        let perProvider: [[ExternalExerciseResult]] = await withTaskGroup(of: [ExternalExerciseResult].self) { group in
+            for provider in providers {
+                group.addTask { [self] in
+                    (try? await send(
+                        "api/exercises/search-external",
+                        query: [
+                            URLQueryItem(name: "query", value: query),
+                            URLQueryItem(name: "providerId", value: provider.id),
+                            URLQueryItem(name: "providerType", value: provider.providerType),
+                        ]
+                    )) ?? []
+                }
+            }
+            var results: [[ExternalExerciseResult]] = []
+            for await result in group { results.append(result) }
+            return results
+        }
+        var merged: [ExternalExerciseResult] = []
+        var iterators = perProvider.map { $0.makeIterator() }
+        while true {
+            var addedAny = false
+            for index in iterators.indices {
+                if let next = iterators[index].next() {
+                    merged.append(next)
+                    addedAny = true
+                }
+            }
+            if !addedAny { break }
+        }
+        return merged
+    }
+
+    private struct MaterializeFreeExerciseDBRequest: Encodable { let exerciseId: String }
+    private struct MaterializeWgerRequest: Encodable { let wgerExerciseId: String }
+
+    /// Copies a search-external hit into the user's own `exercises` table —
+    /// required before it can be logged. Verified live: the response is a
+    /// full `Exercise` row with a real local `id` and (for Free Exercise DB)
+    /// a real `caloriesPerHour`, where the search result itself always
+    /// carried 0 for that field.
+    func materializeExternalExercise(_ result: ExternalExerciseResult) async throws -> Exercise {
+        switch result.source {
+        case "wger":
+            return try await send("api/exercises/add-external", method: "POST", body: MaterializeWgerRequest(wgerExerciseId: result.id))
+        default:
+            return try await send("api/freeexercisedb/add", method: "POST", body: MaterializeFreeExerciseDBRequest(exerciseId: result.id))
+        }
+    }
+
+    /// `POST /api/exercises/` — the one exercise endpoint that genuinely
+    /// needs multipart/form-data with a JSON string field named
+    /// `exerciseData`; a plain JSON body is "Invalid exercise payload."
+    /// (Verified live; see PROGRESS.md's correction — this does NOT apply
+    /// to logging, only to adding a new named exercise to the catalog.)
+    func createCustomExercise(_ input: CustomExerciseInput) async throws -> Exercise {
         let boundary = UUID().uuidString
         var request = URLRequest(url: baseURL.appendingPathComponent("api/exercises/"))
         request.httpMethod = "POST"
         request.setValue("multipart/form-data; boundary=\(boundary)", forHTTPHeaderField: "Content-Type")
 
-        let payload = try encoder.encode(["name": name, "category": "Other", "source": "manual"])
+        let payload = try encoder.encode(input)
         var body = Data()
         // ASCII literals encode to UTF-8 unconditionally; these can't fail.
         body.append(Data("--\(boundary)\r\n".utf8))
@@ -610,58 +722,77 @@ final class APIClient: APIClientProtocol {
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
-            throw failure(status: http.statusCode, data: data, fallback: "Couldn't save that activity.")
+            throw failure(status: http.statusCode, data: data, fallback: "Couldn't save that exercise.")
         }
         return try decoder.decode(Exercise.self, from: data)
     }
 
     private struct ExerciseEntryRequest: Encodable {
         let exerciseId: String
+        let modality: ExerciseModality
         let entryDate: String
-        let durationMinutes: Double
+        let entryTime: String?
+        let durationMinutes: Double?
         let caloriesBurned: Double
+        let distance: Double?
+        let avgHeartRate: Int?
+        let notes: String?
+        let sets: [ExerciseSetInput]
+    }
+
+    private func exerciseEntryBody(_ input: ExerciseEntryInput) -> ExerciseEntryRequest {
+        ExerciseEntryRequest(
+            exerciseId: input.exerciseId, modality: input.modality,
+            entryDate: dateFormatter.string(from: input.entryDate), entryTime: input.entryTime,
+            durationMinutes: input.durationMinutes, caloriesBurned: input.caloriesBurned,
+            distance: input.distance, avgHeartRate: input.avgHeartRate, notes: input.notes,
+            sets: input.sets
+        )
+    }
+
+    /// `POST /api/exercise-entries` — plain `application/json`, always has
+    /// been. **Correction:** this endpoint was previously believed to need
+    /// multipart too; that requirement belongs to `POST /api/exercises/`
+    /// (catalog creation) alone. Verified live end-to-end for all four
+    /// modalities on 2026-09-26.
+    ///
+    /// The response's field names differ from `daily-summary`'s nested
+    /// shape (`exercise_name` here vs. `name`/`exercise_snapshot.name`
+    /// there) — this ack struct matches the create/update response
+    /// specifically, not `ExerciseSessionSummary`'s general decode.
+    private struct ExerciseEntryAck: Decodable {
+        let id: String
+        let exerciseName: String?
+        let caloriesBurned: Double?
+        let durationMinutes: Double?
+        let entryDate: String?
+        let entryTime: String?
+        let notes: String?
+        let distance: Double?
+        let avgHeartRate: Int?
+        let modality: ExerciseModality?
+        let sets: [ExerciseSet]?
+    }
+
+    private func summary(from ack: ExerciseEntryAck, exerciseId: String) -> ExerciseSessionSummary {
+        ExerciseSessionSummary(
+            id: ack.id, name: ack.exerciseName,
+            caloriesBurned: ack.caloriesBurned, durationMinutes: ack.durationMinutes,
+            exerciseId: exerciseId,
+            entryDate: ack.entryDate, entryTime: ack.entryTime, notes: ack.notes,
+            distance: ack.distance, avgHeartRate: ack.avgHeartRate, sets: ack.sets,
+            modality: ack.modality, exerciseSnapshot: nil
+        )
     }
 
     func createExerciseEntry(_ input: ExerciseEntryInput) async throws -> ExerciseSessionSummary {
-        let body = ExerciseEntryRequest(
-            exerciseId: input.exerciseId,
-            entryDate: dateFormatter.string(from: input.entryDate),
-            durationMinutes: input.durationMinutes,
-            caloriesBurned: input.caloriesBurned
-        )
-        struct CreatedEntry: Decodable {
-            let id: String
-            let exerciseName: String?
-            let caloriesBurned: Double?
-            let durationMinutes: Double?
-        }
-        let created: CreatedEntry = try await send("api/exercise-entries", method: "POST", body: body)
-        return ExerciseSessionSummary(
-            id: created.id, name: created.exerciseName,
-            caloriesBurned: created.caloriesBurned, durationMinutes: created.durationMinutes,
-            exerciseId: input.exerciseId
-        )
+        let ack: ExerciseEntryAck = try await send("api/exercise-entries", method: "POST", body: exerciseEntryBody(input))
+        return summary(from: ack, exerciseId: input.exerciseId)
     }
 
     func updateExerciseEntry(id: String, _ input: ExerciseEntryInput) async throws -> ExerciseSessionSummary {
-        let body = ExerciseEntryRequest(
-            exerciseId: input.exerciseId,
-            entryDate: dateFormatter.string(from: input.entryDate),
-            durationMinutes: input.durationMinutes,
-            caloriesBurned: input.caloriesBurned
-        )
-        struct UpdatedEntry: Decodable {
-            let id: String
-            let exerciseName: String?
-            let caloriesBurned: Double?
-            let durationMinutes: Double?
-        }
-        let updated: UpdatedEntry = try await send("api/exercise-entries/\(id)", method: "PUT", body: body)
-        return ExerciseSessionSummary(
-            id: updated.id, name: updated.exerciseName,
-            caloriesBurned: updated.caloriesBurned, durationMinutes: updated.durationMinutes,
-            exerciseId: input.exerciseId
-        )
+        let ack: ExerciseEntryAck = try await send("api/exercise-entries/\(id)", method: "PUT", body: exerciseEntryBody(input))
+        return summary(from: ack, exerciseId: input.exerciseId)
     }
 
     func deleteExerciseEntry(id: String) async throws {
@@ -682,9 +813,9 @@ final class APIClient: APIClientProtocol {
     /// of "bogus" is stored happily), so the caller is the only guard.
     func updateUserPreference(_ setting: UserPreferences.Setting, to value: String) async throws -> UserPreferences {
         var body: [String: JSONValue] = [:]
-        // Decimal places is the one numeric preference; sending it as a
-        // string would store a string.
-        body[setting.apiKey] = setting == .decimals
+        // Sending a numeric preference (decimal places, the exercise
+        // calorie percentage) as a string would store a string.
+        body[setting.apiKey] = setting.isNumeric
             ? .number(Double(value) ?? 0)
             : .string(value)
         // The standard coders are right here despite the snake_case keys:

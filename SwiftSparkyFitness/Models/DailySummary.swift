@@ -95,14 +95,64 @@ struct FoodEntrySummary: Decodable, Identifiable {
     let servingUnit: String?
 }
 
+/// The exercise's own metadata as it was at the moment this session was
+/// logged — present on `GET /api/daily-summary` entries as `exercise_snapshot`
+/// (verified live 2026-09-26). The whole point is that it never changes
+/// underneath a past entry: `exercise_entries.exercise_id` is nullable with
+/// `ON DELETE SET NULL`, so editing or deleting the catalog exercise later
+/// must not rewrite history. Read this for display, never re-fetch the live
+/// catalog row for an already-logged entry.
+struct ExerciseSnapshot: Decodable {
+    let id: String?
+    let name: String?
+    let category: String?
+    let modality: ExerciseModality?
+    let equipment: [String]?
+    let primaryMuscles: [String]?
+    let secondaryMuscles: [String]?
+    let instructions: [String]?
+    let images: [String]?
+    let force: String?
+    let level: String?
+    let mechanic: String?
+}
+
 struct ExerciseSessionSummary: Decodable, Identifiable {
     let id: String
+    /// Present at top level on both shapes this decodes (the raw
+    /// create/update ack and `daily-summary`'s nested entry) — kept as the
+    /// display name and as the "Active Calories" sentinel check below.
     let name: String?
     let caloriesBurned: Double?
     let durationMinutes: Double?
-    /// Diary-only: needed to reopen LogExerciseView pre-loaded for editing
-    /// without a redundant findOrCreateExercise(named:) lookup.
+    /// Diary-only: needed to reopen the entry editor pre-loaded for editing
+    /// without a redundant catalog lookup.
     let exerciseId: String?
+
+    var entryDate: String? = nil
+    var entryTime: String? = nil
+    var notes: String? = nil
+    /// Cardio-only (`duration_distance` modality) — real top-level columns
+    /// on `exercise_entries`, confirmed live, not something bolted on via
+    /// notes text.
+    var distance: Double? = nil
+    var avgHeartRate: Int? = nil
+    /// Strength (`weight_reps`/`reps_only` modality) — a real one-to-many
+    /// `exercise_entry_sets` table, not a flat reps/weight trio. Absent
+    /// (nil) rather than `[]` on rows that predate this or on cardio
+    /// entries, so `setsList` is the safe way to read it.
+    var sets: [ExerciseSet]? = nil
+    var setsList: [ExerciseSet] { sets ?? [] }
+    /// Present on the raw entry create/update response; `daily-summary`
+    /// only carries it inside `exerciseSnapshot`, hence the fallback below.
+    var modality: ExerciseModality? = nil
+    var exerciseSnapshot: ExerciseSnapshot? = nil
+
+    /// What the logging form should branch its editor on when this entry is
+    /// reopened — the entry's own modality if present, else the snapshot's.
+    var effectiveModality: ExerciseModality {
+        modality ?? exerciseSnapshot?.modality ?? .duration
+    }
 
     /// The server records a Health active-energy figure as an exercise entry
     /// against a sentinel exercise it names "Active Calories", rather than as
@@ -126,6 +176,19 @@ struct ExerciseSessionSummary: Decodable, Identifiable {
 
     var isHealthActiveEnergy: Bool {
         name == Self.healthActiveEnergyName
+    }
+
+    /// Builds just enough of an `Exercise` to reopen this session in the
+    /// entry editor for edits — from this entry's own snapshot, not a fresh
+    /// catalog fetch. Deliberately no `caloriesPerHour`: edit mode always
+    /// prefills a real logged calorie figure, so the editor's "suggest a
+    /// default from the rate" path (which only fires when that field is
+    /// still empty) never needs one here.
+    var asExercise: Exercise {
+        Exercise(
+            id: exerciseId ?? "", name: name ?? exerciseSnapshot?.name ?? "Exercise",
+            category: exerciseSnapshot?.category, modality: effectiveModality
+        )
     }
 }
 

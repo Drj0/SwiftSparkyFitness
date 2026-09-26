@@ -159,7 +159,10 @@ final class LocalAPIClient: APIClientProtocol {
             defaultWeightUnit: row?.defaultWeightUnit,
             defaultMeasurementUnit: row?.defaultMeasurementUnit,
             waterDisplayUnit: row?.waterDisplayUnit,
-            measurementDecimalPlaces: row?.measurementDecimalPlaces
+            measurementDecimalPlaces: row?.measurementDecimalPlaces,
+            defaultDistanceUnit: row?.defaultDistanceUnit,
+            activityLevel: row?.activityLevel,
+            exerciseCaloriePercentage: row?.exerciseCaloriePercentage
         )
     }
 
@@ -174,6 +177,9 @@ final class LocalAPIClient: APIClientProtocol {
         case .measurement: row.defaultMeasurementUnit = value
         case .water: row.waterDisplayUnit = value
         case .decimals: row.measurementDecimalPlaces = Int(value) ?? 0
+        case .distance: row.defaultDistanceUnit = value
+        case .activityLevel: row.activityLevel = value
+        case .exerciseCaloriePercentage: row.exerciseCaloriePercentage = Double(value) ?? 100
         }
         store.save()
         return try await userPreferences()
@@ -264,13 +270,36 @@ final class LocalAPIClient: APIClientProtocol {
         )
     }
 
+    static func exercise(_ row: LocalExercise) -> Exercise {
+        Exercise(
+            id: row.id, name: row.name, category: row.category,
+            modality: row.modality.flatMap(ExerciseModality.init(rawValue:)),
+            caloriesPerHour: row.caloriesPerHour, source: "manual", isCustom: true
+        )
+    }
+
+    static func exerciseSets(_ row: LocalExerciseEntry) -> [ExerciseSet]? {
+        guard let json = row.setsJSON, let data = json.data(using: .utf8),
+              let inputs = try? JSONDecoder().decode([ExerciseSetInput].self, from: data) else { return nil }
+        return inputs.enumerated().map { index, input in
+            ExerciseSet(
+                id: index, setNumber: input.setNumber, setType: input.setType,
+                reps: input.reps, weight: input.weight, duration: nil, restTime: nil,
+                notes: input.notes, rpe: input.rpe, isPr: false, distance: nil
+            )
+        }
+    }
+
     static func exerciseSummary(_ row: LocalExerciseEntry) -> ExerciseSessionSummary {
         ExerciseSessionSummary(
             id: row.id,
             name: row.name,
             caloriesBurned: row.caloriesBurned,
             durationMinutes: row.durationMinutes,
-            exerciseId: row.exerciseId
+            exerciseId: row.exerciseId,
+            entryDate: LocalDay.key(row.entryDate), entryTime: row.entryTime, notes: row.notes,
+            distance: row.distance, avgHeartRate: row.avgHeartRate, sets: exerciseSets(row),
+            modality: row.modality.flatMap(ExerciseModality.init(rawValue:)), exerciseSnapshot: nil
         )
     }
 }
