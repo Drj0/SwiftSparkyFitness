@@ -17,6 +17,17 @@
 import SwiftUI
 
 struct ServerAddressSheet: View {
+    /// "Sparky Server" when editing an address that's already in use;
+    /// "Connect to Sparky Server" when this is the step that joins one.
+    var title: String = "Sparky Server"
+    /// "Save" when editing, "Connect" when joining. The override variant is
+    /// built from this, so a failed probe offers "Connect anyway".
+    var saveTitle: String = "Save"
+    /// Shown under the field. Carries the consequence of the action the sheet
+    /// is about to take — which is why local mode's "your on-device data
+    /// stays here" paragraph lives here now instead of sitting permanently in
+    /// Settings, explaining a switch nobody had touched yet.
+    var note: String? = nil
     var onSaved: () -> Void = {}
 
     /// Why an address wasn't accepted. The two kinds are not interchangeable:
@@ -34,7 +45,10 @@ struct ServerAddressSheet: View {
             case .malformed:
                 return "That doesn't look like a web address — it should start with http:// and name your server."
             case .unreachable(let host):
-                return "Couldn't reach \(host). Check the server is running and your phone is on the same network."
+                // Not "check you're on the same network", which assumed the
+                // server sits on the phone's LAN — true for a box at home,
+                // false for a VPS or anything behind a domain.
+                return "Couldn't reach \(host). Check the server is running and that this phone can reach it."
             case .notSparkyFitness(let host):
                 return "\(host) answered, but it doesn't look like a SparkyFitness server. Check the port — the server usually runs on 3010."
             }
@@ -56,10 +70,10 @@ struct ServerAddressSheet: View {
     var body: some View {
         VStack(spacing: 0) {
             SheetHeader(
-                title: "Server",
+                title: title,
                 onCancel: { dismiss() },
                 action: SheetAction(
-                    offersOverride ? "Save anyway" : "Save",
+                    offersOverride ? "\(saveTitle) anyway" : saveTitle,
                     isBusy: isChecking,
                     perform: save
                 )
@@ -67,10 +81,6 @@ struct ServerAddressSheet: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
-                    Text("Where is your SparkyFitness server?")
-                        .appBody(14, weight: .semibold)
-                        .foregroundStyle(AppColor.ink)
-
                     // The field draws its own error text and border, so the
                     // message goes through it rather than a second red label.
                     AppTextField(
@@ -84,13 +94,31 @@ struct ServerAddressSheet: View {
                     )
                     .onSubmit(save)
 
-                    Text("On a Mac, run `scutil --get LocalHostName` and use `http://<that>.local:3010`. The Bonjour name is stabler than the IP, which changes on every DHCP renewal.")
+                    // One line, and nothing about where the server runs.
+                    //
+                    // This used to open with "On a Mac, run `scutil --get
+                    // LocalHostName`…" and a note about Bonjour names beating
+                    // DHCP leases, then insist the phone be on the same
+                    // network. All of it was this project's own dev setup
+                    // written up as instructions: a SparkyFitness server is
+                    // just as often a Linux box, a NAS, a VPS or a domain
+                    // behind a reverse proxy — none of which are on the
+                    // phone's LAN, and none of which have `scutil`.
+                    //
+                    // What every one of those cases shares is the address you
+                    // already use to reach it, so that's all this asks for.
+                    Text("The address you'd open in a browser, including the port — SparkyFitness usually runs on 3010.")
                         .appBody(12)
                         .foregroundStyle(AppColor.placeholder)
+                        .fixedSize(horizontal: false, vertical: true)
 
-                    Text("Your phone has to be on the same network as the server.")
-                        .appBody(12)
-                        .foregroundStyle(AppColor.placeholder)
+                    if let note {
+                        Text(note)
+                            .appBody(12)
+                            .foregroundStyle(AppColor.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .padding(.top, 2)
+                    }
                 }
                 .padding(18)
             }

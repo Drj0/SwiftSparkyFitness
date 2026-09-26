@@ -24,8 +24,14 @@ enum ServerConfig {
 
     /// Deliberately not a real host — a fresh clone should fail to connect in
     /// an obvious way and be pointed at the user's own server, rather than
-    /// silently trying to reach someone else's Mac.
-    static let placeholder = "http://your-mac.local:3010"
+    /// silently trying to reach someone else's.
+    ///
+    /// Host-agnostic on purpose. This said `your-mac.local` for a while,
+    /// which was this project's own development setup leaking into everyone
+    /// else's: a SparkyFitness server is just as likely to be a Linux box, a
+    /// NAS, a VPS or a domain behind a reverse proxy, and a placeholder that
+    /// names one platform reads as a requirement.
+    static let placeholder = "http://your-server:3010"
 
     /// Resolution order: an explicit SERVER_URL in the environment (handy for
     /// dev — set it in your own scheme, which lives in gitignored xcuserdata,

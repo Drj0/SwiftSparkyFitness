@@ -37,16 +37,31 @@
 //  you'd been denied would itself leak health information — the fact that the
 //  user has something they don't want to share.
 //
-//  `statusForAuthorizationRequest` would distinguish only "the sheet would
-//  appear" (never asked) from "it wouldn't" (already answered, either way) —
-//  not granted from refused — so it answers nothing the UI can act on and
-//  isn't used. After the sheet, a refused read and a genuinely empty day are
-//  identical: both return no samples.
+//  `statusForAuthorizationRequest` distinguishes only "the sheet would appear"
+//  (never asked) from "it wouldn't" (already answered, either way) — not
+//  granted from refused. After the sheet, a refused read and a genuinely empty
+//  day are identical: both return no samples.
 //
 //  This is why the design's "Health data paused" state isn't built as
 //  described — the app cannot know it's paused. `EnergyReading` separates "no
 //  samples" from a number, and the UI says there's no data rather than
 //  claiming permission was refused, which is a claim this API can't support.
+//
+//  WHAT THE SWITCH CAN STILL LEARN
+//  -------------------------------
+//  The switch used to stay on whatever happened, which made it a claim the app
+//  couldn't back. There are two things it *can* find out, and it now does:
+//
+//    1. **Was the question even answered?** If the sheet is swiped away, the
+//       status stays `.shouldRequest`. That is a definite "no permission was
+//       granted", so the switch turns itself back off. (An explicit "Don't
+//       Allow" reads as `.unnecessary`, exactly like "Allow" — that one is
+//       genuinely undetectable, by design.)
+//    2. **Is any data actually arriving?** `hasRecentEnergy` asks for a week
+//       at once. Nothing coming back does NOT prove refusal — a sedentary
+//       week and a new iPhone look the same — so it does not flip the switch.
+//       It changes what the row *says*, from implying it works to admitting
+//       nothing has arrived, which is the honest version of the same fact.
 //
 
 import Foundation
@@ -77,10 +92,24 @@ enum HealthSync {
     }
 }
 
+/// What asking for permission established. Deliberately not "granted" and
+/// "denied": HealthKit won't say which, and a type that pretended otherwise
+/// would invite the UI to claim it.
+enum HealthAuthorizationOutcome: Equatable {
+    /// The sheet was shown and the user responded — allow or deny, unknowable.
+    case answered
+    /// The question is still outstanding: the sheet was dismissed without an
+    /// answer, or couldn't be shown. Nothing was granted.
+    case unanswered
+}
+
 protocol HealthKitReading {
     var isAvailable: Bool { get }
-    func requestAuthorization() async throws
+    func requestAuthorization() async throws -> HealthAuthorizationOutcome
     func activeEnergy(on date: Date) async throws -> EnergyReading
+    /// Whether Health has handed over any active energy in the last `days`.
+    /// False means "nothing arrived", never "you were refused".
+    func hasRecentEnergy(days: Int) async -> Bool
 }
 
 final class HealthKitService: HealthKitReading {
@@ -93,12 +122,35 @@ final class HealthKitService: HealthKitReading {
 
     var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
 
-    /// Presents the permission sheet. Returning without throwing means the
-    /// sheet was shown and dismissed — NOT that access was granted, which
-    /// HealthKit won't disclose.
-    func requestAuthorization() async throws {
-        guard isAvailable else { return }
+    /// Presents the permission sheet and reports whether it was answered at
+    /// all. Never reports *how* — see the note at the top of this file.
+    func requestAuthorization() async throws -> HealthAuthorizationOutcome {
+        guard isAvailable else { return .unanswered }
         try await store.requestAuthorization(toShare: [], read: readTypes)
+
+        // Still `.shouldRequest` means the sheet came and went without a
+        // choice, so there is definitely no permission to act on.
+        let status = try await store.statusForAuthorizationRequest(toShare: [], read: readTypes)
+        return status == .shouldRequest ? .unanswered : .answered
+    }
+
+    /// One statistics query across the whole window rather than a query per
+    /// day — this runs right after the permission sheet, while the user is
+    /// still looking at the switch.
+    func hasRecentEnergy(days: Int) async -> Bool {
+        guard isAvailable else { return false }
+
+        let calendar = Calendar(identifier: .gregorian)
+        let end = calendar.startOfDay(for: Date().addingTimeInterval(86_400))
+        guard let start = calendar.date(byAdding: .day, value: -days, to: end) else { return false }
+
+        let range = HKQuery.predicateForSamples(withStart: start, end: end)
+        let descriptor = HKStatisticsQueryDescriptor(
+            predicate: .quantitySample(type: energyType, predicate: range),
+            options: .cumulativeSum
+        )
+        guard let sum = try? await descriptor.result(for: store)?.sumQuantity() else { return false }
+        return sum.doubleValue(for: .kilocalorie()) > 0
     }
 
     /// Total active energy recorded for the calendar day containing `date`.

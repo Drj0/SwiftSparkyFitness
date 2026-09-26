@@ -79,8 +79,9 @@ final class WaterContainersViewModel: ObservableObject {
         errorMessage = nil
         defer { busyContainerId = nil }
         do {
+            // No haptic here: the row fires one on the tap. A selection buzz
+            // that waits for the server lands after the thumb has left.
             try await apiClient.setPrimaryWaterContainer(id: container.id)
-            Haptics.selection()
             await load()
         } catch {
             errorMessage = error.localizedDescription

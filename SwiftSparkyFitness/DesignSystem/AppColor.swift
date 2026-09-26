@@ -65,6 +65,11 @@ enum AppColor {
     static let energyGraphic = Color.adaptive(light: Color(hex: "1FA98A"), dark: Color(hex: "2FD3AC"))
     static let carbsGraphic = Color.adaptive(light: Color(hex: "F5A623"), dark: Color(hex: "F5A623"))
     static let water = Color.adaptive(light: Color(hex: "2F9BEA"), dark: Color(hex: "5AC8FA"))
+    /// iCloud's own blue, not this app's water blue — the row it colours is a
+    /// status readout for someone else's service, and matching the cloud they
+    /// already know from Settings.app says "this is that" faster than any
+    /// label. Lifted a step in dark mode, as Apple's own system blue is.
+    static let iCloud = Color.adaptive(light: Color(hex: "3693F3"), dark: Color(hex: "4FA6FF"))
     static let waterSoft = Color.adaptive(light: Color(hex: "E7F3FD"), dark: Color(hex: "172A3A"))
     static let destructive = Color(hex: "E14B4B")
 

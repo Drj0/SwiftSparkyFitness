@@ -48,8 +48,10 @@ final class UnitPreferencesViewModel: ObservableObject {
         errorMessage = nil
         defer { busySetting = nil }
         do {
+            // No haptic here: the picker fires one as the choice is made. A
+            // buzz that waits for the server arrives after the menu has
+            // already closed on the new value.
             preferences = try await apiClient.updateUserPreference(setting, to: value)
-            Haptics.selection()
         } catch {
             errorMessage = error.localizedDescription
             Haptics.error()

@@ -2,10 +2,7 @@
 //  Haptics.swift
 //  SwiftSparkyFitness
 //
-//  Thin wrappers over UIKit's feedback generators so call sites read as
-//  intent (`.selection()`, `.success()`) instead of repeating
-//  `UIImpactFeedbackGenerator(style:).impactOccurred()` everywhere.
-//
+
 
 import UIKit
 

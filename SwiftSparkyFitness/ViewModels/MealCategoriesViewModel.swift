@@ -72,8 +72,11 @@ final class MealCategoriesViewModel: ObservableObject {
         errorMessage = nil
         defer { busyCategoryId = nil }
         do {
+            // No haptic here: the screen fires one the moment the switch is
+            // flipped. Acknowledging a tap only after a round trip is the
+            // same lag PressableStyle exists to fix, and on a slow server it
+            // buzzed a second after the thumb had moved on.
             _ = try await apiClient.updateMealType(id: category.id, MealTypeInput(isVisible: visible))
-            Haptics.selection()
             await load()
         } catch {
             errorMessage = error.localizedDescription

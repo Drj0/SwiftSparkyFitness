@@ -5,12 +5,19 @@
 //  Picks the units the app labels numbers with. See UnitPreferencesViewModel
 //  for why nothing is converted — and why the screen says so.
 //
+//  Pushed from Settings rather than presented: there is nothing here to
+//  commit, so a sheet's "Done" would only have been a way out of a screen
+//  that never needed one. Each choice writes immediately.
+//
+//  The four settings are menu pickers rather than rows of chips. A picker
+//  shows the *current* value on the row itself, which is the thing you came
+//  here to check, and it collapses four two-line groups into four lines.
+//
 
 import SwiftUI
 
 struct UnitPreferencesView: View {
     @StateObject private var viewModel = UnitPreferencesViewModel()
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private let onChanged: () -> Void
@@ -20,86 +27,99 @@ struct UnitPreferencesView: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            SheetHeader(title: "Units", cancelTitle: "Done") {
-                onChanged()
-                dismiss()
-            }
-
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    if let errorMessage = viewModel.errorMessage {
-                        ErrorBanner(message: errorMessage)
-                    }
-
-                    ForEach(UserPreferences.Setting.allCases) { setting in
-                        picker(setting)
-                    }
-
-                    // Worth stating plainly: a relabel that leaves the number
-                    // alone looks like a bug the first time you hit it.
-                    Text("Changing a unit relabels your numbers — it doesn't convert them. A weight stored as 73.5 stays 73.5.")
-                        .appBody(12)
-                        .foregroundStyle(AppColor.secondaryText)
+        List {
+            if let errorMessage = viewModel.errorMessage {
+                Section {
+                    ErrorBanner(message: errorMessage)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
                 }
-                .padding(18)
-                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.errorMessage)
             }
+
+            Section {
+                ForEach(UserPreferences.Setting.allCases) { setting in
+                    row(setting)
+                }
+            } footer: {
+                // Worth stating plainly: a relabel that leaves the number
+                // alone looks like a bug the first time you hit it.
+                Text("Changing a unit relabels your numbers — it doesn't convert them. A weight stored as 73.5 stays 73.5.")
+                    .appBody(12)
+                    .foregroundStyle(AppColor.secondaryText)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .padding(.top, 2)
+            }
+            .listRowBackground(AppColor.surface)
+            .listRowSeparatorTint(AppColor.hairline)
         }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
         .background(AppColor.background)
+        .navigationTitle("Units")
+        .navigationBarTitleDisplayMode(.inline)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.errorMessage)
         .task { await viewModel.load() }
+        // On the way out rather than on a Done tap: the writes already
+        // happened, and the screens that render these labels still need
+        // telling.
+        .onDisappear(perform: onChanged)
     }
 
-    private func picker(_ setting: UserPreferences.Setting) -> some View {
+    private func row(_ setting: UserPreferences.Setting) -> some View {
         let current = viewModel.preferences.value(for: setting)
-        return VStack(alignment: .leading, spacing: 8) {
-            HStack {
-                Text(setting.title.uppercased())
-                    .appBody(12, weight: .semibold)
-                    .foregroundStyle(AppColor.secondaryText)
-                    .accessibilityAddTraits(.isHeader)
-                if viewModel.busySetting == setting {
-                    ProgressView().scaleEffect(0.7)
+        return HStack(spacing: 8) {
+            Picker(selection: binding(for: setting)) {
+                ForEach(options(for: setting), id: \.value) { option in
+                    Text(option.label).tag(option.value)
                 }
+            } label: {
+                Text(setting.title)
+                    .appBody(15, weight: .semibold)
+                    .foregroundStyle(AppColor.ink)
             }
+            .pickerStyle(.menu)
+            .tint(AppColor.secondaryText)
+            // A bare "kg" read on its own doesn't say what it sets.
+            .accessibilityLabel(setting.title)
+            .accessibilityValue(label(for: current, in: setting))
 
-            HStack(spacing: 8) {
-                ForEach(setting.options, id: \.value) { option in
-                    let isSelected = option.value == current
-                    Button {
-                        Task { await viewModel.select(option.value, for: setting) }
-                    } label: {
-                        Text(option.label)
-                            .appBody(14, weight: .semibold)
-                            .foregroundStyle(isSelected ? .white : AppColor.secondaryText)
-                            .frame(maxWidth: .infinity)
-                            .padding(.vertical, 9)
-                            .background(isSelected ? AppColor.accent : AppColor.inputBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 10))
-                            .frame(minHeight: 44)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.pressable)
-                    // A bare "kg" or "0" doesn't say what it sets; the group
-                    // heading above it isn't read with the button.
-                    .accessibilityLabel("\(setting.title): \(option.label)")
-                    .accessibilityAddTraits(isSelected ? [.isSelected] : [])
-                }
-            }
-
-            // A compound unit set from the web client can't be represented by
-            // these options, so say what's stored rather than silently showing
-            // nothing selected.
-            if !setting.options.contains(where: { $0.value == current }) {
-                Text("Currently “\(current)”, set elsewhere — this app can't show that as a single number.")
-                    .appBody(12)
-                    .foregroundStyle(AppColor.placeholder)
+            if viewModel.busySetting == setting {
+                ProgressView().controlSize(.small)
             }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minHeight: 36)
+    }
+
+    private func binding(for setting: UserPreferences.Setting) -> Binding<String> {
+        Binding(
+            get: { viewModel.preferences.value(for: setting) },
+            set: { value in
+                // As the choice is made — see UnitPreferencesViewModel.select.
+                guard value != viewModel.preferences.value(for: setting) else { return }
+                Haptics.selection()
+                Task { await viewModel.select(value, for: setting) }
+            }
+        )
+    }
+
+    /// A compound unit set from the web client (`st_lbs`, `ft_in`) isn't one
+    /// this app offers, and a `Picker` whose selection matches no tag renders
+    /// *blank* — so the stored value is added as an option, named for what it
+    /// is. Picking it back is a no-op the view model drops; picking anything
+    /// else is how you leave it, which is the only sane exit and was
+    /// previously a sentence explaining you couldn't.
+    private func options(for setting: UserPreferences.Setting) -> [(value: String, label: String)] {
+        let offered = setting.options
+        let current = viewModel.preferences.value(for: setting)
+        guard !offered.contains(where: { $0.value == current }) else { return offered }
+        return offered + [(value: current, label: "\(current) (set elsewhere)")]
+    }
+
+    private func label(for value: String, in setting: UserPreferences.Setting) -> String {
+        options(for: setting).first { $0.value == value }?.label ?? value
     }
 }
 
 #Preview {
-    UnitPreferencesView()
+    NavigationStack { UnitPreferencesView() }
 }

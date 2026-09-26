@@ -1145,13 +1145,92 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         var readError: Error?
         var authorizationRequests = 0
         var energyQueries = 0
+        var outcome: HealthAuthorizationOutcome = .answered
+        var recentEnergy = false
 
-        func requestAuthorization() async throws { authorizationRequests += 1 }
+        func requestAuthorization() async throws -> HealthAuthorizationOutcome {
+            authorizationRequests += 1
+            return outcome
+        }
         func activeEnergy(on date: Date) async throws -> EnergyReading {
             energyQueries += 1
             if let readError { throw readError }
             return reading
         }
+        func hasRecentEnergy(days: Int) async -> Bool { recentEnergy }
+    }
+
+    /// The switch used to stay on no matter what came back from Health, which
+    /// made it a claim the app couldn't support. Only a definite "nothing was
+    /// granted" turns it off — a permission sheet that was never answered, or
+    /// a request that threw.
+    func testHealthSwitchTurnsItselfOffWhenNothingWasGranted() {
+        XCTAssertEqual(
+            HealthRequestState.resolve(outcome: .unanswered, hasRecentEnergy: false),
+            .refused
+        )
+        XCTAssertEqual(
+            HealthRequestState.resolve(outcome: nil, hasRecentEnergy: false),
+            .refused,
+            "a thrown request granted nothing either"
+        )
+        XCTAssertFalse(HealthRequestState.refused.keepsSwitchOn)
+    }
+
+    /// The inference this must NOT make. HealthKit returns an empty read for
+    /// a refusal and for a genuinely quiet week alike, so switching Health
+    /// off on that evidence would silently break a working setup for anyone
+    /// who didn't move much — the worse of the two mistakes.
+    func testAnEmptyReadIsNotTreatedAsARefusal() {
+        let state = HealthRequestState.resolve(outcome: .answered, hasRecentEnergy: false)
+
+        XCTAssertEqual(state, .silent)
+        XCTAssertTrue(state.keepsSwitchOn)
+        XCTAssertTrue(
+            state.footnote(isOn: true).text.hasPrefix("No data from Health yet"),
+            "it stays on, but it stops implying data is arriving"
+        )
+    }
+
+    /// The row's subtitle is fixed and the footer carries the state, so the
+    /// section doesn't change height as the switch is flipped. Every state
+    /// has to have a line for that to hold — including off, and including the
+    /// states that follow a refusal.
+    func testEveryHealthStateHasAFooterSoTheSectionKeepsItsHeight() {
+        let states: [HealthRequestState] = [.idle, .asking, .flowing, .silent, .refused]
+        for state in states {
+            for isOn in [true, false] {
+                XCTAssertFalse(
+                    state.footnote(isOn: isOn).text.isEmpty,
+                    "\(state) with isOn=\(isOn) would collapse the footer"
+                )
+            }
+        }
+        XCTAssertTrue(HealthRequestState.refused.footnote(isOn: false).isProblem)
+        XCTAssertFalse(HealthRequestState.idle.footnote(isOn: false).isProblem)
+    }
+
+    /// Health owns this permission and won't hand it back, so the only two
+    /// states the app can't resolve itself — refused, and switched on with
+    /// nothing arriving — are the two that offer a way into Health. The rest
+    /// must not, or the footer becomes a button that does nothing useful.
+    func testOnlyTheUnresolvableHealthStatesOfferAWayIntoHealth() {
+        XCTAssertNotNil(HealthRequestState.refused.footnote(isOn: false).link)
+        XCTAssertNotNil(HealthRequestState.silent.footnote(isOn: true).link)
+
+        XCTAssertNil(HealthRequestState.flowing.footnote(isOn: true).link)
+        XCTAssertNil(HealthRequestState.asking.footnote(isOn: true).link)
+        XCTAssertNil(HealthRequestState.idle.footnote(isOn: true).link)
+        XCTAssertNil(HealthRequestState.idle.footnote(isOn: false).link)
+    }
+
+    func testEnergyArrivingIsTheOnlyStateThatBeats() {
+        let state = HealthRequestState.resolve(outcome: .answered, hasRecentEnergy: true)
+
+        XCTAssertEqual(state, .flowing)
+        XCTAssertTrue(state.keepsSwitchOn)
+        XCTAssertEqual(state.effect(isOn: true), .heartbeat)
+        XCTAssertEqual(HealthRequestState.silent.effect(isOn: true), SettingsRow.SymbolEffect.none)
     }
 
     private func healthSession(_ calories: Double) -> ExerciseSessionSummary {
@@ -1854,8 +1933,13 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertTrue(stub.savedGoals.isEmpty, "nothing may be written without a loaded row")
     }
 
+    /// A zeroed row is how the server says "no goal set". Every *optional*
+    /// field stays blank for it — showing "0" would invite saving it back as
+    /// a real goal of zero — but calories, which the form requires, opens on
+    /// the suggested figure instead, because the picker that replaced the
+    /// keyboard has no blank position to sit at.
     @MainActor
-    func testCaloriesAreRequiredAndZeroedGoalsPrefillAsEmpty() async {
+    func testZeroedGoalsPrefillEmptyExceptTheCaloriePickerSeed() async {
         let stub = StubAPIClient()
         stub.goalsToReturn = NutritionGoals(raw: [
             "calories": .number(0), "protein": .number(0),
@@ -1864,14 +1948,67 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         let viewModel = GoalsViewModel(date: Date(), apiClient: stub)
 
         await viewModel.load()
-        // A zeroed row is how the server says "no goal set" — showing "0"
-        // would invite saving it back as a real goal of zero.
-        XCTAssertEqual(viewModel.text[GoalsViewModel.Field.calories.rawValue], "")
+
+        XCTAssertEqual(
+            viewModel.text[GoalsViewModel.Field.calories.rawValue],
+            String(Int(GoalsViewModel.suggestedCalories))
+        )
+        for field: GoalsViewModel.Field in [.protein, .carbs, .fat, .water] {
+            XCTAssertEqual(viewModel.text[field.rawValue], "", "\(field) should stay unset")
+        }
+    }
+
+    /// The requirement itself is still enforced — the seed is a starting
+    /// point, not a removal of the rule. Reachable if the value is ever
+    /// cleared by something other than the picker.
+    @MainActor
+    func testCaloriesAreStillRequired() async {
+        let stub = StubAPIClient()
+        stub.goalsToReturn = NutritionGoals(raw: ["calories": .number(0)])
+        let viewModel = GoalsViewModel(date: Date(), apiClient: stub)
+
+        await viewModel.load()
+        viewModel.text[GoalsViewModel.Field.calories.rawValue] = ""
 
         let saved = await viewModel.save()
         XCTAssertFalse(saved)
         XCTAssertNotNil(viewModel.error(for: .calories))
         XCTAssertTrue(stub.savedGoals.isEmpty)
+    }
+
+    /// Splits are named in percentages and stored in grams, so the conversion
+    /// is the whole feature. It also has to land on the 5 g grid the steppers
+    /// move on, and must not overshoot the calorie goal — rounding up did,
+    /// which made every preset flag itself as over the moment it was tapped.
+    @MainActor
+    func testQuickSplitConvertsPercentagesToGramsWithoutOvershooting() async {
+        let stub = StubAPIClient()
+        stub.goalsToReturn = NutritionGoals(raw: ["calories": .number(2000)])
+        let viewModel = GoalsViewModel(date: Date(), apiClient: stub)
+        await viewModel.load()
+
+        viewModel.applySplit(protein: 30, carbs: 40, fat: 30)
+
+        XCTAssertEqual(viewModel.value(for: .protein), 150)  // 600 kcal / 4
+        XCTAssertEqual(viewModel.value(for: .carbs), 200)    // 800 kcal / 4
+        XCTAssertEqual(viewModel.value(for: .fat), 65)       // 600 kcal / 9, down to the grid
+        XCTAssertLessThanOrEqual(viewModel.macroCalories, 2000)
+    }
+
+    /// Without a calorie goal there is nothing to take a percentage of, and
+    /// writing zeros would read as three deliberate targets of zero.
+    @MainActor
+    func testQuickSplitDoesNothingWithoutACalorieGoal() async {
+        let stub = StubAPIClient()
+        stub.goalsToReturn = NutritionGoals(raw: [:])
+        let viewModel = GoalsViewModel(date: Date(), apiClient: stub)
+        await viewModel.load()
+        viewModel.text[GoalsViewModel.Field.calories.rawValue] = ""
+
+        viewModel.applySplit(protein: 30, carbs: 40, fat: 30)
+
+        XCTAssertEqual(viewModel.value(for: .protein), 0)
+        XCTAssertEqual(viewModel.macroCalories, 0)
     }
 
     /// The server fills `calorieBalance.goal` with a default of 2000 for an

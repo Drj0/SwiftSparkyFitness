@@ -10,60 +10,101 @@
 //  be renamed or deleted) are better expressed by which controls a row
 //  offers than by a heading that would need explaining.
 //
+//  Pushed from Settings, and a real `List`, which is where the editing
+//  controls come from now: swipe left to delete, swipe right to rename, or
+//  use Edit for a tap-only path to the same thing. That replaces a trash
+//  button and a pencil glyph parked on every row — two permanent targets for
+//  a rare, irreversible action, sitting next to the toggle you actually came
+//  to flip. `deleteDisabled` marks the server's four, so neither the swipe
+//  nor Edit offers a delete the server would answer 403 to.
+//
 
 import SwiftUI
 
 struct MealCategoriesView: View {
     @StateObject private var viewModel = MealCategoriesViewModel()
-    @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @FocusState private var isNewFieldFocused: Bool
     @State private var renamingCategory: MealType?
     @State private var renameText = ""
 
-    /// Called on dismiss so the screens that render these categories pick up
-    /// additions, renames and visibility changes.
+    /// Called on the way out so the screens that render these categories pick
+    /// up additions, renames and visibility changes.
     private let onChanged: () -> Void
 
     init(onChanged: @escaping () -> Void = {}) {
         self.onChanged = onChanged
     }
 
+    private var hasOwnCategories: Bool {
+        viewModel.categories.contains { !$0.isSystemDefault }
+    }
+
     var body: some View {
-        VStack(spacing: 0) {
-            SheetHeader(title: "Meals", cancelTitle: "Done") {
-                onChanged()
-                dismiss()
+        List {
+            if let errorMessage = viewModel.errorMessage {
+                Section {
+                    ErrorBanner(message: errorMessage)
+                        .listRowInsets(EdgeInsets())
+                        .listRowBackground(Color.clear)
+                }
             }
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    if let errorMessage = viewModel.errorMessage {
-                        ErrorBanner(message: errorMessage)
+            Section {
+                if viewModel.isLoading && viewModel.categories.isEmpty {
+                    ProgressView()
+                        .frame(maxWidth: .infinity)
+                        .padding(.vertical, 12)
+                } else {
+                    ForEach(viewModel.categories) { category in
+                        row(category)
+                            .deleteDisabled(category.isSystemDefault)
                     }
-
-                    if viewModel.isLoading && viewModel.categories.isEmpty {
-                        ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
-                    } else {
-                        ForEach(viewModel.categories) { category in
-                            row(category)
-                        }
-                        addRow
-                        Text("Hidden meals stay on days you already used them — they just stop being offered when you log something new.")
-                            .appBody(12)
-                            .foregroundStyle(AppColor.secondaryText)
+                    .onDelete(perform: delete)
+                }
+            } footer: {
+                VStack(alignment: .leading, spacing: 6) {
+                    footnote("Hidden meals stay on days you already used them — they just stop being offered when you log something new.")
+                    // Advice about nothing until there's something to swipe.
+                    if hasOwnCategories {
+                        footnote("Swipe a meal you added to rename or delete it.")
                     }
                 }
-                .padding(18)
-                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.categories)
-                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.errorMessage)
+                .padding(.top, 2)
+            }
+            .listRowBackground(AppColor.surface)
+            .listRowSeparatorTint(AppColor.hairline)
+
+            Section {
+                addRow
+            } header: {
+                Text("ADD A MEAL")
+                    .appBody(12, weight: .semibold)
+                    .foregroundStyle(AppColor.secondaryText)
+                    .accessibilityAddTraits(.isHeader)
+            }
+            .listRowBackground(AppColor.surface)
+        }
+        .listStyle(.insetGrouped)
+        .scrollContentBackground(.hidden)
+        .background(AppColor.background)
+        .navigationTitle("Meals")
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            // The tap-only route to a delete. Hidden until there's something
+            // it could act on — the server's four can't be deleted, so Edit
+            // over only those would open a mode with nothing to do in it.
+            if hasOwnCategories {
+                ToolbarItem(placement: .topBarTrailing) { EditButton() }
             }
         }
-        .background(AppColor.background)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.categories)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.errorMessage)
         .task { await viewModel.load() }
+        .onDisappear(perform: onChanged)
         .alert("Rename meal", isPresented: .constant(renamingCategory != nil)) {
             TextField("Name", text: $renameText)
-                .autocapitalization(.words)
+                .textInputAutocapitalization(.words)
             Button("Cancel", role: .cancel) { renamingCategory = nil }
             Button("Rename") {
                 if let renamingCategory {
@@ -77,86 +118,62 @@ struct MealCategoriesView: View {
     private func row(_ category: MealType) -> some View {
         HStack(spacing: 12) {
             VStack(alignment: .leading, spacing: 2) {
-                // Only a user's own category is renameable — the server
-                // answers 403 for its four, so tapping one would just produce
-                // an error. A default's name is plain text.
-                if category.isSystemDefault {
-                    Text(category.displayName)
-                        .appBody(15, weight: .semibold)
-                        .foregroundStyle(category.visible ? AppColor.ink : AppColor.secondaryText)
-                    Text("Built in")
-                        .appBody(12)
-                        .foregroundStyle(AppColor.placeholder)
-                } else {
-                    Button {
-                        renamingCategory = category
-                        renameText = category.name
-                    } label: {
-                        HStack(spacing: 5) {
-                            Text(category.displayName)
-                                .appBody(15, weight: .semibold)
-                                .foregroundStyle(category.visible ? AppColor.ink : AppColor.secondaryText)
-                            Image(systemName: "pencil")
-                                .font(.system(size: 11))
-                                .foregroundStyle(AppColor.placeholder)
-                        }
-                        .frame(minHeight: 44, alignment: .leading)
-                        .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.pressable)
-                    .accessibilityLabel("Rename \(category.displayName)")
-                }
+                Text(category.displayName)
+                    .appBody(15, weight: .semibold)
+                    .foregroundStyle(category.visible ? AppColor.ink : AppColor.secondaryText)
+                Text(category.isSystemDefault ? "Built in" : "Added by you")
+                    .appBody(12)
+                    .foregroundStyle(AppColor.placeholder)
             }
 
-            Spacer(minLength: 0)
+            Spacer(minLength: 8)
 
             if viewModel.busyCategoryId == category.id {
-                ProgressView()
+                ProgressView().controlSize(.small)
             }
 
             Toggle("", isOn: Binding(
                 get: { category.visible },
-                set: { visible in Task { await viewModel.setVisible(visible, for: category) } }
+                set: { visible in
+                    // On the flip, not on the server's reply — see
+                    // MealCategoriesViewModel.setVisible.
+                    Haptics.selection()
+                    Task { await viewModel.setVisible(visible, for: category) }
+                }
             ))
             .labelsHidden()
             .tint(AppColor.accent)
             .accessibilityLabel("Show \(category.displayName)")
-
-            // Only a user-created category can be deleted; the server answers
-            // 403 for its own, so offering the control would be a lie.
+        }
+        .frame(minHeight: 44)
+        // Leading, so the trailing edge stays the system's own delete — the
+        // gesture people already have muscle memory for, and the one Edit
+        // mode mirrors. Only a user's own category is renameable: the server
+        // answers 403 for its four.
+        .swipeActions(edge: .leading, allowsFullSwipe: false) {
             if !category.isSystemDefault {
                 Button {
-                    Task { await viewModel.delete(category) }
+                    renamingCategory = category
+                    renameText = category.name
                 } label: {
-                    Image(systemName: "trash")
-                        .font(.system(size: 15))
-                        .foregroundStyle(AppColor.destructive)
-                        .frame(minWidth: 44, minHeight: 44)
-                        .contentShape(Rectangle())
+                    Label("Rename", systemImage: "pencil")
                 }
-                .buttonStyle(.pressable)
-                .accessibilityLabel("Delete \(category.displayName)")
+                .tint(AppColor.accent)
             }
         }
-        .padding(.horizontal, 14)
-        .padding(.vertical, 6)
-        .frame(minHeight: 56)
-        .background(AppColor.surface)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
-        .overlay(RoundedRectangle(cornerRadius: AppRadius.md).stroke(AppColor.hairline, lineWidth: 1))
     }
 
     private var addRow: some View {
         HStack(spacing: 10) {
-            AppTextField(
-                placeholder: "Add a meal — e.g. Pre-Workout",
-                text: $viewModel.newName,
-                style: .filled,
-                submitLabel: .done,
-                autocapitalization: .words,
-                focus: $isNewFieldFocused
-            )
-            .onSubmit { Task { await viewModel.create() } }
+            TextField("e.g. Pre-Workout", text: $viewModel.newName)
+                .appBody(15)
+                .foregroundStyle(AppColor.ink)
+                .textInputAutocapitalization(.words)
+                .autocorrectionDisabled()
+                .submitLabel(.done)
+                .focused($isNewFieldFocused)
+                .onSubmit { Task { await viewModel.create() } }
+                .accessibilityLabel("Name of the meal to add")
 
             Button {
                 Task { await viewModel.create() }
@@ -164,15 +181,34 @@ struct MealCategoriesView: View {
                 Text("Add")
                     .appBody(15, weight: .semibold)
                     .foregroundStyle(viewModel.canCreate ? AppColor.accent : AppColor.placeholder)
-                    .frame(minWidth: 44, minHeight: 44)
+                    .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
                     .contentShape(Rectangle())
             }
             .buttonStyle(.pressable)
             .disabled(!viewModel.canCreate)
         }
     }
+
+    /// `deleteDisabled` already keeps the server's four out of an offset set,
+    /// so this doesn't re-check; it only exists because `onDelete` hands back
+    /// indices rather than rows.
+    private func delete(at offsets: IndexSet) {
+        let doomed = offsets.map { viewModel.categories[$0] }
+        Task {
+            for category in doomed {
+                await viewModel.delete(category)
+            }
+        }
+    }
+
+    private func footnote(_ text: String) -> some View {
+        Text(text)
+            .appBody(12)
+            .foregroundStyle(AppColor.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+    }
 }
 
 #Preview {
-    MealCategoriesView()
+    NavigationStack { MealCategoriesView() }
 }
