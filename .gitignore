@@ -45,9 +45,10 @@ Carthage/Build/
 .claude/worktrees/
 
 # ---- Local working notes -----------------------------------------------
-# PROGRESS.md is the running engineering log for this port. Deliberately
-# untracked: it is working notes, not something to publish. Removing it
-# from the index stops it being pushed from here on — note it is still in
-# the repository's existing history on GitHub, which only a history
+# Loose docs (PROGRESS.md, UI_UX_REVIEW.md, ...) are working notes, not
+# something to publish — only README.md is meant to be public. Removing a
+# tracked one from the index stops it being pushed from here on; it's still
+# in the repository's existing history on GitHub, which only a history
 # rewrite and a force-push would remove.
-PROGRESS.md
+*.md
+!README.md
