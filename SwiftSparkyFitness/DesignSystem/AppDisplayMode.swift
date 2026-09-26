@@ -2,8 +2,10 @@
 //  AppDisplayMode.swift
 //  SwiftSparkyFitness
 //
-//  Light/dark/system, stored as one AppStorage string and applied once at
-//  the app root via `.preferredColorScheme`.
+//  Light/dark/system, stored as one AppStorage string and applied at every
+//  connected window via `overrideUserInterfaceStyle` — not
+//  `.preferredColorScheme`, which turned out not to be reliable here. See
+//  `apply(_:)`.
 //
 
 import SwiftUI
@@ -23,12 +25,26 @@ enum AppDisplayMode: String, CaseIterable, Identifiable {
         }
     }
 
-    /// Nil defers to the system setting, which is what `.preferredColorScheme` wants for "System".
-    var colorScheme: ColorScheme? {
-        switch self {
-        case .system: return nil
-        case .light: return .light
-        case .dark: return .dark
+    /// Sets every connected window's interface style directly.
+    ///
+    /// The first version used `.preferredColorScheme(mode.colorScheme)` on
+    /// the root view, `nil` for System. Verified live: switching from an
+    /// explicit Light/Dark choice back to System left the app stuck on the
+    /// explicit choice until the next relaunch — SwiftUI's `nil` doesn't
+    /// reliably clear a previously-applied override, a known SwiftUI
+    /// limitation, not a one-off. `UIWindow.overrideUserInterfaceStyle`
+    /// resets correctly when set to `.unspecified`, including back to
+    /// whatever the system is currently set to.
+    static func apply(_ mode: AppDisplayMode) {
+        let style: UIUserInterfaceStyle
+        switch mode {
+        case .system: style = .unspecified
+        case .light: style = .light
+        case .dark: style = .dark
         }
+        UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap(\.windows)
+            .forEach { $0.overrideUserInterfaceStyle = style }
     }
 }

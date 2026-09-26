@@ -106,6 +106,15 @@ struct SettingsView: View {
             .background(AppColor.background)
             .navigationTitle("Settings")
         }
+        // Applied here, not (only) at the app root: an `.onChange` on
+        // `SwiftSparkyFitnessApp`'s `@AppStorage` turned out not to reliably
+        // refire on every change — verified live, switching Dark -> System
+        // updated the stored value but the window never got told. This view
+        // is where the value actually changes, so it's also where applying
+        // it is reliable.
+        .onChange(of: displayModeRaw) { _, newValue in
+            AppDisplayMode.apply(AppDisplayMode(rawValue: newValue) ?? .system)
+        }
         // Only in local mode: in server mode the local store isn't the user's
         // data at all, so its sync state would be meaningless.
         .task { if isLocal { await sync.refreshAccountStatus() } }

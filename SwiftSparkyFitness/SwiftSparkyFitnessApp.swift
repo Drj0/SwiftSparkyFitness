@@ -21,7 +21,15 @@ struct SwiftSparkyFitnessApp: App {
     var body: some Scene {
         WindowGroup {
             ContentView()
-                .preferredColorScheme((AppDisplayMode(rawValue: displayModeRaw) ?? .system).colorScheme)
+                // Cold-launch application only — not `.preferredColorScheme`,
+                // and not `.onChange` here either. Verified live: an
+                // `.onChange(of: displayModeRaw)` at this App/Scene level
+                // does not reliably refire on every change (Dark -> System
+                // updated the stored value but never called this), where the
+                // same modifier on `SettingsView` — the one place the value
+                // actually changes — does. `SettingsView.onChange` owns the
+                // live case; this owns the value already on disk at launch.
+                .onAppear { AppDisplayMode.apply(AppDisplayMode(rawValue: displayModeRaw) ?? .system) }
         }
     }
 }
