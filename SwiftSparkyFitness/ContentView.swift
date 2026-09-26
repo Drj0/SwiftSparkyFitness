@@ -11,8 +11,55 @@ struct ContentView: View {
     @StateObject private var authViewModel = AuthViewModel()
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isEditingServer = false
+    /// Empty until a mode is chosen, which is what puts the picker on screen.
+    /// Read as the raw string rather than `AppMode.current` so the view
+    /// re-renders when the choice is made.
+    @AppStorage(AppMode.defaultsKey) private var modeRaw = ""
 
     var body: some View {
+        Group {
+            if modeRaw.isEmpty {
+                ModeChoiceView { await authViewModel.restoreSession() }
+                    .transition(.opacity)
+            } else {
+                // Keyed on the mode so switching it rebuilds the tab tree.
+                // Every screen's view model resolves its client once in its
+                // own init, and `MainTabView` keeps the same view identity
+                // across a switch (the session is merely replaced, not
+                // removed), so without this the tabs would keep talking to
+                // the mode the app was launched in.
+                signedInOrOut.id(modeRaw)
+            }
+        }
+        .sheet(isPresented: $isEditingServer) {
+            ServerAddressSheet { Task { await authViewModel.restoreSession() } }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+        // Gated on a mode being chosen: before that there is nothing to
+        // restore, and in server mode this would fire a request at whatever
+        // placeholder address is configured.
+        .task { if !modeRaw.isEmpty { await authViewModel.restoreSession() } }
+        // Switching mode in Settings swaps which client every view model
+        // resolves, so the session has to be re-established against the new
+        // one: local mode hands back its synthetic user, server mode falls to
+        // login if there's no cookie. Doing it here keeps Settings from
+        // needing a route back up to the auth state.
+        .onChange(of: modeRaw) { _, _ in
+            Task { await authViewModel.restoreSession() }
+        }
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: authViewModel.session?.email)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: authViewModel.restoreState)
+        .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: modeRaw)
+        // Above accessibility3 the layout stops being usable rather than just
+        // large — the ring's centre text outgrows the ring and the meal rows
+        // lose their calorie column. Individual screens that can take more
+        // should raise their own ceiling rather than this being lifted.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility3)
+    }
+
+    @ViewBuilder
+    private var signedInOrOut: some View {
         Group {
             switch (authViewModel.restoreState, authViewModel.session) {
             case (_, .some(let user)):
@@ -37,19 +84,6 @@ struct ContentView: View {
                     .transition(.opacity)
             }
         }
-        .sheet(isPresented: $isEditingServer) {
-            ServerAddressSheet { Task { await authViewModel.restoreSession() } }
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-        }
-        .task { await authViewModel.restoreSession() }
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: authViewModel.session?.email)
-        .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: authViewModel.restoreState)
-        // Above accessibility3 the layout stops being usable rather than just
-        // large — the ring's centre text outgrows the ring and the meal rows
-        // lose their calorie column. Individual screens that can take more
-        // should raise their own ceiling rather than this being lifted.
-        .dynamicTypeSize(...DynamicTypeSize.accessibility3)
     }
 
     private var restoringState: some View {

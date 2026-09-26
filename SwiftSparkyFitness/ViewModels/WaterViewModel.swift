@@ -36,7 +36,7 @@ final class WaterViewModel: ObservableObject {
     private(set) var date: Date
     private let apiClient: APIClientProtocol
 
-    init(date: Date = Date(), apiClient: APIClientProtocol = APIClient.shared) {
+    init(date: Date = Date(), apiClient: APIClientProtocol = AppServices.client) {
         self.date = date
         self.apiClient = apiClient
     }

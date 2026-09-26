@@ -71,7 +71,7 @@ final class GoalsViewModel: ObservableObject {
     // the column it writes. Calories are kcal, macros are grams, and the
     // water target is `water_goal_ml` — millilitres whatever the display
     // preference says, since converting would store the wrong number.
-    init(date: Date, apiClient: APIClientProtocol = APIClient.shared) {
+    init(date: Date, apiClient: APIClientProtocol = AppServices.client) {
         self.date = date
         self.apiClient = apiClient
     }

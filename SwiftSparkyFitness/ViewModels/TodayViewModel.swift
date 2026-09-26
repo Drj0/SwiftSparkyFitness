@@ -55,7 +55,7 @@ final class TodayViewModel: ObservableObject {
     private var today = Date()
 
     init(
-        apiClient: APIClientProtocol = APIClient.shared,
+        apiClient: APIClientProtocol = AppServices.client,
         health: HealthKitReading = HealthKitService.shared
     ) {
         self.apiClient = apiClient

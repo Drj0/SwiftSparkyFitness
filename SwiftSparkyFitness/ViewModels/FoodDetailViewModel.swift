@@ -29,7 +29,7 @@ final class FoodDetailViewModel: ObservableObject {
     init(
         food: Food, mealTypes: [MealType], initialMealType: MealType,
         existingEntryId: String? = nil, initialQuantity: Double? = nil, entryDate: Date = Date(),
-        apiClient: APIClientProtocol = APIClient.shared
+        apiClient: APIClientProtocol = AppServices.client
     ) {
         self.food = food
         self.mealTypes = mealTypes.sorted { $0.sortOrder < $1.sortOrder }

@@ -27,7 +27,7 @@ final class MealCategoriesViewModel: ObservableObject {
 
     private let apiClient: APIClientProtocol
 
-    init(apiClient: APIClientProtocol = APIClient.shared) {
+    init(apiClient: APIClientProtocol = AppServices.client) {
         self.apiClient = apiClient
     }
 

@@ -69,7 +69,7 @@ final class FoodSearchViewModel: ObservableObject {
     /// section's "+"). An explicit choice always beats the time-of-day guess,
     /// which stays as the fallback for entry points that don't name a meal
     /// (the FAB, "Log your first food").
-    init(mealTypes: [MealType], initialMealType: MealType? = nil, apiClient: APIClientProtocol = APIClient.shared) {
+    init(mealTypes: [MealType], initialMealType: MealType? = nil, apiClient: APIClientProtocol = AppServices.client) {
         self.mealTypes = mealTypes.sorted { $0.sortOrder < $1.sortOrder }
         self.selectedMealType = initialMealType ?? Self.defaultMealType(from: mealTypes)
         self.apiClient = apiClient

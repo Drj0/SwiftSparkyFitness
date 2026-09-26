@@ -119,8 +119,13 @@ struct ExerciseSessionSummary: Decodable, Identifiable {
     /// source or kind field distinguishing it. If a server release renames
     /// that exercise this check goes quiet rather than breaking: the row
     /// reappears as a zero-minute workout, which is visible.
+    /// The one place this name is written down. Local mode has to *create*
+    /// rows the same check then filters, so a second literal somewhere else
+    /// would break the filter silently the moment either copy was edited.
+    static let healthActiveEnergyName = "Active Calories"
+
     var isHealthActiveEnergy: Bool {
-        name == "Active Calories"
+        name == Self.healthActiveEnergyName
     }
 }
 

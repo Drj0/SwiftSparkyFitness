@@ -2124,6 +2124,284 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertTrue(ServerConfig.isUnconfigured)
     }
 
+    // MARK: - Local-only mode
+
+    /// A client over a throwaway in-memory store, so these never touch the
+    /// real one on disk.
+    @MainActor
+    private func makeLocal() -> LocalAPIClient {
+        LocalAPIClient(store: LocalStore(inMemory: true))
+    }
+
+    private func day(_ offset: Int) -> Date {
+        Calendar.current.date(byAdding: .day, value: offset, to: Calendar.current.startOfDay(for: Date()))!
+    }
+
+    /// Goals are date-versioned and carried forward: a goal set once applies to
+    /// every later day until another supersedes it. The server does that
+    /// expansion on read and `ProgressViewModel` does not — it looks each day
+    /// up directly — so if local mode matched dates exactly, every day between
+    /// two goal changes would lose its goal and the Progress line would quietly
+    /// vanish rather than error.
+    @MainActor
+    func testLocalGoalsCarryForwardToLaterDays() async throws {
+        let local = makeLocal()
+        try await local.saveGoals(NutritionGoals(raw: ["calories": .number(2200)]), startingOn: day(-10))
+        try await local.saveGoals(NutritionGoals(raw: ["calories": .number(2400)]), startingOn: day(-3))
+
+        // Between the two rows: still the older goal.
+        let earlier = try await local.goals(date: day(-5))
+        XCTAssertEqual(earlier.calories, 2200)
+        // After the second: the newer one, carried forward to today.
+        let later = try await local.goals(date: day(0))
+        XCTAssertEqual(later.calories, 2400)
+        // Before any goal existed: genuinely unset, not a phantom zero.
+        let before = try await local.goals(date: day(-30))
+        XCTAssertNil(before.calories)
+    }
+
+    /// The range read has to produce a value for *every* day, for the same
+    /// reason — `ProgressViewModel` does a plain dictionary lookup per day.
+    @MainActor
+    func testLocalGoalsRangeFillsEveryDayNotJustTheOnesWithRows() async throws {
+        let local = makeLocal()
+        try await local.saveGoals(NutritionGoals(raw: ["calories": .number(2000)]), startingOn: day(-6))
+
+        let range = try await local.goals(from: day(-6), to: day(0))
+
+        XCTAssertEqual(range.count, 7, "one goal per day in the range, not one per stored row")
+        XCTAssertTrue(range.values.allSatisfy { $0.calories == 2000 })
+    }
+
+    /// The server takes the larger of Health's active energy and the workouts
+    /// you logged, never their sum, because active energy already includes
+    /// workouts on a real device. Summing would pay twice for the same run.
+    @MainActor
+    func testLocalBurnedTakesTheLargerOfHealthAndLoggedExercise() async throws {
+        let local = makeLocal()
+        let exercise = try await local.findOrCreateExercise(named: "Probe Run")
+        _ = try await local.createExerciseEntry(
+            ExerciseEntryInput(exerciseId: exercise.id, durationMinutes: 30, caloriesBurned: 300, entryDate: day(0))
+        )
+        try await local.syncActiveEnergy(kilocalories: 500, date: day(0))
+
+        let summary = try await local.dailySummary(date: day(0))
+
+        XCTAssertEqual(summary.calorieBalance.burned, 500, "max(500 health, 300 logged), not 800")
+        // And the sentinel must not show up as a workout the user can edit.
+        XCTAssertEqual(summary.exerciseSessions.userLogged.count, 1)
+        XCTAssertEqual(summary.exerciseSessions.userLogged.first?.name, "Probe Run")
+
+        // The other direction, which is the common one on a phone left on a
+        // desk: a logged workout larger than the day's active energy.
+        try await local.syncActiveEnergy(kilocalories: 100, date: day(0))
+        let quietDay = try await local.dailySummary(date: day(0))
+        XCTAssertEqual(quietDay.calorieBalance.burned, 300, "max(100 health, 300 logged)")
+    }
+
+    /// Repeating a sync must overwrite the day's figure rather than stacking
+    /// another sentinel row — Today syncs on every load.
+    @MainActor
+    func testLocalHealthSyncUpsertsRatherThanAccumulating() async throws {
+        let local = makeLocal()
+        try await local.syncActiveEnergy(kilocalories: 400, date: day(0))
+        try await local.syncActiveEnergy(kilocalories: 650, date: day(0))
+
+        let summary = try await local.dailySummary(date: day(0))
+
+        XCTAssertEqual(summary.exerciseSessions.count, 1)
+        XCTAssertEqual(summary.calorieBalance.burned, 650)
+    }
+
+    /// `calorieBalance.goal` substitutes 2000 when nothing is set, but
+    /// `goals.calories` must stay nil — Today's goal-not-set card reads the
+    /// latter, and collapsing the two is exactly what made that card
+    /// unreachable in server mode until Module 2 split them apart.
+    @MainActor
+    func testLocalUnsetGoalFallsBackForTheRingButStaysUnsetForTheCard() async throws {
+        let local = makeLocal()
+
+        let summary = try await local.dailySummary(date: day(0))
+
+        XCTAssertEqual(summary.calorieBalance.goal, 2000)
+        XCTAssertNil(summary.goals.calories)
+    }
+
+    /// The "−" control deletes hand-logged drinks only, and stops at zero.
+    /// The water card is optimistic and fires ahead of knowing the true count,
+    /// so over-decrementing has to be a no-op rather than an error.
+    @MainActor
+    func testLocalWaterUndoRemovesManualDrinksOnlyAndClampsAtZero() async throws {
+        let local = makeLocal()
+        _ = try await local.adjustWater(date: day(0), drinks: 3)
+        let afterAdd = try await local.waterTotals(date: day(0))
+        XCTAssertEqual(afterAdd.waterMl, 750, "three drinks at the server's own 250 ml")
+
+        let afterUndo = try await local.adjustWater(date: day(0), drinks: -99)
+        XCTAssertEqual(afterUndo.waterMl, 0)
+
+        // Decrementing an empty day answers zeroes rather than throwing.
+        let again = try await local.adjustWater(date: day(0), drinks: -1)
+        XCTAssertEqual(again.waterMl, 0)
+    }
+
+    /// The check-in row is one per day and written per field: saving a weight
+    /// must leave a waist logged the same day alone. Anything else is silent
+    /// data loss on a screen that shows both.
+    @MainActor
+    func testLocalBodySaveDoesNotBlankTheOtherFieldsLoggedThatDay() async throws {
+        let local = makeLocal()
+        _ = try await local.upsertBodyMeasurements(
+            BodyMeasurementsInput(date: day(0), values: [.waist: 82, .weight: 73])
+        )
+        _ = try await local.upsertBodyMeasurements(
+            BodyMeasurementsInput(date: day(0), values: [.weight: 72.5])
+        )
+
+        let stored = try await local.bodyMeasurements(date: day(0))
+
+        XCTAssertEqual(stored.weight, 72.5)
+        XCTAssertEqual(stored.waist, 82, "a weight-only save must not clear the waist")
+
+        // An explicit nil is the documented way to clear one field.
+        _ = try await local.upsertBodyMeasurements(
+            BodyMeasurementsInput(date: day(0), values: [.waist: nil])
+        )
+        let cleared = try await local.bodyMeasurements(date: day(0))
+        XCTAssertNil(cleared.waist)
+        XCTAssertEqual(cleared.weight, 72.5)
+    }
+
+    /// Progress sums exercise itself in local mode. The Health sentinel is a
+    /// real row, so leaving it in would inflate every range that has one — the
+    /// server excludes it in SQL.
+    @MainActor
+    func testLocalExerciseRangeExcludesTheHealthSentinel() async throws {
+        let local = makeLocal()
+        let exercise = try await local.findOrCreateExercise(named: "Probe Lift")
+        _ = try await local.createExerciseEntry(
+            ExerciseEntryInput(exerciseId: exercise.id, durationMinutes: 45, caloriesBurned: 250, entryDate: day(-1))
+        )
+        try await local.syncActiveEnergy(kilocalories: 900, date: day(-1))
+
+        let summary = try await local.exerciseSummary(from: day(-2), to: day(0))
+
+        XCTAssertEqual(summary.totals.totalCaloriesBurned, 250, "900 kcal of Health energy is not a workout")
+        XCTAssertEqual(summary.totals.workoutCount, 1)
+    }
+
+    /// The four seeded meals mirror the server's protected defaults, and a meal
+    /// still holding food can't be deleted — otherwise the entries logged
+    /// against it would be stranded.
+    @MainActor
+    func testLocalMealTypesProtectDefaultsAndMealsStillInUse() async throws {
+        let local = makeLocal()
+        let seeded = try await local.mealTypes()
+        XCTAssertEqual(seeded.count, 4)
+        XCTAssertTrue(seeded.allSatisfy(\.isSystemDefault))
+
+        let breakfast = try XCTUnwrap(seeded.first)
+        do {
+            _ = try await local.updateMealType(id: breakfast.id, MealTypeInput(name: "Brunch"))
+            XCTFail("renaming a default should be refused, as the server refuses it")
+        } catch {}
+
+        // Hiding one is allowed, which is the server's asymmetry.
+        let hidden = try await local.updateMealType(id: breakfast.id, MealTypeInput(isVisible: false))
+        XCTAssertEqual(hidden.visible, false)
+
+        let supper = try await local.createMealType(name: "Supper", sortOrder: 50)
+        let food = try await local.createCustomFood(
+            CustomFoodInput(name: "Probe Oats", brand: nil, servingSize: 100, servingUnit: "g",
+                            calories: 380, protein: 13, carbs: 67, fat: 7)
+        )
+        try await local.createFoodEntry(
+            FoodEntryInput(food: food, mealTypeId: supper.id, quantity: 100, entryDate: day(0))
+        )
+        do {
+            try await local.deleteMealType(id: supper.id)
+            XCTFail("a meal with food logged against it should be refused")
+        } catch {}
+    }
+
+    /// Entries have to land on the day they were logged for, since every screen
+    /// is day-addressed. A timezone-sloppy key would file them a day out.
+    @MainActor
+    func testLocalEntriesAreFiledUnderTheDayTheyWereLoggedFor() async throws {
+        let local = makeLocal()
+        let food = try await local.createCustomFood(
+            CustomFoodInput(name: "Probe Rice", brand: nil, servingSize: 100, servingUnit: "g",
+                            calories: 130, protein: 2.7, carbs: 28, fat: 0.3)
+        )
+        let meals = try await local.mealTypes()
+        let meal = try XCTUnwrap(meals.first)
+        try await local.createFoodEntry(
+            FoodEntryInput(food: food, mealTypeId: meal.id, quantity: 200, entryDate: day(-2))
+        )
+
+        let onTheDay = try await local.dailySummary(date: day(-2))
+        let today = try await local.dailySummary(date: day(0))
+
+        XCTAssertEqual(onTheDay.foodEntries.count, 1)
+        XCTAssertEqual(today.foodEntries.count, 0)
+        // Nutrition is stored already scaled, which is what every screen sums.
+        XCTAssertEqual(onTheDay.foodEntries.first?.calories ?? 0, 260, accuracy: 0.01)
+    }
+
+    /// Logging a food is what makes it recent — the ranking the server would
+    /// otherwise do for us.
+    @MainActor
+    func testLocalRecentsAreRankedByWhatWasActuallyLogged() async throws {
+        let local = makeLocal()
+        let meals = try await local.mealTypes()
+        let meal = try XCTUnwrap(meals.first)
+        let older = try await local.createCustomFood(
+            CustomFoodInput(name: "Probe Apple", brand: nil, servingSize: 100, servingUnit: "g",
+                            calories: 52, protein: 0, carbs: 14, fat: 0)
+        )
+        let newer = try await local.createCustomFood(
+            CustomFoodInput(name: "Probe Banana", brand: nil, servingSize: 100, servingUnit: "g",
+                            calories: 89, protein: 1, carbs: 23, fat: 0)
+        )
+        try await local.createFoodEntry(
+            FoodEntryInput(food: older, mealTypeId: meal.id, quantity: 100, entryDate: day(-1))
+        )
+        try await local.createFoodEntry(
+            FoodEntryInput(food: newer, mealTypeId: meal.id, quantity: 100, entryDate: day(0))
+        )
+
+        let suggestions = try await local.foodSuggestions()
+
+        XCTAssertEqual(suggestions.recentFoods.first?.name, "Probe Banana")
+        XCTAssertEqual(suggestions.recentFoods.count, 2)
+        // A food that was never logged isn't "recent" just because it exists.
+        _ = try await local.createCustomFood(
+            CustomFoodInput(name: "Probe Unlogged", brand: nil, servingSize: 100, servingUnit: "g",
+                            calories: 1, protein: 0, carbs: 0, fat: 0)
+        )
+        let after = try await local.foodSuggestions()
+        XCTAssertFalse(after.recentFoods.contains { $0.name == "Probe Unlogged" })
+    }
+
+    /// Local mode has no account, and `ContentView` decides it's signed in by
+    /// asking for a session. A nil here would strand the user on a login form
+    /// they can never satisfy.
+    @MainActor
+    func testLocalModeAlwaysHasASessionAndNeverOffersLogin() async throws {
+        let local = makeLocal()
+
+        let session = try await local.currentSession()
+
+        XCTAssertNotNil(session)
+        // Diary and Progress floor their date navigation on this, so it has to
+        // be a real date rather than nil.
+        XCTAssertNotNil(session?.createdAt)
+        // And a stable one: re-deriving it per call would move Diary's floor
+        // every launch, silently shrinking how far back the user can page.
+        let again = try await local.currentSession()
+        XCTAssertEqual(session?.createdAt, again?.createdAt)
+    }
+
     // MARK: - Bundled typefaces
 
     /// `Font.custom` silently falls back to the system font when a name

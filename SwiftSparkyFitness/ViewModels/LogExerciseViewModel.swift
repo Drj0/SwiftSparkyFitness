@@ -43,7 +43,7 @@ final class LogExerciseViewModel: ObservableObject {
     private let entryDate: Date
     var isEditing: Bool { existingEntryId != nil }
 
-    init(apiClient: APIClientProtocol = APIClient.shared) {
+    init(apiClient: APIClientProtocol = AppServices.client) {
         self.apiClient = apiClient
         self.existingEntryId = nil
         self.existingExerciseId = nil
@@ -60,7 +60,7 @@ final class LogExerciseViewModel: ObservableObject {
     init(
         editingEntryId id: String, exerciseId: String, name: String,
         durationMinutes: Double, caloriesBurned: Double, entryDate: Date,
-        apiClient: APIClientProtocol = APIClient.shared
+        apiClient: APIClientProtocol = AppServices.client
     ) {
         self.apiClient = apiClient
         self.existingEntryId = id

@@ -32,11 +32,26 @@ final class AuthViewModel: ObservableObject {
     @Published private(set) var isLoading = false
     @Published private(set) var session: SessionUser?
 
-    private let apiClient: APIClientProtocol
+    /// Only set when a caller named a client explicitly, which in practice
+    /// means the tests. Nil in the app.
+    private let injectedClient: APIClientProtocol?
+
+    /// Re-resolved on every use rather than captured in `init`, and that is
+    /// load-bearing rather than tidiness. This view model is a `@StateObject`
+    /// on `ContentView`, so it is built on the *first* render — which on a
+    /// fresh install is before any mode has been chosen. Capturing the client
+    /// there pinned it to `APIClient` for the lifetime of the process, so
+    /// choosing "Use on this device" then fired `get-session` at the
+    /// placeholder address, hung on a spinner for the full timeout and landed
+    /// on the can't-reach-the-server screen — from which nothing led back to
+    /// local mode. Verified on a fresh simulator install, and the same
+    /// staleness broke switching mode in Settings in both directions.
+    private var apiClient: APIClientProtocol { injectedClient ?? AppServices.client }
+
     private var sessionExpiredObserver: NSObjectProtocol?
 
-    init(apiClient: APIClientProtocol = APIClient.shared) {
-        self.apiClient = apiClient
+    init(apiClient: APIClientProtocol? = nil) {
+        self.injectedClient = apiClient
         sessionExpiredObserver = NotificationCenter.default.addObserver(
             forName: .sessionExpired, object: nil, queue: .main
         ) { [weak self] _ in

@@ -17,7 +17,12 @@ struct SettingsView: View {
     var onSignOut: () -> Void = {}
 
     @AppStorage(ServerConfig.defaultsKey) private var serverURL = ""
+    @AppStorage(AppMode.defaultsKey) private var modeRaw = AppMode.server.rawValue
     @State private var isPresentingServer = false
+    @State private var isConfirmingWipe = false
+    @State private var wipeError: String?
+
+    private var isLocal: Bool { modeRaw == AppMode.local.rawValue }
     @State private var isPresentingGoals = false
     @State private var isPresentingMeals = false
     @State private var isPresentingWater = false
@@ -43,37 +48,13 @@ struct SettingsView: View {
                     .appDisplay(26)
                     .foregroundStyle(AppColor.ink)
 
-                // The field itself lives in ServerAddressSheet, which the
-                // offline screen also presents. Two copies meant two validation
-                // paths, and this one was the weaker: it accepted any string
-                // URL(string:) would parse, hostname or not.
-                section("SERVER") {
-                    Text("SwiftSparkyFitness talks to a SparkyFitness server you run yourself.")
-                        .appBody(13)
-                        .foregroundStyle(AppColor.secondaryText)
-
-                    // Read so that saving in the sheet re-renders this row. The
-                    // value shown is still ServerConfig's, since a SERVER_URL
-                    // in the environment outranks whatever is stored.
-                    let _ = serverURL
-                    Text(effective)
-                        .appBody(14, weight: .semibold)
-                        .foregroundStyle(AppColor.ink)
-
-                    if ServerConfig.isUnconfigured {
-                        Text("No server set yet — using the placeholder, so nothing will load.")
-                            .appBody(12)
-                            .foregroundStyle(AppColor.destructive)
-                    }
-
-                    Button { isPresentingServer = true } label: {
-                        Text("Edit server address")
-                            .appBody(15, weight: .semibold)
-                            .foregroundStyle(AppColor.accent)
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.pressable)
+                // Local mode has no server and no account, so both of those
+                // sections are hidden rather than shown inert — a disabled
+                // control still implies it might one day apply here.
+                if isLocal {
+                    localDataSection
+                } else {
+                    serverSection
                 }
 
                 // Today's goal-not-set card is the other way in, but it
@@ -110,7 +91,7 @@ struct SettingsView: View {
                 }
 
                 section("WATER") {
-                    Text("The container the “+” logs from. Without one it adds the server's default 250 ml.")
+                    Text("The container the “+” logs from. Without one it adds \(isLocal ? "the standard" : "the server's default") 250 ml.")
                         .appBody(13)
                         .foregroundStyle(AppColor.secondaryText)
 
@@ -140,7 +121,9 @@ struct SettingsView: View {
                 }
 
                 section("APPLE HEALTH") {
-                    Text("Counts the active energy Health has recorded towards your daily burn. Your logged workouts still count — the server takes whichever total is higher, so nothing is counted twice.")
+                    // Who does the taking differs by mode; that the rule is
+                    // the same in both is the point worth stating.
+                    Text("Counts the active energy Health has recorded towards your daily burn. Your logged workouts still count — whichever total is higher wins, so nothing is counted twice.")
                         .appBody(13)
                         .foregroundStyle(AppColor.secondaryText)
 
@@ -171,16 +154,18 @@ struct SettingsView: View {
                     }
                 }
 
-                section("ACCOUNT") {
-                    row("Signed in as", user.email)
-                    Button(action: onSignOut) {
-                        Text("Sign out")
-                            .appBody(15, weight: .semibold)
-                            .foregroundStyle(AppColor.destructive)
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .contentShape(Rectangle())
+                if !isLocal {
+                    section("ACCOUNT") {
+                        row("Signed in as", user.email)
+                        Button(action: onSignOut) {
+                            Text("Sign out")
+                                .appBody(15, weight: .semibold)
+                                .foregroundStyle(AppColor.destructive)
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                                .contentShape(Rectangle())
+                        }
+                        .buttonStyle(.pressable)
                     }
-                    .buttonStyle(.pressable)
                 }
 
                 section("ABOUT") {
@@ -228,6 +213,136 @@ struct SettingsView: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
+        // An alert rather than a confirmation dialog, and that's deliberate:
+        // in local mode this is the only irreversible control in the app and
+        // there is no server copy behind it, so the way out has to be a real
+        // button. A confirmation dialog renders as a popover in some
+        // presentations and drops its cancel action, leaving tapping outside
+        // as the only escape — discoverable with a finger, not with VoiceOver
+        // or Switch Control. An alert always draws both.
+        .alert("Delete all local data?", isPresented: $isConfirmingWipe) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete everything", role: .destructive, action: wipeLocalData)
+        } message: {
+            // Says settings too, because the wipe does reset them: naming only
+            // the entries and then silently returning units to kg is the kind
+            // of small dishonesty that makes the rest of the warning suspect.
+            Text("Every food, exercise, water, weight and measurement entry on this iPhone is erased, and your meal categories and unit settings go back to their defaults. This can't be undone.")
+        }
+    }
+
+    /// Erases the store and tells the day screens to re-read, so Today and
+    /// Diary don't keep rendering rows that no longer exist.
+    private func wipeLocalData() {
+        do {
+            try LocalStore.shared.deleteEverything()
+            wipeError = nil
+            Haptics.success()
+            NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+        } catch {
+            // Reported rather than swallowed: a wipe that silently half-ran
+            // would leave the user believing their data is gone when it isn't.
+            wipeError = "Couldn't delete everything — some data may remain. \(error.localizedDescription)"
+            Haptics.error()
+        }
+    }
+
+    /// The field itself lives in ServerAddressSheet, which the offline screen
+    /// also presents. Two copies meant two validation paths, and this was the
+    /// weaker: it accepted any string `URL(string:)` would parse, host or not.
+    private var serverSection: some View {
+        section("SERVER") {
+            Text("SwiftSparkyFitness talks to a SparkyFitness server you run yourself.")
+                .appBody(13)
+                .foregroundStyle(AppColor.secondaryText)
+
+            // Read so that saving in the sheet re-renders this row. The value
+            // shown is still ServerConfig's, since a SERVER_URL in the
+            // environment outranks whatever is stored.
+            let _ = serverURL
+            Text(effective)
+                .appBody(14, weight: .semibold)
+                .foregroundStyle(AppColor.ink)
+
+            if ServerConfig.isUnconfigured {
+                Text("No server set yet — using the placeholder, so nothing will load.")
+                    .appBody(12)
+                    .foregroundStyle(AppColor.destructive)
+            }
+
+            Button { isPresentingServer = true } label: {
+                Text("Edit server address")
+                    .appBody(15, weight: .semibold)
+                    .foregroundStyle(AppColor.accent)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable)
+
+            Button { switchMode(to: .local) } label: {
+                Text("Use this device only instead")
+                    .appBody(15, weight: .semibold)
+                    .foregroundStyle(AppColor.accent)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable)
+        }
+    }
+
+    /// Local mode's replacement for SERVER and ACCOUNT.
+    ///
+    /// The warning is not decoration. With no server there is no copy of this
+    /// data anywhere else, so deleting the app deletes the diary — and that is
+    /// the one consequence a person choosing this mode is least likely to have
+    /// thought through.
+    private var localDataSection: some View {
+        section("THIS DEVICE") {
+            Text("Everything you log is stored on this iPhone only. There's no account and nothing leaves the device.")
+                .appBody(13)
+                .foregroundStyle(AppColor.secondaryText)
+
+            Text("Nothing is backed up. Deleting the app, or erasing this iPhone, deletes your diary with it.")
+                .appBody(12)
+                .foregroundStyle(AppColor.destructive)
+
+            // Switching is allowed and deliberately non-destructive: the local
+            // rows stay on disk and come back if the user returns. Syncing the
+            // two together is a separate piece of work that doesn't exist yet,
+            // so the copy promises separation, not merging.
+            Button { switchMode(to: .server) } label: {
+                Text("Connect to a server instead")
+                    .appBody(15, weight: .semibold)
+                    .foregroundStyle(AppColor.accent)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable)
+
+            Text("Your on-device data stays here and isn't sent to the server. It reappears if you switch back.")
+                .appBody(12)
+                .foregroundStyle(AppColor.placeholder)
+
+            Button(role: .destructive) { isConfirmingWipe = true } label: {
+                Text("Delete all local data")
+                    .appBody(15, weight: .semibold)
+                    .foregroundStyle(AppColor.destructive)
+                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable)
+
+            if let wipeError {
+                Text(wipeError)
+                    .appBody(12)
+                    .foregroundStyle(AppColor.destructive)
+            }
+        }
+    }
+
+    private func switchMode(to mode: AppMode) {
+        AppMode.current = mode
+        Haptics.success()
     }
 
     @ViewBuilder

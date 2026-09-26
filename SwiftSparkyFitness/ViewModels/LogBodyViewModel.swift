@@ -74,7 +74,7 @@ final class LogBodyViewModel: ObservableObject {
         preferences: UserPreferences = .serverDefaults,
         minDate: Date,
         maxDate: Date,
-        apiClient: APIClientProtocol = APIClient.shared
+        apiClient: APIClientProtocol = AppServices.client
     ) {
         self.kind = kind
         self.date = date

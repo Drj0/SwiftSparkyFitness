@@ -63,7 +63,7 @@ struct WaterContainersView: View {
 
     private var tapSummary: String {
         guard let primary else {
-            return "One tap of “+” logs 250 ml — the server's default. Add a container to log what you actually drink from."
+            return "One tap of “+” logs 250 ml. Add a container to log what you actually drink from."
         }
         return "One tap of “+” logs \(Int(primary.mlPerServing.rounded())) ml, from “\(primary.name)”."
     }

@@ -1,0 +1,276 @@
+//
+//  LocalAPIClient.swift
+//  SwiftSparkyFitness
+//
+//  The local-only implementation of `APIClientProtocol`.
+//
+//  Why this conforms to the existing 46-method protocol rather than a new set
+//  of domain repositories: all 14 view models already take `APIClientProtocol`
+//  by injection, and the test target's `StubAPIClient` has implemented the same
+//  protocol in memory across eight modules and 100+ tests. The seam is proven.
+//  Splitting into repositories would have rewritten every view model's init and
+//  every test wiring site for no behavioural gain, and `dailySummary` spans
+//  food, exercise, water and goals, so a split would need a cross-domain facade
+//  that ends up looking exactly like this protocol again.
+//
+//  The cost is a handful of methods that mean nothing without a server. They
+//  are implemented honestly — a no-op where that's the truth, a thrown error
+//  where silence would hide a bug — rather than left to fatalError.
+//
+//  Split across extensions by domain (see LocalAPIClient+Food /
+//  +Wellbeing) purely so the file stays readable.
+//
+
+import Foundation
+
+@MainActor
+final class LocalAPIClient: APIClientProtocol {
+    static let shared = LocalAPIClient()
+
+    let store: LocalStore
+
+    init(store: LocalStore = .shared) {
+        self.store = store
+    }
+
+    /// When local mode was first used. Load-bearing rather than decorative:
+    /// Diary's day navigation and Progress's range both floor on the account's
+    /// creation date, so without a stable value here the user could page back
+    /// through unlimited empty days.
+    static let firstUseKey = "localModeFirstUse"
+
+    var firstUseDate: Date {
+        let defaults = UserDefaults.standard
+        if let stored = defaults.object(forKey: Self.firstUseKey) as? Date { return stored }
+        let now = Calendar.current.startOfDay(for: Date())
+        defaults.set(now, forKey: Self.firstUseKey)
+        return now
+    }
+
+    /// Thrown by the few endpoints that can only mean something against a
+    /// server. Never expected to surface: local mode doesn't show the screens
+    /// that would call them.
+    func unsupported(_ what: String) -> APIError {
+        .server(message: "\(what) isn't available without a server.", code: "LOCAL_MODE")
+    }
+
+    // MARK: - Auth (bypassed)
+
+    /// Local mode has no account, so there is always a "session". Returning a
+    /// synthetic user is what keeps `ContentView` out of the login branch
+    /// without teaching it a second way to decide it's signed in.
+    func currentSession() async throws -> SessionUser? {
+        SessionUser(email: "On this device", name: nil, createdAt: firstUseDate)
+    }
+
+    func signIn(email: String, password: String) async throws -> SessionUser {
+        throw unsupported("Signing in")
+    }
+
+    func signUp(email: String, password: String) async throws -> SessionUser {
+        throw unsupported("Signing up")
+    }
+
+    func requestPasswordReset(email: String) async throws {
+        throw unsupported("Password reset")
+    }
+
+    /// Nothing to sign out of, and deliberately not a data wipe — leaving local
+    /// mode must never be the thing that deletes the diary. Settings has an
+    /// explicit, separately confirmed control for that.
+    func signOut() async {}
+
+    // MARK: - Meal types
+
+    func mealTypes() async throws -> [MealType] {
+        store.all(LocalMealType.self, sortBy: [SortDescriptor(\.sortOrder)]).map(Self.mealType)
+    }
+
+    static func mealType(_ row: LocalMealType) -> MealType {
+        MealType(
+            id: row.id,
+            name: row.name,
+            sortOrder: row.sortOrder,
+            // A nil userId is what marks a row as one of the protected
+            // defaults, matching the server's shared-row convention that
+            // `isSystemDefault` already reads.
+            userId: row.isSystemDefault ? nil : "local",
+            isVisible: row.isVisible,
+            showInQuickLog: nil,
+            defaultTime: row.defaultTime
+        )
+    }
+
+    func createMealType(name: String, sortOrder: Int) async throws -> MealType {
+        let row = LocalMealType(name: name, sortOrder: sortOrder, isSystemDefault: false)
+        store.insert(row)
+        return Self.mealType(row)
+    }
+
+    func updateMealType(id: String, _ input: MealTypeInput) async throws -> MealType {
+        guard let row = store.fetch(LocalMealType.self, where: #Predicate { $0.id == id }).first else {
+            throw unsupported("That meal")
+        }
+        // The server refuses to rename or reorder its own four, and the
+        // management screen is built around that refusal. Local mode keeps the
+        // same rule so the two modes don't disagree about what's editable.
+        if row.isSystemDefault, input.name != nil || input.sortOrder != nil {
+            throw APIError.server(message: "Cannot rename or reorder system default meal types.", code: nil)
+        }
+        if let name = input.name {
+            row.name = name
+            // Entries carry the meal's name denormalised, because that is the
+            // shape the day screens group on. Renaming the category alone
+            // left every row already logged against it grouped under the old
+            // name until it was re-saved.
+            for entry in store.fetch(LocalFoodEntry.self, where: #Predicate { $0.mealTypeId == id }) {
+                entry.mealTypeName = name
+            }
+        }
+        if let sortOrder = input.sortOrder { row.sortOrder = sortOrder }
+        if let isVisible = input.isVisible { row.isVisible = isVisible }
+        if let defaultTime = input.defaultTime { row.defaultTime = defaultTime }
+        store.save()
+        return Self.mealType(row)
+    }
+
+    func deleteMealType(id: String) async throws {
+        guard let row = store.fetch(LocalMealType.self, where: #Predicate { $0.id == id }).first else { return }
+        if row.isSystemDefault {
+            throw APIError.server(message: "Cannot delete system default meal types.", code: nil)
+        }
+        // The server answers 409 rather than orphaning the entries; without the
+        // same check here, deleting a meal would strand every row logged to it.
+        let inUse = store.fetch(LocalFoodEntry.self, where: #Predicate { $0.mealTypeId == id })
+        guard inUse.isEmpty else {
+            throw APIError.server(
+                message: "That meal still has food logged against it. Move or delete those entries first.",
+                code: "IN_USE"
+            )
+        }
+        store.delete(row)
+    }
+
+    // MARK: - Preferences
+
+    func userPreferences() async throws -> UserPreferences {
+        let row = store.all(LocalPreferences.self).first
+        return UserPreferences(
+            defaultWeightUnit: row?.defaultWeightUnit,
+            defaultMeasurementUnit: row?.defaultMeasurementUnit,
+            waterDisplayUnit: row?.waterDisplayUnit,
+            measurementDecimalPlaces: row?.measurementDecimalPlaces
+        )
+    }
+
+    func updateUserPreference(_ setting: UserPreferences.Setting, to value: String) async throws -> UserPreferences {
+        let row = store.all(LocalPreferences.self).first ?? {
+            let fresh = LocalPreferences()
+            store.insert(fresh)
+            return fresh
+        }()
+        switch setting {
+        case .weight: row.defaultWeightUnit = value
+        case .measurement: row.defaultMeasurementUnit = value
+        case .water: row.waterDisplayUnit = value
+        case .decimals: row.measurementDecimalPlaces = Int(value) ?? 0
+        }
+        store.save()
+        return try await userPreferences()
+    }
+
+    // MARK: - The day
+
+    /// Assembles the same shape `GET /api/daily-summary` returns.
+    ///
+    /// Two of its numbers are the ones the server actually computes, and both
+    /// are reproduced deliberately:
+    ///
+    /// - `burned` is `max(active energy, logged exercise)`, not their sum. The
+    ///   server takes the larger because active energy from Health already
+    ///   includes workouts; adding them would count a logged run twice on any
+    ///   day that also has Health data.
+    /// - `goal` falls back to 2000 when no goal row exists, which is what the
+    ///   server substitutes. It is kept distinct from `goals.calories`, which
+    ///   stays nil — the goal-not-set card reads the latter, and collapsing the
+    ///   two is exactly the bug that made that card unreachable in Module 2.
+    func dailySummary(date: Date) async throws -> DailySummary {
+        let key = LocalDay.key(date)
+        let foodRows = store.fetch(LocalFoodEntry.self, where: #Predicate { $0.dayKey == key })
+        let exerciseRows = store.fetch(LocalExerciseEntry.self, where: #Predicate { $0.dayKey == key })
+        let waterRows = store.fetch(LocalWaterEntry.self, where: #Predicate { $0.dayKey == key })
+
+        let goals = try await goals(date: date)
+        let entries = foodRows.map(Self.foodEntrySummary)
+        let sessions = exerciseRows.map(Self.exerciseSummary)
+
+        let active = sessions.healthActiveEnergy ?? 0
+        let logged = sessions.userLogged.reduce(0.0) { $0 + ($1.caloriesBurned ?? 0) }
+        let burned = max(active, logged)
+
+        let eaten = entries.reduce(0.0) { $0 + $1.calories }
+        let goalCalories = goals.calories.flatMap { $0 > 0 ? $0 : nil } ?? 2000
+
+        let manual = waterRows.filter { $0.source == "manual" }.reduce(0.0) { $0 + $1.waterMl }
+        let ledger = waterRows.reduce(0.0) { $0 + $1.waterMl }
+
+        return DailySummary(
+            calorieBalance: .init(
+                eaten: eaten,
+                burned: burned,
+                remaining: goalCalories - eaten + burned,
+                goal: goalCalories
+            ),
+            waterIntake: ledger,
+            waterIntakeBreakdown: WaterTotals(
+                waterMl: ledger,
+                manualMl: manual,
+                ledgerMl: ledger,
+                foodMl: 0
+            ),
+            goals: .init(
+                calories: goals.calories,
+                protein: goals.protein,
+                carbs: goals.carbs,
+                fat: goals.fat,
+                waterGoalMl: goals.waterGoalMl
+            ),
+            foodEntries: entries,
+            exerciseSessions: sessions
+        )
+    }
+
+    static func foodEntrySummary(_ row: LocalFoodEntry) -> FoodEntrySummary {
+        FoodEntrySummary(
+            id: row.id,
+            foodName: row.foodName,
+            mealType: row.mealTypeName,
+            quantity: row.quantity,
+            unit: row.unit,
+            calories: row.calories,
+            protein: row.protein,
+            carbs: row.carbs,
+            fat: row.fat,
+            foodId: row.foodId,
+            // Must be non-nil or Diary's tap-to-edit silently does nothing:
+            // `editableFood` returns nil without it, and the row just doesn't
+            // respond. Matches the id `LocalAPIClient.food(_:)` synthesises for
+            // the same food's variant.
+            variantId: "\(row.foodId)-variant",
+            mealTypeId: row.mealTypeId,
+            brandName: row.brandName,
+            servingSize: row.servingSize,
+            servingUnit: row.servingUnit
+        )
+    }
+
+    static func exerciseSummary(_ row: LocalExerciseEntry) -> ExerciseSessionSummary {
+        ExerciseSessionSummary(
+            id: row.id,
+            name: row.name,
+            caloriesBurned: row.caloriesBurned,
+            durationMinutes: row.durationMinutes,
+            exerciseId: row.exerciseId
+        )
+    }
+}

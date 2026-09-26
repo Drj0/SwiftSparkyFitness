@@ -74,7 +74,7 @@ final class ProgressViewModel: ObservableObject {
         return formatter
     }()
 
-    init(user: SessionUser, apiClient: APIClientProtocol = APIClient.shared) {
+    init(user: SessionUser, apiClient: APIClientProtocol = AppServices.client) {
         self.apiClient = apiClient
         let calendar = Calendar.current
         let today = calendar.startOfDay(for: Date())

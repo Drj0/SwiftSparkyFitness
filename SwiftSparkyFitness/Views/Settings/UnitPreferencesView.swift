@@ -38,7 +38,7 @@ struct UnitPreferencesView: View {
 
                     // Worth stating plainly: a relabel that leaves the number
                     // alone looks like a bug the first time you hit it.
-                    Text("Changing a unit relabels your numbers — it doesn't convert them. A weight stored as 73.5 stays 73.5. This matches the web app, which writes whatever you type.")
+                    Text("Changing a unit relabels your numbers — it doesn't convert them. A weight stored as 73.5 stays 73.5.")
                         .appBody(12)
                         .foregroundStyle(AppColor.secondaryText)
                 }

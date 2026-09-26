@@ -60,7 +60,7 @@ final class DiaryViewModel: ObservableObject {
     private let apiClient: APIClientProtocol
     private var cancellables = Set<AnyCancellable>()
 
-    init(user: SessionUser, apiClient: APIClientProtocol = APIClient.shared) {
+    init(user: SessionUser, apiClient: APIClientProtocol = AppServices.client) {
         self.apiClient = apiClient
         let calendar = Calendar.current
         maxDate = calendar.startOfDay(for: Date())
