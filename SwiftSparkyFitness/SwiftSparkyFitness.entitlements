@@ -7,5 +7,22 @@
 	     (clinical records) and any share types are deliberately absent. -->
 	<key>com.apple.developer.healthkit</key>
 	<true/>
+
+	<!-- iCloud sync for local-only mode (Module 11). CloudKit only: the app
+	     stores no documents and no key-value pairs, so CloudDocuments and
+	     the ubiquity-store keys are deliberately absent.
+
+	     SwiftData would pick the first container in this file on its own,
+	     but LocalStore names this identifier explicitly — with one container
+	     the two agree, and if a second is ever added the store won't silently
+	     change which database it syncs to. -->
+	<key>com.apple.developer.icloud-services</key>
+	<array>
+		<string>CloudKit</string>
+	</array>
+	<key>com.apple.developer.icloud-container-identifiers</key>
+	<array>
+		<string>iCloud.drj.SwiftSparkyFitness</string>
+	</array>
 </dict>
 </plist>

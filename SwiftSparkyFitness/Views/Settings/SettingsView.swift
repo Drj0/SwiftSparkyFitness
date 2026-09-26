@@ -11,6 +11,7 @@
 //
 
 import SwiftUI
+import UIKit
 
 struct SettingsView: View {
     let user: SessionUser
@@ -21,6 +22,8 @@ struct SettingsView: View {
     @State private var isPresentingServer = false
     @State private var isConfirmingWipe = false
     @State private var wipeError: String?
+    @ObservedObject private var sync = CloudSyncStatus.shared
+    @Environment(\.openURL) private var openURL
 
     private var isLocal: Bool { modeRaw == AppMode.local.rawValue }
     @State private var isPresentingGoals = false
@@ -176,6 +179,9 @@ struct SettingsView: View {
             .padding(.bottom, 24)
         }
         .background(AppColor.background)
+        // Only in local mode: in server mode the local store isn't the
+        // user's data at all, so its sync state would be meaningless.
+        .task { if isLocal { await sync.refreshAccountStatus() } }
         .sheet(isPresented: $isPresentingServer) {
             // The day screens cache data belonging to whichever server it came
             // from, so a new address has to drop it. If the new server doesn't
@@ -302,9 +308,22 @@ struct SettingsView: View {
                 .appBody(13)
                 .foregroundStyle(AppColor.secondaryText)
 
-            Text("Nothing is backed up. Deleting the app, or erasing this iPhone, deletes your diary with it.")
-                .appBody(12)
-                .foregroundStyle(AppColor.destructive)
+            // The warning is conditional now, and that is the point of
+            // Module 11: with iCloud syncing this is no longer a single
+            // copy, and saying otherwise would be untrue. When syncing
+            // isn't happening the original warning stands unchanged,
+            // because then it is still exactly true.
+            if sync.state.backsUpTheDiary {
+                Text("Backed up to iCloud, and shared with your other devices signed into the same account.")
+                    .appBody(12)
+                    .foregroundStyle(AppColor.secondaryText)
+            } else {
+                Text("Nothing is backed up. Deleting the app, or erasing this iPhone, deletes your diary with it.")
+                    .appBody(12)
+                    .foregroundStyle(AppColor.destructive)
+            }
+
+            iCloudStatus
 
             // Switching is allowed and deliberately non-destructive: the local
             // rows stay on disk and come back if the user returns. Syncing the
@@ -338,6 +357,43 @@ struct SettingsView: View {
                     .foregroundStyle(AppColor.destructive)
             }
         }
+    }
+
+    /// iCloud's state, stated plainly. Not a toggle: syncing is a property
+    /// of the account and the device, not a preference this app owns, and a
+    /// switch here would imply the app can turn iCloud on. It can't.
+    @ViewBuilder
+    private var iCloudStatus: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack(spacing: 8) {
+                Text("iCloud")
+                    .appBody(15, weight: .semibold)
+                    .foregroundStyle(AppColor.ink)
+                Spacer(minLength: 8)
+                Text(sync.state.title)
+                    .appBody(14)
+                    .foregroundStyle(sync.state.isProblem ? AppColor.destructive : AppColor.secondaryText)
+            }
+            Text(sync.state.detail())
+                .appBody(12)
+                .foregroundStyle(AppColor.placeholder)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if sync.state.offersSystemSettings, let url = URL(string: UIApplication.openSettingsURLString) {
+                Button { openURL(url) } label: {
+                    Text("Open iPhone Settings")
+                        .appBody(15, weight: .semibold)
+                        .foregroundStyle(AppColor.accent)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+            }
+        }
+        .padding(.top, 4)
+        // One element: VoiceOver reads the state and what it means together,
+        // rather than "iCloud", "Not signed in" as two loose strings.
+        .accessibilityElement(children: .combine)
     }
 
     private func switchMode(to mode: AppMode) {

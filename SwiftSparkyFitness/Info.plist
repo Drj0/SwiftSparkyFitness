@@ -22,6 +22,18 @@
 		<string>_http._tcp</string>
 	</array>
 
+	<!-- CloudKit mirroring (Module 11) is pushed changes from other devices;
+	     without the remote-notification background mode the system receives
+	     the push but never hands it to the app, so an import only happens on
+	     the next launch or activation. Apple's TN3163 names this as the
+	     cause when a peer's change takes minutes to appear. No push
+	     entitlement or registration is needed — CloudKit's own subscription
+	     delivers it. -->
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
+
 	<!-- The design's two typefaces, as static instances cut from the upstream
 	     variable fonts (SIL Open Font License; see Resources/Fonts/OFL-*.txt).
 	     Only the three weights the app actually uses are bundled. Resources in

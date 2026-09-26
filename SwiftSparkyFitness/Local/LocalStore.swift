@@ -29,6 +29,20 @@ final class LocalStore {
     /// failure is surfaced rather than looking like "you have logged nothing".
     private(set) var loadFailure: Error?
 
+    /// Set when the store opened but *without* CloudKit, having failed to
+    /// open with it. The diary works; it just isn't syncing, and Settings
+    /// says so rather than claiming a sync that will never happen.
+    private(set) var cloudKitSetupFailure: Error?
+
+    /// Syncing is on whenever the store actually opened against CloudKit.
+    /// Reads as false in tests and in the fallback paths above.
+    var isCloudKitEnabled: Bool { loadFailure == nil && cloudKitSetupFailure == nil }
+
+    /// The one place this identifier is written down. It must match the
+    /// entitlements file exactly; a mismatch fails at code-signing rather
+    /// than at runtime, which is the good outcome.
+    static let cloudKitContainerIdentifier = "iCloud.drj.SwiftSparkyFitness"
+
     private init() {
         let schema = Schema([
             LocalFood.self,
@@ -43,28 +57,53 @@ final class LocalStore {
             LocalMealType.self
         ])
 
-        // `.none` is explicit rather than incidental: SwiftData treats the
-        // presence of CloudKit capabilities as permission to sync on its own,
-        // and iCloud sync is a separate module that hasn't been designed yet.
-        // Without this, adding the entitlement later would silently switch
-        // syncing on before anyone decided how conflicts should resolve.
-        let configuration = ModelConfiguration(
+        // Module 11: the store now mirrors to CloudKit. The container is
+        // named rather than left to `.automatic`, which picks whichever
+        // identifier appears first in the entitlements — with one container
+        // the two agree, and naming it means adding a second one later can't
+        // silently move the user's diary to a different database.
+        //
+        // Module 10 built the schema for this: no `@Attribute(.unique)`, no
+        // relationships, every property defaulted. CloudKit cannot enforce
+        // uniqueness and requires optional relationships, and its schemas are
+        // additive-only once promoted, so paying that cost up front is what
+        // makes this a one-line change rather than a migration.
+        let cloudConfiguration = ModelConfiguration(
             schema: schema,
             isStoredInMemoryOnly: false,
-            cloudKitDatabase: .none
+            cloudKitDatabase: .private(Self.cloudKitContainerIdentifier)
         )
 
         do {
-            container = try ModelContainer(for: schema, configurations: configuration)
+            container = try ModelContainer(for: schema, configurations: cloudConfiguration)
         } catch {
-            // A corrupt or unreadable store must not take the app down on
-            // launch. In memory, the session is useless but diagnosable; on
-            // disk it would be a crash loop with no way to reach Settings.
-            loadFailure = error
-            container = try! ModelContainer(
-                for: schema,
-                configurations: ModelConfiguration(schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
-            )
+            // Falling straight to memory here would be the wrong failure. The
+            // likeliest reason this throws is the CloudKit side — no
+            // entitlement in this build, a container that isn't provisioned,
+            // a device that can't reach iCloud at setup — and none of that is
+            // a reason to stop the user reaching their own on-disk diary. So
+            // try again with syncing off before giving up on disk entirely.
+            cloudKitSetupFailure = error
+            do {
+                container = try ModelContainer(
+                    for: schema,
+                    configurations: ModelConfiguration(
+                        schema: schema, isStoredInMemoryOnly: false, cloudKitDatabase: .none
+                    )
+                )
+            } catch {
+                // Now it really is the store itself. A corrupt or unreadable
+                // one must not take the app down on launch: in memory the
+                // session is useless but diagnosable; on disk it would be a
+                // crash loop with no way to reach Settings.
+                loadFailure = error
+                container = try! ModelContainer(
+                    for: schema,
+                    configurations: ModelConfiguration(
+                        schema: schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none
+                    )
+                )
+            }
         }
         seedIfNeeded()
     }
