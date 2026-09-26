@@ -17,14 +17,12 @@ struct SettingsView: View {
     var onSignOut: () -> Void = {}
 
     @AppStorage(ServerConfig.defaultsKey) private var serverURL = ""
-    @State private var draft = ""
-    @State private var savedNotice = false
+    @State private var isPresentingServer = false
     @State private var isPresentingGoals = false
     @State private var isPresentingMeals = false
     @State private var isPresentingWater = false
     @State private var isPresentingUnits = false
     @AppStorage(HealthSync.defaultsKey) private var healthSyncEnabled = false
-    @FocusState private var isFieldFocused: Bool
 
     private let health: HealthKitReading = HealthKitService.shared
     private var healthAvailable: Bool { health.isAvailable }
@@ -37,7 +35,6 @@ struct SettingsView: View {
     }
 
     private var effective: String { ServerConfig.urlString }
-    private var isDirty: Bool { draft.trimmingCharacters(in: .whitespaces) != effective }
 
     var body: some View {
         ScrollView {
@@ -46,27 +43,22 @@ struct SettingsView: View {
                     .appDisplay(26)
                     .foregroundStyle(AppColor.ink)
 
+                // The field itself lives in ServerAddressSheet, which the
+                // offline screen also presents. Two copies meant two validation
+                // paths, and this one was the weaker: it accepted any string
+                // URL(string:) would parse, hostname or not.
                 section("SERVER") {
                     Text("SwiftSparkyFitness talks to a SparkyFitness server you run yourself.")
                         .appBody(13)
                         .foregroundStyle(AppColor.secondaryText)
 
-                    AppTextField(
-                        placeholder: ServerConfig.placeholder,
-                        text: $draft,
-                        style: .filled,
-                        keyboardType: .URL,
-                        submitLabel: .done,
-                        focus: $isFieldFocused
-                    )
-                    .onSubmit(save)
-
-                    // The Bonjour name is stabler than the LAN IP, which changes
-                    // on every DHCP renewal — the exact drift that made the old
-                    // hardcoded address break repeatedly.
-                    Text("Tip: use your Mac's Bonjour name (scutil --get LocalHostName, plus .local) rather than its IP — the IP changes on every DHCP renewal.")
-                        .appBody(12)
-                        .foregroundStyle(AppColor.placeholder)
+                    // Read so that saving in the sheet re-renders this row. The
+                    // value shown is still ServerConfig's, since a SERVER_URL
+                    // in the environment outranks whatever is stored.
+                    let _ = serverURL
+                    Text(effective)
+                        .appBody(14, weight: .semibold)
+                        .foregroundStyle(AppColor.ink)
 
                     if ServerConfig.isUnconfigured {
                         Text("No server set yet — using the placeholder, so nothing will load.")
@@ -74,7 +66,14 @@ struct SettingsView: View {
                             .foregroundStyle(AppColor.destructive)
                     }
 
-                    PrimaryButton(title: savedNotice ? "Saved" : "Save server address", action: save)
+                    Button { isPresentingServer = true } label: {
+                        Text("Edit server address")
+                            .appBody(15, weight: .semibold)
+                            .foregroundStyle(AppColor.accent)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.pressable)
                 }
 
                 // Today's goal-not-set card is the other way in, but it
@@ -192,8 +191,17 @@ struct SettingsView: View {
             .padding(.bottom, 24)
         }
         .background(AppColor.background)
-        .task { draft = effective }
-        .onChange(of: draft) { _, _ in savedNotice = false }
+        .sheet(isPresented: $isPresentingServer) {
+            // The day screens cache data belonging to whichever server it came
+            // from, so a new address has to drop it. If the new server doesn't
+            // know this session, the reload's 401 carries the app back to login
+            // through the global handler rather than needing anything here.
+            ServerAddressSheet {
+                NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+            }
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
         .sheet(isPresented: $isPresentingGoals) {
             SetGoalsView()
                 .presentationDetents([.large])
@@ -220,18 +228,6 @@ struct SettingsView: View {
                 .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
-    }
-
-    private func save() {
-        let trimmed = draft.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty, URL(string: trimmed) != nil else {
-            Haptics.error()
-            return
-        }
-        serverURL = trimmed
-        isFieldFocused = false
-        Haptics.success()
-        withAnimation(.snappy(duration: 0.2)) { savedNotice = true }
     }
 
     @ViewBuilder

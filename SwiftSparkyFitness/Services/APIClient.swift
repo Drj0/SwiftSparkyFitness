@@ -271,18 +271,57 @@ final class APIClient: APIClientProtocol {
     /// "if that address is registered, it's on its way".
     ///
     /// Note `/api/auth/forget-password` is a 404 on this server; better-auth
-    /// renamed the route. `redirectTo` is accepted but optional, and is
-    /// omitted because the reset link opens the web frontend — this app has
-    /// no deep-link route to hand the token to.
+    /// renamed the route.
+    ///
+    /// WHY `redirectTo` IS SENT, AND WHY IT IS RELATIVE
+    /// ------------------------------------------------
+    /// It used to be omitted, on the reasoning that the reset link opens the
+    /// web frontend and this app has no deep-link route for the token. That
+    /// reasoning was right about the destination and wrong about the
+    /// consequence: `redirectTo` is what better-auth puts in the emailed
+    /// link's `callbackURL`, and with it omitted the server mails
+    /// `.../api/auth/reset-password/<token>?callbackURL=` — empty — which
+    /// 302s to `/api/auth/error?error=INVALID_TOKEN` instead of to the reset
+    /// page. Verified live: the token in that link is perfectly valid (a
+    /// `POST /api/auth/reset-password` with the very same token succeeds
+    /// afterwards); it is the empty `callbackURL` alone that breaks the
+    /// redirect. So a reset requested from this app emailed a dead link,
+    /// while the same reset requested from the web frontend worked — the web
+    /// client sends `redirectTo: window.location.origin + "/reset-password"`.
+    ///
+    /// The relative `/reset-password` is sent rather than an absolute URL
+    /// because this app cannot know the frontend's address: it talks to the
+    /// server directly (port 3010 here) while the link is built from the
+    /// server's own `SPARKY_FITNESS_FRONTEND_URL` (port 3004), and no
+    /// unauthenticated endpoint exposes that — and by definition nobody
+    /// requesting a reset has a session. Verified live that the server
+    /// accepts the relative form and resolves it against its own frontend
+    /// URL, landing on `<frontend>/reset-password?token=...`, which is a real
+    /// route in the web client's router. An absolute URL guessed from
+    /// `baseURL` would be validated against the server's trusted origins and
+    /// 403 `INVALID_REDIRECT_URL` on any split-origin deployment, breaking
+    /// the request outright.
+    ///
+    /// `verbatimKeys` is not optional here. The shared encoder converts to
+    /// snake_case, and `redirect_to` is silently ignored by better-auth —
+    /// verified live: still a 200, still an empty `callbackURL`, i.e. exactly
+    /// the bug this fixes, with no sign anything was wrong.
     func requestPasswordReset(email: String) async throws {
         _ = try await (send(
             "api/auth/request-password-reset",
             method: "POST",
-            body: PasswordResetRequest(email: email)
+            body: PasswordResetRequest(email: email, redirectTo: Self.passwordResetRedirectPath),
+            verbatimKeys: true
         ) as MessageResponse)
     }
 
-    private struct PasswordResetRequest: Encodable { let email: String }
+    /// The web client's own reset route. Relative on purpose — see above.
+    static let passwordResetRedirectPath = "/reset-password"
+
+    private struct PasswordResetRequest: Encodable {
+        let email: String
+        let redirectTo: String
+    }
 
     /// Throws on a transport failure; returns nil only when the server
     /// answered and there is genuinely no valid session.

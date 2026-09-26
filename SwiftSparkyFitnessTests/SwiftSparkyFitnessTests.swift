@@ -1968,6 +1968,162 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertTrue(viewModel.canRequestReset)
     }
 
+    @MainActor
+    func testResetLooksIdenticalForARegisteredAndAnUnregisteredAddress() async {
+        // The server answers both with the same 200 and the same generic
+        // body (verified live against a real account and a made-up address,
+        // with no timing difference either). This is the guard against
+        // someone later "improving" the sheet with a "no account found"
+        // branch: nothing the user can observe may vary with whether the
+        // address exists, so nothing here may either.
+        var states: [AuthViewModel.ResetState] = []
+        var errors: [String?] = []
+        for address in ["mod7reset001@example.com", "nobody-here-9f3a@example.com"] {
+            let stub = StubAPIClient()
+            let viewModel = AuthViewModel(apiClient: stub)
+            viewModel.resetEmail = address
+
+            await viewModel.requestPasswordReset()
+
+            XCTAssertEqual(stub.passwordResetRequests, [address])
+            states.append(viewModel.resetState)
+            errors.append(viewModel.resetError)
+        }
+        XCTAssertEqual(states.first, states.last)
+        XCTAssertEqual(errors.first, errors.last)
+        XCTAssertEqual(states.first, .requested)
+    }
+
+    @MainActor
+    func testResetRateLimitIsShownLikeAnyOtherServerError() async {
+        // The endpoint is rate limited (verified live: a burst of requests
+        // returns 429 "Too many requests. Please try again later." with an
+        // x-retry-after of 20 seconds). That goes through the same path as
+        // every other failure — the server's own message, back to .editing so
+        // it can be retried — rather than being special-cased here.
+        let stub = StubAPIClient()
+        stub.passwordResetError = APIError.server(
+            message: "Too many requests. Please try again later.",
+            code: nil
+        )
+        let viewModel = AuthViewModel(apiClient: stub)
+        viewModel.resetEmail = "someone@example.com"
+
+        await viewModel.requestPasswordReset()
+
+        XCTAssertEqual(viewModel.resetState, .editing)
+        XCTAssertEqual(viewModel.resetError, "Too many requests. Please try again later.")
+    }
+
+    /// The emailed link only works if the request carried a `redirectTo`, and
+    /// it has to stay relative: this app talks to the server directly and
+    /// cannot know the frontend's address, while an absolute URL guessed from
+    /// `baseURL` is validated against the server's trusted origins and 403s on
+    /// any split-origin deployment. See APIClient.requestPasswordReset.
+    func testPasswordResetRedirectStaysRelative() {
+        XCTAssertEqual(APIClient.passwordResetRedirectPath, "/reset-password")
+        XCTAssertTrue(APIClient.passwordResetRedirectPath.hasPrefix("/"))
+        XCTAssertNil(URL(string: APIClient.passwordResetRedirectPath)?.host)
+    }
+
+    // MARK: - Server address
+
+    /// The address is the one setting that has to be right before anything in
+    /// the app works, and the field used to accept any parseable string. These
+    /// pin the classifier rather than the request, so they need no server.
+    func testProbeAcceptsAnEmptyOrNullSessionFromARealServer() {
+        // The common case: a correct address typed by someone not signed in.
+        // better-auth answers get-session with no user, and rejecting that
+        // would block the only field that can fix a broken install.
+        XCTAssertEqual(ServerProbe.classify(status: 200, body: Data()), .reachable)
+        XCTAssertEqual(ServerProbe.classify(status: 200, body: Data("null".utf8)), .reachable)
+        XCTAssertEqual(ServerProbe.classify(status: 200, body: Data("{}".utf8)), .reachable)
+        XCTAssertEqual(
+            ServerProbe.classify(status: 200, body: Data(#"{"user":{"email":"a@b.c"}}"#.utf8)),
+            .reachable
+        )
+    }
+
+    /// A 401 is a real auth endpoint answering authoritatively that nobody is
+    /// signed in — which is the state being validated, so it is proof of life,
+    /// not a failure.
+    func testProbeTreatsUnauthorizedAsProofOfARealServer() {
+        XCTAssertEqual(ServerProbe.classify(status: 401, body: Data()), .reachable)
+        XCTAssertEqual(
+            ServerProbe.classify(status: 401, body: Data(#"{"message":"Unauthorized"}"#.utf8)),
+            .reachable
+        )
+    }
+
+    /// The whole point: something answered, but it isn't this API. Without
+    /// this, any host that resolves would be accepted and the mistake would
+    /// surface later as a timeout on the offline screen, which reads as "the
+    /// server is down" rather than "that address is wrong".
+    func testProbeRejectsSomethingThatIsntSparkyFitness() {
+        // A site with no such route.
+        XCTAssertEqual(ServerProbe.classify(status: 404, body: Data("Not Found".utf8)), .notSparkyFitness)
+        // A catch-all reverse proxy serving the same HTML for every path.
+        XCTAssertEqual(
+            ServerProbe.classify(status: 200, body: Data("<!DOCTYPE html><html>".utf8)),
+            .notSparkyFitness
+        )
+        // A JSON API, but not an auth one.
+        XCTAssertEqual(ServerProbe.classify(status: 403, body: Data(#"{"x":1}"#.utf8)), .notSparkyFitness)
+        XCTAssertEqual(ServerProbe.classify(status: 500, body: Data()), .notSparkyFitness)
+    }
+
+    /// The Save button's label is derived from this, and so is whether a second
+    /// tap stores the address. They have to come from the same rule: the first
+    /// version kept a single `warning` string, so a malformed address relabelled
+    /// the button "Save anyway" while the save path went on refusing it — a
+    /// button that promised something it would never do.
+    func testOnlyAFailedProbeCanBeOverriddenNotAMalformedAddress() {
+        XCTAssertFalse(ServerAddressSheet.Problem.malformed.allowsOverride)
+        XCTAssertTrue(ServerAddressSheet.Problem.unreachable(host: "box.local").allowsOverride)
+        XCTAssertTrue(ServerAddressSheet.Problem.notSparkyFitness(host: "example.com").allowsOverride)
+    }
+
+    /// The host is named in both probe failures, because "couldn't reach it" is
+    /// only actionable if it says what it tried to reach.
+    func testProbeFailuresNameTheHostTheyTried() {
+        XCTAssertTrue(ServerAddressSheet.Problem.unreachable(host: "box.local").message.contains("box.local"))
+        XCTAssertTrue(ServerAddressSheet.Problem.notSparkyFitness(host: "example.com").message.contains("example.com"))
+    }
+
+    /// Every request builds its URL from `ServerConfig`, re-read per call, so
+    /// changing the address takes effect without a relaunch. This is the
+    /// routing guarantee the whole runtime-configuration design rests on — if
+    /// anything ever captures the URL once, this fails.
+    func testEveryRequestFollowsTheStoredServerAddress() throws {
+        // The env var wins over UserDefaults by design (it's how a dev scheme
+        // points at their own box), so this can't assert anything while set.
+        try XCTSkipIf(
+            ProcessInfo.processInfo.environment["SERVER_URL"] != nil,
+            "SERVER_URL overrides the stored address by design."
+        )
+        let defaults = UserDefaults.standard
+        let original = defaults.string(forKey: ServerConfig.defaultsKey)
+        addTeardownBlock {
+            if let original {
+                defaults.set(original, forKey: ServerConfig.defaultsKey)
+            } else {
+                defaults.removeObject(forKey: ServerConfig.defaultsKey)
+            }
+        }
+
+        defaults.set("http://probe-one.local:3010", forKey: ServerConfig.defaultsKey)
+        XCTAssertEqual(APIClient.shared.baseURL.absoluteString, "http://probe-one.local:3010")
+
+        defaults.set("http://probe-two.local:9999", forKey: ServerConfig.defaultsKey)
+        XCTAssertEqual(APIClient.shared.baseURL.absoluteString, "http://probe-two.local:9999")
+
+        // Cleared, not set to something else: the placeholder is what a fresh
+        // install uses, and `isUnconfigured` is what prompts for a real one.
+        defaults.removeObject(forKey: ServerConfig.defaultsKey)
+        XCTAssertEqual(ServerConfig.urlString, ServerConfig.placeholder)
+        XCTAssertTrue(ServerConfig.isUnconfigured)
+    }
+
     // MARK: - Bundled typefaces
 
     /// `Font.custom` silently falls back to the system font when a name
