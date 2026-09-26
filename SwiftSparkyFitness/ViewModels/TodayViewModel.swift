@@ -24,7 +24,6 @@ final class TodayViewModel: ObservableObject {
     @Published var isPresentingFoodSearch = false
     @Published var isPresentingLogExercise = false
     @Published var isPresentingLogChoice = false
-    @Published var isPresentingWaterAmount = false
     @Published var isPresentingLogWeight = false
     @Published var isPresentingLogMeasurements = false
     @Published var isPresentingSetGoals = false
@@ -107,6 +106,24 @@ final class TodayViewModel: ObservableObject {
 
     var macroTotals: (protein: Double, carbs: Double, fat: Double) {
         (summary?.foodEntries ?? []).macroTotals
+    }
+
+    /// Today's exercise card — sums the same `userLogged` sessions
+    /// `hasLoggedAnything` already filters the Health "Active Calories"
+    /// sentinel out of, so the card can't show a workout the user never
+    /// logged.
+    private var loggedExerciseSessions: [ExerciseSessionSummary] {
+        summary?.exerciseSessions.userLogged ?? []
+    }
+
+    var hasLoggedExercise: Bool { !loggedExerciseSessions.isEmpty }
+
+    var exerciseDurationMinutes: Double {
+        loggedExerciseSessions.reduce(0) { $0 + ($1.durationMinutes ?? 0) }
+    }
+
+    var exerciseCaloriesBurned: Double {
+        loggedExerciseSessions.reduce(0) { $0 + ($1.caloriesBurned ?? 0) }
     }
 
     /// Meal sections to render. A hidden meal still appears on a day that

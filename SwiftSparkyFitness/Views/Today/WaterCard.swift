@@ -17,12 +17,20 @@ import SwiftUI
 
 struct WaterCard: View {
     @ObservedObject var viewModel: WaterViewModel
-    let onEnterAmount: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var totalLabel: String {
-        "\(Int(viewModel.totalMl.rounded())) / \(Int(viewModel.goalMl.rounded())) ml"
+        // Litres, matching the design — "1.75 / 2.5 L" rather than the raw
+        // millilitre figure, which is what the number actually is server-side.
+        "\(Self.liters(viewModel.totalMl)) / \(Self.liters(viewModel.goalMl)) L"
+    }
+
+    private static func liters(_ ml: Double) -> String {
+        let value = ml / 1000
+        // "2" not "2.0": a round number shouldn't carry a decimal the design
+        // doesn't show.
+        return value == value.rounded() ? String(Int(value)) : String(format: "%.2f", value)
     }
 
     /// "ml" is read out as a letter pair; the numbers are the whole point of
@@ -33,79 +41,74 @@ struct WaterCard: View {
         return "\(Int(viewModel.totalMl.rounded())) of \(Int(viewModel.goalMl.rounded())) millilitres, \(percent) percent"
     }
 
-    private var perDrinkLabel: String {
-        let drinks = viewModel.wholeDrinks
-        let noun = drinks == 1 ? "glass" : "glasses"
-        // The second half names the container when one is set, so a tap that
-        // logs 750 ml doesn't still claim to be worth 250.
-        return "\(drinks) \(noun) · \(viewModel.drinkLabel)"
+    /// No longer shown as a caption (the design keeps this card to the
+    /// number, the bar and the two stepper buttons) — folded into the "+"
+    /// button's own accessibility label instead, so the container/drink-size
+    /// information isn't lost, only the visible line.
+    private func addLabel(_ drinks: Int) -> String {
+        "Add a \(Int(viewModel.mlPerDrink)) millilitre drink · \(viewModel.drinkLabel)"
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack {
-                Text("💧 Water")
-                    .appBody(12, weight: .semibold)
-                    .foregroundStyle(AppColor.water)
-                Spacer()
-                if viewModel.foodMl > 0 {
-                    Text("incl. \(Int(viewModel.foodMl.rounded())) ml from food")
-                        .appBody(11)
-                        .foregroundStyle(AppColor.secondaryText)
-                }
-            }
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 14) {
+                VStack(alignment: .leading, spacing: 10) {
+                    HStack {
+                        Text("💧 Water")
+                            .appBody(13, weight: .semibold)
+                            .foregroundStyle(AppColor.water)
+                        Spacer()
+                        if viewModel.foodMl > 0 {
+                            Text("incl. \(Int(viewModel.foodMl.rounded())) ml from food")
+                                .appBody(11)
+                                .foregroundStyle(AppColor.secondaryText)
+                        }
+                    }
 
-            // The total and the bar are one fact, not two: read separately,
-            // VoiceOver announced an unlabelled "1250 / 2000 ml" and then a
-            // progress indicator restating it with no words at all.
-            VStack(alignment: .leading, spacing: 10) {
-                Text(totalLabel)
-                    .appBody(20, weight: .bold)
-                    .foregroundStyle(AppColor.ink)
-                    .contentTransition(.numericText())
-                    .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: viewModel.totalMl)
+                    // The total and the bar are one fact, not two: read
+                    // separately, VoiceOver announced an unlabelled "1.75 / 2.5
+                    // L" and then a progress indicator restating it with no
+                    // words at all.
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text(totalLabel)
+                            .appBody(24, weight: .bold)
+                            .foregroundStyle(AppColor.ink)
+                            .contentTransition(.numericText())
+                            .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: viewModel.totalMl)
 
-                progressBar
-            }
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel("Water")
-            .accessibilityValue(totalAccessibilityValue)
-
-            HStack(spacing: 12) {
-                stepperButton(systemName: "minus", label: "Remove the last drink", isEnabled: viewModel.canUndo) {
-                    // Fired here rather than after the write lands: a tap has
-                    // to be felt in the same frame it happens, and the round
-                    // trip is 200–400 ms away.
-                    Haptics.light()
-                    Task { await viewModel.adjust(drinks: -1) }
+                        progressBar
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("Water")
+                    .accessibilityValue(totalAccessibilityValue)
                 }
 
-                Text(perDrinkLabel)
-                    .appBody(12)
-                    .foregroundStyle(AppColor.secondaryText)
-                    .frame(maxWidth: .infinity)
-                    .multilineTextAlignment(.center)
-
-                stepperButton(systemName: "plus", label: "Add a \(Int(viewModel.mlPerDrink)) millilitre drink", isEnabled: true) {
-                    Haptics.light()
-                    Task { await viewModel.adjust(drinks: 1) }
+                // Stacked rather than side by side, and centred on the card's
+                // full height by the HStack above rather than pinned under
+                // the bar — the old row sat hard against the bottom edge with
+                // the "Enter amount" button underneath it; removing that
+                // button left the stepper looking stranded down there instead
+                // of rising with it.
+                VStack(spacing: 10) {
+                    stepperButton(
+                        systemName: "plus", label: addLabel(viewModel.wholeDrinks + 1),
+                        isEnabled: true, prominent: true
+                    ) {
+                        // Fired here rather than after the write lands: a tap
+                        // has to be felt in the same frame it happens, and the
+                        // round trip is 200–400 ms away.
+                        Haptics.light()
+                        Task { await viewModel.adjust(drinks: 1) }
+                    }
+                    stepperButton(
+                        systemName: "minus", label: "Remove the last drink",
+                        isEnabled: viewModel.canUndo, prominent: false
+                    ) {
+                        Haptics.light()
+                        Task { await viewModel.adjust(drinks: -1) }
+                    }
                 }
             }
-            // The 44pt touch targets are 6pt taller than the 38pt circles
-            // they wrap; handing that growth back keeps the card the height
-            // it was designed at.
-            .padding(.vertical, -3)
-
-            Button(action: onEnterAmount) {
-                Text("Enter amount…")
-                    .appBody(13, weight: .semibold)
-                    .foregroundStyle(AppColor.water)
-                    .frame(maxWidth: .infinity)
-                    .padding(.vertical, 8)
-                    .background(AppColor.surface.opacity(0.7))
-                    .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm))
-            }
-            .buttonStyle(.pressable)
 
             if let errorMessage = viewModel.errorMessage {
                 Text(errorMessage)
@@ -148,18 +151,25 @@ struct WaterCard: View {
         .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.85), value: viewModel.overshoot)
     }
 
-    private func stepperButton(systemName: String, label: String, isEnabled: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
+    /// `prominent` (the "+") is a solid filled circle, matching the design;
+    /// `"-"` stays the quieter outline treatment it always had — it's an
+    /// undo, not the card's primary action.
+    private func stepperButton(
+        systemName: String, label: String, isEnabled: Bool, prominent: Bool, action: @escaping () -> Void
+    ) -> some View {
+        let diameter: CGFloat = prominent ? 44 : 34
+        return Button(action: action) {
             Image(systemName: systemName)
-                .font(.system(size: 14, weight: .bold))
-                .foregroundStyle(isEnabled ? AppColor.water : AppColor.placeholder)
-                .frame(width: 38, height: 38)
-                .background(AppColor.surface, in: Circle())
-                // 38pt circle, 44pt target — the visual size is the design's,
-                // the tappable size is the minimum a thumb can hit.
+                .font(.system(size: prominent ? 16 : 13, weight: .bold))
+                .foregroundStyle(prominent ? .white : (isEnabled ? AppColor.water : AppColor.placeholder))
+                .frame(width: diameter, height: diameter)
+                .background(prominent ? AppColor.water : AppColor.surface, in: Circle())
+                .opacity(prominent ? (isEnabled ? 1 : 0.5) : 1)
+                // The visual circle is the design's size; the tappable area
+                // is padded out to the 44pt minimum a thumb needs, which for
+                // "-" is bigger than its own circle.
                 .frame(minWidth: 44, minHeight: 44)
                 .contentShape(Rectangle())
-                .padding(.horizontal, -3)
         }
         .buttonStyle(.pressableCompact)
         .disabled(!isEnabled)

@@ -28,10 +28,9 @@ struct BodyCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(alignment: .firstTextBaseline) {
-                Text("Weight")
-                    .appBody(12, weight: .semibold)
-                    .foregroundStyle(AppColor.secondaryText)
-                    .textCase(.uppercase)
+                Text("⚖️ Weight")
+                    .appBody(13, weight: .semibold)
+                    .foregroundStyle(AppColor.ink)
                 Spacer()
                 Button(action: onLogMeasurements) {
                     Text(otherFields.isEmpty ? "+ Measurements" : "Edit")

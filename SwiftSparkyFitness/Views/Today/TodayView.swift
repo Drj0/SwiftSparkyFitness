@@ -102,11 +102,6 @@ struct TodayView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
-        .sheet(isPresented: $viewModel.isPresentingWaterAmount) {
-            LogWaterAmountView(viewModel: viewModel.water)
-                .presentationDetents([.height(300)])
-                .presentationDragIndicator(.visible)
-        }
         .sheet(isPresented: $viewModel.isPresentingLogWeight) {
             bodySheet(kind: .weight)
         }
@@ -279,21 +274,32 @@ struct TodayView: View {
         }
     }
 
-    /// Water and weight. Both were read-only stubs until Module 4: water
-    /// showed a total derived by dividing by 240 (a figure that exists
-    /// nowhere on the server), weight said "Log today's →" and did nothing.
+    /// Water, weight and exercise. Water and weight were read-only stubs
+    /// until Module 4: water showed a total derived by dividing by 240 (a
+    /// figure that exists nowhere on the server), weight said "Log today's
+    /// →" and did nothing. Weight and exercise sit side by side — two
+    /// half-width cards reading the same way water's one full-width card
+    /// does (a label row, then the day's number).
     @ViewBuilder
     private func statRow() -> some View {
-        WaterCard(viewModel: viewModel.water) {
-            viewModel.isPresentingWaterAmount = true
-        }
+        WaterCard(viewModel: viewModel.water)
 
-        BodyCard(
-            measurements: viewModel.bodyMeasurements,
-            preferences: viewModel.preferences,
-            onLogWeight: { viewModel.isPresentingLogWeight = true },
-            onLogMeasurements: { viewModel.isPresentingLogMeasurements = true }
-        )
+        HStack(spacing: 12) {
+            BodyCard(
+                measurements: viewModel.bodyMeasurements,
+                preferences: viewModel.preferences,
+                onLogWeight: { viewModel.isPresentingLogWeight = true },
+                onLogMeasurements: { viewModel.isPresentingLogMeasurements = true }
+            )
+
+            ExerciseTodayCard(
+                durationMinutes: viewModel.exerciseDurationMinutes,
+                caloriesBurned: viewModel.exerciseCaloriesBurned,
+                hasLogged: viewModel.hasLoggedExercise
+            ) {
+                viewModel.isPresentingLogExercise = true
+            }
+        }
     }
 }
 
