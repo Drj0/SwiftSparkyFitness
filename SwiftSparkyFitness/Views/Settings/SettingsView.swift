@@ -51,19 +51,36 @@ struct SettingsView: View {
                     .appDisplay(26)
                     .foregroundStyle(AppColor.ink)
 
-                // Local mode has no server and no account, so both of those
-                // sections are hidden rather than shown inert — a disabled
-                // control still implies it might one day apply here.
+                // ───────────────────────────────────────────────────────
+                // Grouped by what an item is to the user, not by the module
+                // that added it. Three modules each appended a section here
+                // and nobody had stepped back; the result was eight one-line
+                // groups in arrival order. See PROGRESS.md for where new
+                // items belong.
+                // ───────────────────────────────────────────────────────
+
+                // First, because in local mode it is the most consequential
+                // thing on the screen: whether there is a second copy of
+                // your diary anywhere.
                 if isLocal {
                     localDataSection
                 } else {
                     serverSection
                 }
 
-                // Today's goal-not-set card is the other way in, but it
-                // disappears the moment a goal exists — without this, a goal
-                // could be set once and never changed again.
-                section("GOALS") {
+                // Server mode only. Local mode has no account, and showing
+                // one inert would imply it might one day apply here.
+                if !isLocal {
+                    section("ACCOUNT") {
+                        row("Signed in as", user.email)
+                    }
+                }
+
+                // Both of these answer "how is the app set up for me".
+                section("GOALS & UNITS") {
+                    // Today's goal-not-set card is the other way in, but it
+                    // disappears the moment a goal exists — without this, a
+                    // goal could be set once and never changed again.
                     Text("Daily calorie, macro and water targets. These drive the rings on Today.")
                         .appBody(13)
                         .foregroundStyle(AppColor.secondaryText)
@@ -76,9 +93,24 @@ struct SettingsView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.pressable)
+
+                    Text("How weights, measurements and water are labelled.")
+                        .appBody(13)
+                        .foregroundStyle(AppColor.secondaryText)
+                        .padding(.top, 8)
+
+                    Button { isPresentingUnits = true } label: {
+                        Text("Edit units")
+                            .appBody(15, weight: .semibold)
+                            .foregroundStyle(AppColor.accent)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.pressable)
                 }
 
-                section("MEALS") {
+                // Both of these shape what logging a thing does.
+                section("LOGGING") {
                     Text("The meals food is logged into. Add your own, or hide any you don't use.")
                         .appBody(13)
                         .foregroundStyle(AppColor.secondaryText)
@@ -91,12 +123,11 @@ struct SettingsView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.pressable)
-                }
 
-                section("WATER") {
                     Text("The container the “+” logs from. Without one it adds \(isLocal ? "the standard" : "the server's default") 250 ml.")
                         .appBody(13)
                         .foregroundStyle(AppColor.secondaryText)
+                        .padding(.top, 8)
 
                     Button { isPresentingWater = true } label: {
                         Text("Edit containers")
@@ -108,21 +139,9 @@ struct SettingsView: View {
                     .buttonStyle(.pressable)
                 }
 
-                section("UNITS") {
-                    Text("How weights, measurements and water are labelled.")
-                        .appBody(13)
-                        .foregroundStyle(AppColor.secondaryText)
-
-                    Button { isPresentingUnits = true } label: {
-                        Text("Edit units")
-                            .appBody(15, weight: .semibold)
-                            .foregroundStyle(AppColor.accent)
-                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                            .contentShape(Rectangle())
-                    }
-                    .buttonStyle(.pressable)
-                }
-
+                // Its own section rather than folded into LOGGING: this one
+                // is a connection to another app with its own permission
+                // state, not a preference about this one.
                 section("APPLE HEALTH") {
                     // Who does the taking differs by mode; that the rule is
                     // the same in both is the point worth stating.
@@ -157,23 +176,11 @@ struct SettingsView: View {
                     }
                 }
 
-                if !isLocal {
-                    section("ACCOUNT") {
-                        row("Signed in as", user.email)
-                        Button(action: onSignOut) {
-                            Text("Sign out")
-                                .appBody(15, weight: .semibold)
-                                .foregroundStyle(AppColor.destructive)
-                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                                .contentShape(Rectangle())
-                        }
-                        .buttonStyle(.pressable)
-                    }
-                }
-
                 section("ABOUT") {
                     row("Version", Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "—")
                 }
+
+                destructiveActions
             }
             .padding(AppSpacing.screenPad)
             .padding(.bottom, 24)
@@ -257,7 +264,7 @@ struct SettingsView: View {
     /// also presents. Two copies meant two validation paths, and this was the
     /// weaker: it accepted any string `URL(string:)` would parse, host or not.
     private var serverSection: some View {
-        section("SERVER") {
+        section("YOUR DATA") {
             Text("SwiftSparkyFitness talks to a SparkyFitness server you run yourself.")
                 .appBody(13)
                 .foregroundStyle(AppColor.secondaryText)
@@ -303,7 +310,7 @@ struct SettingsView: View {
     /// the one consequence a person choosing this mode is least likely to have
     /// thought through.
     private var localDataSection: some View {
-        section("THIS DEVICE") {
+        section("YOUR DATA") {
             Text("Everything you log is stored on this iPhone only. There's no account and nothing leaves the device.")
                 .appBody(13)
                 .foregroundStyle(AppColor.secondaryText)
@@ -342,21 +349,48 @@ struct SettingsView: View {
                 .appBody(12)
                 .foregroundStyle(AppColor.placeholder)
 
-            Button(role: .destructive) { isConfirmingWipe = true } label: {
-                Text("Delete all local data")
-                    .appBody(15, weight: .semibold)
-                    .foregroundStyle(AppColor.destructive)
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.pressable)
-
             if let wipeError {
                 Text(wipeError)
                     .appBody(12)
                     .foregroundStyle(AppColor.destructive)
             }
         }
+    }
+
+    /// The one-way doors, separated from everything above and last on the
+    /// screen — the iOS convention, and the reason for it: these sit at the
+    /// end of a scroll rather than next to the control someone came here to
+    /// tap. Signing out was mid-list in ACCOUNT and the wipe was near the
+    /// top of THIS DEVICE, both a thumb-slip from something harmless.
+    @ViewBuilder
+    private var destructiveActions: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Rectangle()
+                .fill(AppColor.hairline)
+                .frame(height: 1)
+                .accessibilityHidden(true)
+
+            if isLocal {
+                Button(role: .destructive) { isConfirmingWipe = true } label: {
+                    Text("Delete all local data")
+                        .appBody(15, weight: .semibold)
+                        .foregroundStyle(AppColor.destructive)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+            } else {
+                Button(action: onSignOut) {
+                    Text("Sign out")
+                        .appBody(15, weight: .semibold)
+                        .foregroundStyle(AppColor.destructive)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+            }
+        }
+        .padding(.top, 4)
     }
 
     /// iCloud's state, stated plainly. Not a toggle: syncing is a property
