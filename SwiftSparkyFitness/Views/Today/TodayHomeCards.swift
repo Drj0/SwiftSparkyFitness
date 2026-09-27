@@ -11,14 +11,16 @@ import SwiftUI
 
 // MARK: - Week strip
 
-/// The current week, today highlighted. Past days (back to the account's
-/// first day, the same floor Diary uses) are tappable; future days aren't.
+/// Swipeable weeks, from the account's first week (the same floor Diary
+/// uses) to this one, with the day on screen highlighted. Swiping only
+/// browses; tapping a day opens it. Future days aren't tappable.
 struct WeekStrip: View {
     /// The day on screen.
     let selected: Date
     let minDate: Date
     let onSelect: (Date) -> Void
 
+    @State private var visibleWeek: Date?
     @Namespace private var highlight
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -28,18 +30,48 @@ struct WeekStrip: View {
         return formatter
     }()
 
-    private var days: [Date] {
+    private static func weekStart(_ date: Date) -> Date {
+        Calendar.current.dateInterval(of: .weekOfYear, for: date)?.start ?? Calendar.current.startOfDay(for: date)
+    }
+
+    /// Oldest first, so the natural swipe direction (right = back in time)
+    /// matches every calendar strip on iOS.
+    private var weeks: [Date] {
         let calendar = Calendar.current
-        let today = calendar.startOfDay(for: Date())
-        guard let week = calendar.dateInterval(of: .weekOfYear, for: today) else { return [today] }
-        return (0..<7).compactMap { calendar.date(byAdding: .day, value: $0, to: week.start) }
+        let current = Self.weekStart(Date())
+        var week = Self.weekStart(minDate)
+        var result: [Date] = []
+        while week <= current {
+            result.append(week)
+            guard let next = calendar.date(byAdding: .weekOfYear, value: 1, to: week) else { break }
+            week = next
+        }
+        return result.isEmpty ? [current] : result
     }
 
     var body: some View {
-        HStack(spacing: 0) {
-            ForEach(days, id: \.self) { day in
-                cell(day)
+        ScrollView(.horizontal) {
+            LazyHStack(spacing: 0) {
+                ForEach(weeks, id: \.self) { week in
+                    HStack(spacing: 0) {
+                        ForEach(0..<7, id: \.self) { offset in
+                            if let day = Calendar.current.date(byAdding: .day, value: offset, to: week) {
+                                cell(day)
+                            }
+                        }
+                    }
+                    .containerRelativeFrame(.horizontal)
+                }
             }
+            .scrollTargetLayout()
+        }
+        .scrollTargetBehavior(.paging)
+        .scrollIndicators(.hidden)
+        .scrollPosition(id: $visibleWeek)
+        .onAppear { visibleWeek = Self.weekStart(selected) }
+        // A day picked from the calendar may sit in another week.
+        .onChange(of: Self.weekStart(selected)) { _, week in
+            withAnimation(reduceMotion ? nil : .snappy) { visibleWeek = week }
         }
         // Seven fixed columns: past this size the day numbers stop fitting
         // their pill. Same trade-off as the ring's centre label.

@@ -19,10 +19,18 @@ struct TodayView: View {
         viewModel.today.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
     }
 
-    /// "Today", or the weekday name while a past day from the strip is open.
+    /// "Today", "Yesterday", the weekday within the last week, then the
+    /// date itself — "Monday" alone would be ambiguous a month back.
     private var title: String {
-        viewModel.isViewingToday ? "Today" : viewModel.today.formatted(.dateTime.weekday(.wide))
+        let calendar = Calendar.current
+        let day = viewModel.today
+        if viewModel.isViewingToday { return "Today" }
+        if calendar.isDateInYesterday(day) { return "Yesterday" }
+        let daysAgo = calendar.dateComponents([.day], from: calendar.startOfDay(for: day), to: calendar.startOfDay(for: Date())).day ?? 0
+        return daysAgo < 7 ? day.formatted(.dateTime.weekday(.wide)) : day.formatted(.dateTime.day().month(.wide))
     }
+
+    @State private var isPresentingCalendar = false
 
     /// Same floor Diary uses: no days before the account existed.
     private var minDate: Date {
@@ -39,9 +47,44 @@ struct TodayView: View {
                             .appDisplay(32)
                             .foregroundStyle(AppColor.ink)
                             .accessibilityAddTraits(.isHeader)
-                        Text(dateLabel)
-                            .appBody(14)
+                        // Tapping the date opens the system calendar, for
+                        // days the week strip would take many swipes to reach.
+                        Button { isPresentingCalendar = true } label: {
+                            HStack(spacing: 4) {
+                                Text(dateLabel)
+                                    .appBody(14)
+                                Image(systemName: "chevron.down")
+                                    .font(.system(size: 11, weight: .semibold))
+                                    .accessibilityHidden(true)
+                            }
                             .foregroundStyle(AppColor.secondaryText)
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                            .padding(.vertical, -12)
+                        }
+                        .buttonStyle(.pressable)
+                        .accessibilityLabel(dateLabel)
+                        .accessibilityHint("Opens a calendar to pick a day")
+                        .popover(isPresented: $isPresentingCalendar) {
+                            DatePicker(
+                                "Day",
+                                selection: Binding(
+                                    get: { viewModel.today },
+                                    set: { day in
+                                        isPresentingCalendar = false
+                                        Task { await viewModel.select(day: day) }
+                                    }
+                                ),
+                                in: minDate...Date(),
+                                displayedComponents: .date
+                            )
+                            .datePickerStyle(.graphical)
+                            .labelsHidden()
+                            .tint(AppColor.accent)
+                            .frame(width: 320)
+                            .padding(12)
+                            .presentationCompactAdaptation(.popover)
+                        }
                     }
 
                     WeekStrip(selected: viewModel.today, minDate: minDate) { day in

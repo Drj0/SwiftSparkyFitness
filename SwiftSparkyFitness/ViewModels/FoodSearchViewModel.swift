@@ -137,9 +137,11 @@ final class FoodSearchViewModel: ObservableObject {
         let combined = localFoods + interleaved(genericFoods, brandedFoods)
         if !combined.isEmpty {
             outcome = .results(combined)
-        } else if localFailed && brandedFailed && usdaFailed {
-            // Only a total blackout is a network error. One source down while
-            // another simply has nothing is still "no results".
+        } else if localFailed || brandedFailed || usdaFailed {
+            // Nothing found *and* a source didn't answer: "no results" would
+            // be a guess, and a wrong one — OpenFoodFacts drops the odd
+            // request, so a query that matched a minute ago read as having no
+            // matches. The error state offers Retry, which is the real fix.
             outcome = .networkError(query: trimmed)
         } else {
             outcome = .noResults(query: trimmed)

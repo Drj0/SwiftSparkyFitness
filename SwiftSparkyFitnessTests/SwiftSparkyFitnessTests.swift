@@ -1466,12 +1466,9 @@ final class SwiftSparkyFitnessTests: XCTestCase {
     /// design gives them different screens — collapsing both into an empty
     /// list would offer "add it yourself" to someone who is simply offline.
     @MainActor
-    func testOnlyATotalFailureCountsAsANetworkError() async {
+    func testNothingFoundWithAFailedSourceIsANetworkError() async {
         let stub = StubAPIClient()
         let down = APIError.server(message: "down", code: nil)
-        // Three sources now, not two — USDA joined local and OpenFoodFacts.
-        // This test failing when USDA was added is the rule working: with one
-        // source still answering, the screen must not claim to be offline.
         stub.localSearchError = down
         stub.externalSearchError = down
         stub.usdaSearchError = down
@@ -1480,14 +1477,21 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         await viewModel.search()
         XCTAssertEqual(viewModel.outcome.kindID, "networkError")
 
-        // One source failing while the other simply has nothing is still
-        // "no results" — not an error the user can act on.
+        // One source failing while the others have nothing is an error too:
+        // the failed source may well have had matches, so "no results" would
+        // be a false answer. Retry is what the user can actually act on.
         let partial = StubAPIClient()
         partial.externalSearchError = APIError.server(message: "down", code: nil)
         let partialViewModel = FoodSearchViewModel(mealTypes: [], apiClient: partial)
         partialViewModel.query = "porridge"
         await partialViewModel.search()
-        XCTAssertEqual(partialViewModel.outcome.kindID, "noResults")
+        XCTAssertEqual(partialViewModel.outcome.kindID, "networkError")
+
+        // Every source answering with nothing is a genuine "no results".
+        let empty = FoodSearchViewModel(mealTypes: [], apiClient: StubAPIClient())
+        empty.query = "porridge"
+        await empty.search()
+        XCTAssertEqual(empty.outcome.kindID, "noResults")
     }
 
     /// A failing source must not hide results the other one found.

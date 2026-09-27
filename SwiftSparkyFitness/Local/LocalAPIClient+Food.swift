@@ -110,7 +110,14 @@ extension LocalAPIClient {
         // answers anonymous default-agent traffic less reliably.
         request.setValue("SwiftSparkyFitness/1.0 (iOS; local mode)", forHTTPHeaderField: "User-Agent")
 
-        let (data, response) = try await URLSession.shared.data(for: request)
+        var (data, response) = try await URLSession.shared.data(for: request)
+        // OpenFoodFacts answers 503 to roughly one search in six (measured:
+        // 2 of 12 back-to-back), and a query that worked a minute ago then
+        // came back empty. One short retry absorbs almost all of those.
+        if let http = response as? HTTPURLResponse, [429, 502, 503].contains(http.statusCode) {
+            try await Task.sleep(nanoseconds: 700_000_000)
+            (data, response) = try await URLSession.shared.data(for: request)
+        }
         guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
         guard (200..<300).contains(http.statusCode) else {
             throw APIError.server(
