@@ -25,8 +25,14 @@ struct ExerciseEntryEditorView: View {
     @FocusState private var heartRateFocused: Bool
     @FocusState private var caloriesFocused: Bool
 
-    init(exercise: Exercise, entryDate: Date = Date(), onSaved: @escaping () -> Void = {}) {
+    /// False when the caller closes the whole sheet itself on save (Log
+    /// Exercise): stepping back here first slid the search list in under a
+    /// sheet already on its way down.
+    private var dismissesOnSave = true
+
+    init(exercise: Exercise, entryDate: Date = Date(), dismissesOnSave: Bool = true, onSaved: @escaping () -> Void = {}) {
         _viewModel = StateObject(wrappedValue: ExerciseEntryEditorViewModel(exercise: exercise, entryDate: entryDate))
+        self.dismissesOnSave = dismissesOnSave
         self.onSaved = onSaved
     }
 
@@ -104,7 +110,7 @@ struct ExerciseEntryEditorView: View {
                 Task {
                     if await viewModel.save() {
                         onSaved()
-                        dismiss()
+                        if dismissesOnSave { dismiss() }
                     }
                 }
             }

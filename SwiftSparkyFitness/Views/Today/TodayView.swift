@@ -177,7 +177,9 @@ struct TodayView: View {
             // Module 12: search-and-materialize now stands between "Log
             // Exercise" and the entry editor, since a logged entry has to
             // reference an exercise already in the user's own library.
-            ExerciseSearchView(entryDate: viewModel.entryDate)
+            ExerciseSearchView(entryDate: viewModel.entryDate) {
+                viewModel.isPresentingLogExercise = false
+            }
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -213,7 +215,8 @@ struct TodayView: View {
             kind: kind, date: min(Calendar.current.startOfDay(for: viewModel.entryDate), maxDate),
             existing: viewModel.bodyMeasurements,
             preferences: viewModel.preferences,
-            minDate: minDate, maxDate: maxDate
+            minDate: minDate, maxDate: maxDate,
+            suggestedWeight: viewModel.lastLoggedWeight?.value
         ) {
             Task { await viewModel.reloadBodyMeasurements() }
         }

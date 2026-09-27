@@ -107,6 +107,19 @@ final class LogBodyViewModel: ObservableObject {
 
     func error(for field: BodyField) -> String? { fieldErrors[field.rawValue] }
 
+    /// The weight sheet's − / + nudge: 0.1 kg, or 0.2 lb (about the same
+    /// mass). Starts from what's typed, else from `fallback` — the last
+    /// logged weight, shown greyed as the field's hint — so a small change
+    /// from yesterday is two taps, not a retype.
+    func step(_ field: BodyField, by direction: Double, from fallback: Double?) {
+        guard let current = Double(text[field.rawValue] ?? "") ?? fallback else { return }
+        let increment = preferences.defaultWeightUnit == "lbs" ? 0.2 : 0.1
+        let next = max(0, ((current + direction * increment) * 10).rounded() / 10)
+        text[field.rawValue] = next == next.rounded() ? String(Int(next)) : String(format: "%.1f", next)
+    }
+
+    var stepLabel: String { preferences.defaultWeightUnit == "lbs" ? "0.2 lb" : "0.1 kg" }
+
     func unitLabel(for field: BodyField) -> String { field.unitLabel(preferences) }
 
     /// Reloads what's stored when the sheet's date changes — the same sheet

@@ -24,17 +24,37 @@ struct ExerciseSearchView: View {
     @State private var materializingId: String?
     @State private var materializeError: String?
     @FocusState private var isSearchFocused: Bool
-    var onLogged: () -> Void = {}
+    /// Called once an exercise is logged. The presenter should close this
+    /// sheet by its own binding: that removes Log Exercise and the editor in
+    /// one animation (see FoodSearchView for the flicker this avoids). nil
+    /// falls back to this sheet dismissing itself.
+    private let onLogged: (() -> Void)?
     /// The day a picked exercise is logged to — Today can be viewing a past day.
     private let entryDate: Date
 
-    init(entryDate: Date = Date(), onLogged: @escaping () -> Void = {}) {
+    init(entryDate: Date = Date(), onLogged: (() -> Void)? = nil) {
         self.entryDate = entryDate
         _viewModel = StateObject(wrappedValue: ExerciseSearchViewModel())
         self.onLogged = onLogged
     }
 
+    // The editor slides in inside this sheet rather than stacking a second
+    // sheet: two stacked sheets close one after the other, which flashed Log
+    // Exercise back up for a beat after saving.
     var body: some View {
+        NavigationStack {
+            searchContent
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(item: $pushedExercise) { exercise in
+                    ExerciseEntryEditorView(exercise: exercise, entryDate: entryDate, dismissesOnSave: false) {
+                        if let onLogged { onLogged() } else { dismiss() }
+                    }
+                    .toolbar(.hidden, for: .navigationBar)
+                }
+        }
+    }
+
+    private var searchContent: some View {
         VStack(spacing: 0) {
             header
 
@@ -59,14 +79,6 @@ struct ExerciseSearchView: View {
         .background(AppColor.surface)
         .scrollDismissesKeyboard(.interactively)
         .task { await viewModel.loadRecents() }
-        .sheet(item: $pushedExercise) { exercise in
-            ExerciseEntryEditorView(exercise: exercise, entryDate: entryDate) {
-                onLogged()
-                dismiss()
-            }
-            .presentationDetents([.medium, .large])
-            .presentationDragIndicator(.visible)
-        }
         .sheet(isPresented: $isPresentingCustomExercise) {
             CustomExerciseView { exercise in
                 pushedExercise = exercise

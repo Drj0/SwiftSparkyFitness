@@ -43,7 +43,9 @@ struct ExerciseDiaryView: View {
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $viewModel.isPresentingExerciseSearch, onDismiss: { Task { await viewModel.load() } }) {
-            ExerciseSearchView()
+            ExerciseSearchView {
+                viewModel.isPresentingExerciseSearch = false
+            }
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }

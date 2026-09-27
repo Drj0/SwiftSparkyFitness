@@ -44,7 +44,7 @@ enum ExerciseModality: String, Codable, CaseIterable {
     var usesSets: Bool { self == .weightReps || self == .repsOnly }
 }
 
-struct Exercise: Decodable, Identifiable {
+struct Exercise: Decodable, Identifiable, Hashable {
     let id: String
     let name: String
     let category: String?
