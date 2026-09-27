@@ -200,6 +200,11 @@ final class CloudSyncStatus: ObservableObject {
             return "No connection. Sync will resume when you're back online."
         case .managedAccountRestricted, .permissionFailure:
             return "This iCloud account isn't allowed to sync app data."
+        // The user deleted this app's data from iCloud (Settings → Apple
+        // Account → iCloud → Manage Storage). The diary on this iPhone is
+        // untouched; CloudKit re-creates the zone and uploads it again.
+        case .userDeletedZone, .zoneNotFound:
+            return "This app's iCloud data was deleted. Your diary is still on this iPhone and will back up again."
         default:
             return "Sync failed. It'll try again on its own."
         }

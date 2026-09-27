@@ -189,6 +189,19 @@ final class LocalStore {
 
     private static let logger = Logger(subsystem: "drj.SwiftSparkyFitness", category: "LocalStore")
 
+    /// Set only inside `preservingStamps`.
+    private var isPreservingStamps = false
+
+    /// Runs `body` with stamping off, for writes that copy rows with their
+    /// own `updatedAt` from somewhere else — a restored file, a server
+    /// pull. Stamping them "now" would make every copied row look like a
+    /// fresh local edit. Tombstones are still written.
+    func preservingStamps<T>(_ body: () throws -> T) rethrows -> T {
+        isPreservingStamps = true
+        defer { isPreservingStamps = false }
+        return try body()
+    }
+
     /// Stamps inserted and edited rows, and tombstones deleted rows that have
     /// a server copy. Batch deletes (`delete(model:)`, used only by the wipe)
     /// bypass this on purpose: starting over locally mustn't delete anything
@@ -203,7 +216,7 @@ final class LocalStore {
         var inserted: Set<String> = []
         for model in context.insertedModelsArray {
             guard let row = model as? any SyncTracked else { continue }
-            row.updatedAt = now
+            if !isPreservingStamps { row.updatedAt = now }
             let kind = type(of: row).syncKind
             let key = row.syncKey
             inserted.insert("\(kind)|\(key)")
@@ -211,7 +224,7 @@ final class LocalStore {
                 context.delete(stale)
             }
         }
-        for model in context.changedModelsArray {
+        for model in context.changedModelsArray where !isPreservingStamps {
             (model as? any SyncTracked)?.updatedAt = now
         }
         for model in context.deletedModelsArray {
@@ -263,7 +276,10 @@ final class LocalStore {
         if all(LocalPreferences.self).isEmpty {
             context.insert(LocalPreferences())
         }
-        save()
+        // Defaults are stamped as old as possible, not "now": they aren't an
+        // edit. Stamped now, a fresh device's seeded preferences would count
+        // as newer than the user's real ones in a restore or a pull, and win.
+        preservingStamps { save() }
     }
 
     // MARK: - Destroying

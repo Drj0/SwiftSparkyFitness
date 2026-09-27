@@ -49,6 +49,7 @@
 
 import SwiftUI
 import UIKit
+import UniformTypeIdentifiers
 
 struct SettingsView: View {
     let user: SessionUser
@@ -74,6 +75,13 @@ struct SettingsView: View {
     @State private var importProgress: ServerDataImport.Progress?
     @State private var importTask: Task<Void, Never>?
     @State private var importError: String?
+    /// The diary file: exporting writes one, restoring merges one in.
+    @State private var exportDocument: DiaryArchiveDocument?
+    @State private var isExportingArchive = false
+    @State private var isRestoringArchive = false
+    @State private var archiveNotice: String?
+    @State private var archiveNoticeIsError = false
+    @State private var lastExportedAt = DiaryExportRecord.lastExportedAt
 
     @ObservedObject private var sync = CloudSyncStatus.shared
     @Environment(\.openURL) private var openURL
@@ -161,13 +169,46 @@ struct SettingsView: View {
         // as the only escape — discoverable with a finger, not with VoiceOver
         // or Switch Control. An alert always draws both.
         .alert("Delete all local data?", isPresented: $isConfirmingWipe) {
+            // Offered only when nothing else holds a copy: this is the one
+            // irreversible control, and a file is the last way to keep one.
+            if !sync.state.backsUpTheDiary {
+                Button("Export first", action: exportDiary)
+            }
             Button("Cancel", role: .cancel) {}
             Button("Delete everything", role: .destructive, action: wipeLocalData)
         } message: {
             // Says settings too, because the wipe does reset them: naming only
             // the entries and then silently returning units to kg is the kind
             // of small dishonesty that makes the rest of the warning suspect.
-            Text("Every food, exercise, water, weight and measurement entry on this iPhone is erased, and your meal categories and unit settings go back to their defaults. This can't be undone.")
+            if sync.state.backsUpTheDiary {
+                Text("Every food, exercise, water, weight and measurement entry on this iPhone is erased, and your meal categories and unit settings go back to their defaults. This can't be undone.")
+            } else {
+                Text("Every food, exercise, water, weight and measurement entry on this iPhone is erased, and your meal categories and unit settings go back to their defaults. Nothing is backed up to iCloud, so this can't be undone unless you export a copy first.")
+            }
+        }
+        .fileExporter(
+            isPresented: $isExportingArchive,
+            document: exportDocument,
+            contentType: .json,
+            defaultFilename: DiaryArchiveDocument.defaultFilename()
+        ) { result in
+            exportDocument = nil
+            switch result {
+            case .success:
+                let now = Date()
+                DiaryExportRecord.lastExportedAt = now
+                lastExportedAt = now
+                archiveNotice = nil
+                Haptics.success()
+            case .failure(let error):
+                showArchiveNotice("Couldn't save the export. \(error.localizedDescription)", isError: true)
+            }
+        }
+        .fileImporter(isPresented: $isRestoringArchive, allowedContentTypes: [.json]) { result in
+            switch result {
+            case .success(let url): restoreDiary(from: url)
+            case .failure(let error): showArchiveNotice("Couldn't open that file. \(error.localizedDescription)", isError: true)
+            }
         }
         // An alert for the same reason as the wipe below: every choice here
         // has to be a real button, Cancel included.
@@ -280,6 +321,11 @@ struct SettingsView: View {
                 actionRow("Open iPhone Settings", icon: "gear", tint: AppColor.secondaryText) { openURL(url) }
             }
 
+            // The copy that works when neither iCloud nor a server can: a
+            // file the user keeps in Files, another app, or another device.
+            actionRow("Export diary", icon: "square.and.arrow.up", action: exportDiary)
+            actionRow("Restore from export", icon: "square.and.arrow.down") { isRestoringArchive = true }
+
             actionRow("Connect Sparky server", icon: "externaldrive.connected.to.line.below") {
                 isPresentingConnect = true
             }
@@ -289,6 +335,12 @@ struct SettingsView: View {
             sectionFooter {
                 if let warning = sync.state.dataLossWarning {
                     footnote(warning, color: AppColor.destructive)
+                }
+
+                if let archiveNotice {
+                    footnote(archiveNotice, color: archiveNoticeIsError ? AppColor.destructive : AppColor.secondaryText)
+                } else if let lastExportedAt {
+                    footnote("Last exported \(lastExportedAt.formatted(.relative(presentation: .named))).")
                 }
 
                 if isShowingDataDetail {
@@ -732,6 +784,51 @@ struct SettingsView: View {
             wipeError = "Couldn't delete everything — some data may remain. \(error.localizedDescription)"
             Haptics.error()
         }
+    }
+
+    /// Builds the file first, then opens the save sheet, so a failure to
+    /// build is reported here rather than as a sheet that saves nothing.
+    private func exportDiary() {
+        do {
+            let data = try DiaryArchive(from: LocalStore.shared).encoded()
+            exportDocument = DiaryArchiveDocument(data: data)
+            isExportingArchive = true
+        } catch {
+            showArchiveNotice("Couldn't build the export. \(error.localizedDescription)", isError: true)
+        }
+    }
+
+    /// Merges a file into this diary. Nothing is deleted, and a row edited
+    /// here since the file was made keeps this iPhone's version.
+    private func restoreDiary(from url: URL) {
+        let scoped = url.startAccessingSecurityScopedResource()
+        defer { if scoped { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let archive = try DiaryArchive.decode(Data(contentsOf: url))
+            let result = try archive.restore(into: LocalStore.shared)
+            // Local mode floors day navigation on its first-use date; a
+            // restored history older than that has to stay reachable.
+            if let earliest = result.earliestDay {
+                let firstUse = UserDefaults.standard.object(forKey: LocalAPIClient.firstUseKey) as? Date
+                if firstUse.map({ earliest < $0 }) ?? true {
+                    UserDefaults.standard.set(Calendar.current.startOfDay(for: earliest), forKey: LocalAPIClient.firstUseKey)
+                }
+            }
+            NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+            let summary = result.added + result.updated == 0
+                ? "Restored — this iPhone already had everything in that file."
+                : "Restored \(result.added) new and \(result.updated) updated items. \(result.kept) were already up to date here."
+            showArchiveNotice(summary, isError: false)
+            Haptics.success()
+        } catch {
+            showArchiveNotice(error.localizedDescription, isError: true)
+        }
+    }
+
+    private func showArchiveNotice(_ text: String, isError: Bool) {
+        archiveNotice = text
+        archiveNoticeIsError = isError
+        if isError { Haptics.error() }
     }
 
     // MARK: - Section furniture
