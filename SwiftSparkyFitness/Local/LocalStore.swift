@@ -202,6 +202,18 @@ final class LocalStore {
         return try body()
     }
 
+    private var isApplyingRemote = false
+
+    /// Runs `body` as a copy of what a server already holds: nothing is
+    /// stamped (the pull sets each row's stamp itself, to match its link),
+    /// and deletes write no tombstones — the server deleted those rows
+    /// first, so there is nothing left to tell it.
+    func applyingRemoteChanges<T>(_ body: () throws -> T) rethrows -> T {
+        isApplyingRemote = true
+        defer { isApplyingRemote = false }
+        return try body()
+    }
+
     /// Stamps inserted and edited rows, and tombstones deleted rows that have
     /// a server copy. Batch deletes (`delete(model:)`, used only by the wipe)
     /// bypass this on purpose: starting over locally mustn't delete anything
@@ -212,6 +224,7 @@ final class LocalStore {
     /// clears the tombstone, and a delete and re-insert of one key in the same
     /// save is an edit, not a delete.
     private func trackPendingChanges() {
+        guard !isApplyingRemote else { return }
         let now = Date()
         var inserted: Set<String> = []
         for model in context.insertedModelsArray {

@@ -172,6 +172,13 @@ final class LocalAPIClient: APIClientProtocol {
             store.insert(fresh)
             return fresh
         }()
+        Self.apply(setting, value, to: row)
+        store.save()
+        return try await userPreferences()
+    }
+
+    /// Shared with the server pull, which writes preferences it received.
+    static func apply(_ setting: UserPreferences.Setting, _ value: String, to row: LocalPreferences) {
         switch setting {
         case .weight: row.defaultWeightUnit = value
         case .measurement: row.defaultMeasurementUnit = value
@@ -181,8 +188,6 @@ final class LocalAPIClient: APIClientProtocol {
         case .activityLevel: row.activityLevel = value
         case .exerciseCaloriePercentage: row.exerciseCaloriePercentage = Double(value) ?? 100
         }
-        store.save()
-        return try await userPreferences()
     }
 
     // MARK: - The day

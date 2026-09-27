@@ -72,7 +72,7 @@ struct SettingsView: View {
     /// over, or start with an empty one.
     @State private var isChoosingLocalData = false
     @State private var localHasEntries = false
-    @State private var importProgress: ServerDataImport.Progress?
+    @State private var importProgress: ServerPull.Progress?
     @State private var importTask: Task<Void, Never>?
     @State private var importError: String?
     /// The diary file: exporting writes one, restoring merges one in.
@@ -160,7 +160,7 @@ struct SettingsView: View {
             ) {
                 // The send needs a signed-in session, which the login screen
                 // provides after this switch; MainTabView offers it then.
-                PendingServerHandoff.isPending = ServerDataImport.localStoreHasEntries()
+                PendingServerHandoff.isPending = LocalStore.shared.hasDiaryEntries()
                 switchMode(to: .server)
             }
             .presentationDetents([.medium, .large])
@@ -230,7 +230,7 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             if localHasEntries {
-                Text("Copy your foods, exercise, water, weight, measurements and goals from the server, or start with an empty diary. This iPhone already has a diary of its own: copying or starting fresh replaces it. The server keeps its copy either way.")
+                Text("Copy your foods, exercise, water, weight, measurements and goals from the server, or start with an empty diary. This iPhone already has a diary of its own: copying adds the server's to it without duplicating anything already here; starting fresh replaces it. The server keeps its copy either way.")
             } else {
                 Text("Copy your foods, exercise, water, weight, measurements and goals from the server, or start with an empty diary. The server keeps its copy either way.")
             }
@@ -284,7 +284,7 @@ struct SettingsView: View {
             }
 
             actionRow("Use this device only", icon: "iphone") {
-                localHasEntries = ServerDataImport.localStoreHasEntries()
+                localHasEntries = LocalStore.shared.hasDiaryEntries()
                 isChoosingLocalData = true
             }
         } header: {
@@ -744,19 +744,29 @@ struct SettingsView: View {
         Haptics.success()
     }
 
-    /// Reads the whole account, then replaces this device's diary with it
-    /// and switches. Nothing local changes until every read has succeeded,
-    /// so Cancel or a dropped connection leaves both sides as they were.
+    /// Reads the whole account, then merges it into this device's diary and
+    /// switches. A merge, not a replace: rows this device already has from an
+    /// earlier move are matched by their links rather than copied again, and
+    /// nothing only this device has is touched. Nothing local changes until
+    /// every read has succeeded, so Cancel or a dropped connection leaves
+    /// both sides as they were.
     private func startImport() {
         importError = nil
-        importProgress = ServerDataImport.Progress(daysRead: 0, totalDays: 0)
+        importProgress = ServerPull.Progress(daysRead: 0, totalDays: 0)
         let start = user.createdAt ?? Calendar.current.date(byAdding: .year, value: -1, to: Date()) ?? Date()
+        let account = SyncAccount.key(serverURL: ServerConfig.urlString, email: user.email)
         importTask = Task {
             do {
-                try await ServerDataImport().run(from: start) { progress in
-                    Task { @MainActor in
-                        if importProgress != nil { importProgress = progress }
-                    }
+                _ = try await ServerPull(store: .shared, server: APIClient.shared, account: account).run(from: start) { progress in
+                    if importProgress != nil { importProgress = progress }
+                }
+                LocalStore.shared.recordHandoff(from: .server, to: .local, serverAccount: account)
+                // Local mode floors day navigation on its first-use date; the
+                // copied history has to be reachable.
+                let firstUse = UserDefaults.standard.object(forKey: LocalAPIClient.firstUseKey) as? Date
+                let startDay = Calendar.current.startOfDay(for: start)
+                if firstUse.map({ startDay < $0 }) ?? true {
+                    UserDefaults.standard.set(startDay, forKey: LocalAPIClient.firstUseKey)
                 }
                 importTask = nil
                 importProgress = nil
@@ -1056,7 +1066,7 @@ enum HealthRequestState: Equatable {
 /// subtitle and the two-line floor exist to prevent.
 /// Copying the server's diary: a count while it reads, or what went wrong.
 private struct ImportProgressSheet: View {
-    let progress: ServerDataImport.Progress?
+    let progress: ServerPull.Progress?
     let error: String?
     let onRetry: () -> Void
     let onCancel: () -> Void

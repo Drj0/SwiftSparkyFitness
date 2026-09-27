@@ -73,6 +73,44 @@ final class ServerIntegrationTests: XCTestCase {
         return device
     }
 
+    /// Push, then pull the same day back: the ids the real server hands out
+    /// must be the ones the pull sees, so nothing comes back as new — and a
+    /// second device pulling it gets the same diary.
+    func testPushThenPullRoundTripsAgainstARealServer() async throws {
+        let device = try await seededDevice()
+        _ = try await ServerPush(store: device.store, server: server, account: account).run()
+
+        func counts(_ store: LocalStore) -> [String: Int] {
+            ["foodEntry": store.all(LocalFoodEntry.self).count, "exerciseEntry": store.all(LocalExerciseEntry.self).count,
+             "water": store.all(LocalWaterEntry.self).count, "checkIn": store.all(LocalCheckIn.self).count,
+             "meal": store.all(LocalMealType.self).count, "goal": store.all(LocalGoalRow.self).count,
+             "food": store.all(LocalFood.self).count, "exercise": store.all(LocalExercise.self).count]
+        }
+        let before = counts(device.store)
+        let back = try await ServerPull(store: device.store, server: server, account: account).run(from: day, to: day)
+        let after = counts(device.store)
+        // Diary rows the device sent must not come back as new. Rows the
+        // server has and the device never did (its own meal categories, a
+        // goal the account already had) legitimately arrive.
+        for kind in ["foodEntry", "exerciseEntry", "water", "checkIn"] {
+            XCTAssertEqual(after[kind], before[kind], "\(kind) came back as new: \(before) → \(after)")
+        }
+        _ = back
+        XCTAssertEqual(back.deleted, 0)
+
+        let other = LocalAPIClient(store: LocalStore(inMemory: true))
+        _ = try await ServerPull(store: other.store, server: server, account: account).run(from: day, to: day)
+        let mine = try await device.dailySummary(date: day)
+        let theirs = try await other.dailySummary(date: day)
+        XCTAssertEqual(theirs.foodEntries.count, mine.foodEntries.count)
+        XCTAssertEqual(theirs.foodEntries.map(\.calories).reduce(0, +), mine.foodEntries.map(\.calories).reduce(0, +), accuracy: 0.5)
+        XCTAssertEqual(theirs.exerciseSessions.userLogged.count, 1)
+        XCTAssertEqual(theirs.exerciseSessions.userLogged.first?.setsList.first?.weight, 100)
+        XCTAssertEqual(theirs.waterIntake, 500, accuracy: 0.5)
+        let weight = try await other.bodyMeasurements(date: day).weight
+        XCTAssertEqual(weight, 72.5)
+    }
+
     func testPushAgainstARealServer() async throws {
         let device = try await seededDevice()
         let engine = ServerPush(store: device.store, server: server, account: account)
