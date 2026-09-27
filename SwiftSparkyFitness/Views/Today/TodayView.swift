@@ -371,6 +371,8 @@ struct TodayView: View {
         // second line, and centring would float the shorter card in the
         // middle of that extra height instead of keeping both cards'
         // headers flush with each other.
+        // Both cards fill the row's height, and the row takes the taller
+        // card's — so the pair stays level whatever either one shows.
         HStack(alignment: .top, spacing: 12) {
             BodyCard(
                 measurements: viewModel.bodyMeasurements,
@@ -389,6 +391,7 @@ struct TodayView: View {
                 viewModel.isPresentingLogExercise = true
             }
         }
+        .fixedSize(horizontal: false, vertical: true)
     }
 }
 

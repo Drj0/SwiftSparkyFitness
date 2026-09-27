@@ -49,58 +49,26 @@ struct BodyCard: View {
 
     var body: some View {
         Button(action: onLogWeight) {
-            VStack(alignment: .leading, spacing: 10) {
-                // Capped like the ring's centre label elsewhere in this app
-                // (fixed geometry that shouldn't spill) — an uncapped
-                // "⚖️ Weight" wraps mid-word ("Weig" / "ht") once this card
-                // sits half-width beside ExerciseTodayCard at accessibility
-                // text sizes.
-                Text("⚖️ Weight")
-                    .appBody(13, weight: .semibold)
-                    .foregroundStyle(AppColor.ink)
-                    .dynamicTypeSize(...DynamicTypeSize.xLarge)
-
-                if let displayWeight {
-                    // Was a `Text + Text` concatenation, which can't take a
-                    // view modifier — and the scaling font has to be one. An
-                    // HStack on .firstTextBaseline keeps the identical look
-                    // (unit sitting on the number's baseline) while letting
-                    // both halves scale with Dynamic Type.
-                    HStack(alignment: .firstTextBaseline, spacing: 0) {
-                        Text(preferences.formatted(displayWeight))
-                            .appBody(20, weight: .bold)
-                            .foregroundStyle(AppColor.ink)
-                        Text(" \(preferences.weightUnitLabel)")
-                            .appBody(13)
-                            .foregroundStyle(AppColor.secondaryText)
-                    }
-                    .contentTransition(.numericText())
-
-                    // Small and out of the way on purpose — this is a
-                    // fallback figure standing in for today's, and the one
-                    // job of this line is to stop it being mistaken for one.
-                    if let staleCaption {
-                        Text("Logged \(staleCaption)")
-                            .appBody(10)
-                            .foregroundStyle(AppColor.placeholder)
-                    }
-                } else {
-                    Text(isToday ? "Log today's →" : "Log →")
-                        .appBody(13, weight: .semibold)
-                        .foregroundStyle(AppColor.accent)
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .contentShape(Rectangle())
+            TodayStatTile(
+                title: "⚖️ Weight",
+                value: displayWeight.map(preferences.formatted),
+                unit: preferences.weightUnitLabel,
+                caption: caption,
+                captionIsAction: displayWeight == nil
+            )
         }
         .buttonStyle(.pressable)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel(displayWeight == nil ? (isToday ? "Log today's weight" : "Log weight") : "Weight")
         .accessibilityValue(accessibilityValue)
-        .padding(14)
-        .background(AppColor.surface)
-        .overlay(RoundedRectangle(cornerRadius: AppRadius.md).stroke(AppColor.hairline, lineWidth: 1))
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
+    }
+
+    /// An older weight standing in for today's says so — the one job of this
+    /// line is to stop it being mistaken for today's figure.
+    private var caption: String {
+        if displayWeight == nil { return isToday ? "Log today's →" : "Log →" }
+        if let staleCaption { return "Logged \(staleCaption)" }
+        return "Tap to update"
     }
 
     private var accessibilityValue: String {
