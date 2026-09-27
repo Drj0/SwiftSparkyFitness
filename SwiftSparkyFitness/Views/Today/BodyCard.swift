@@ -29,6 +29,8 @@ struct BodyCard: View {
     let lastLoggedWeight: (value: Double, date: Date)?
     let preferences: UserPreferences
     let onLogWeight: () -> Void
+    /// False while Today is showing a past day from the week strip.
+    var isToday = true
 
     private var displayWeight: Double? {
         measurements.weight ?? lastLoggedWeight?.value
@@ -83,7 +85,7 @@ struct BodyCard: View {
                             .foregroundStyle(AppColor.placeholder)
                     }
                 } else {
-                    Text("Log today's →")
+                    Text(isToday ? "Log today's →" : "Log →")
                         .appBody(13, weight: .semibold)
                         .foregroundStyle(AppColor.accent)
                 }
@@ -93,7 +95,7 @@ struct BodyCard: View {
         }
         .buttonStyle(.pressable)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(displayWeight == nil ? "Log today's weight" : "Weight")
+        .accessibilityLabel(displayWeight == nil ? (isToday ? "Log today's weight" : "Log weight") : "Weight")
         .accessibilityValue(accessibilityValue)
         .padding(14)
         .background(AppColor.surface)

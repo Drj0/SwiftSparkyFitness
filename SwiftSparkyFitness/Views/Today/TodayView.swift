@@ -52,6 +52,7 @@ struct TodayView: View {
                     if viewModel.isLoading && viewModel.summary == nil {
                         ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
                     } else if let summary = viewModel.summary {
+                        Group {
                         if !viewModel.hasGoalSet {
                             GoalNotSetCard { viewModel.isPresentingSetGoals = true }
                         } else if viewModel.hasLoggedAnything {
@@ -65,6 +66,13 @@ struct TodayView: View {
                         // water on a day with nothing else on it — and, with
                         // no goal set, no way to log anything at all.
                         statRow()
+                        }
+                        // A newly picked day is still loading: dim the old
+                        // one and block taps, since water and the sheets
+                        // already point at the new day.
+                        .opacity(viewModel.isSwitchingDay ? 0.4 : 1)
+                        .allowsHitTesting(!viewModel.isSwitchingDay)
+                        .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: viewModel.isSwitchingDay)
                     } else if let errorMessage = viewModel.errorMessage {
                         loadErrorState(errorMessage)
                     }
@@ -206,10 +214,12 @@ struct TodayView: View {
         let total = entries.reduce(0) { $0 + $1.calories }
         return VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Text("\(mealType.name.capitalized) · \(Int(total)) kcal")
+                // An empty meal is just its header, quieter and without a
+                // "0 kcal" — no placeholder box taking up a row.
+                Text(entries.isEmpty ? mealType.name.capitalized : "\(mealType.name.capitalized) · \(Int(total)) kcal")
                     .appBody(13, weight: .semibold)
                     .tracking(0.8)
-                    .foregroundStyle(AppColor.secondaryText)
+                    .foregroundStyle(entries.isEmpty ? AppColor.placeholder : AppColor.secondaryText)
                     .textCase(.uppercase)
                     // The total changes under the user the moment a food
                     // sheet dismisses; rolling the digits shows *which*
@@ -217,6 +227,7 @@ struct TodayView: View {
                     .contentTransition(.numericText())
                     .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: total)
                     .accessibilityAddTraits(.isHeader)
+                    .accessibilityValue(entries.isEmpty ? "Nothing logged" : "")
                 Spacer()
                 Button {
                     viewModel.pendingMealType = mealType
@@ -239,19 +250,7 @@ struct TodayView: View {
                 .buttonStyle(.pressable)
                 .accessibilityLabel("Add food to \(mealType.name.capitalized)")
             }
-            if entries.isEmpty {
-                Text("Not logged yet")
-                    .appBody(14)
-                    .foregroundStyle(AppColor.placeholder)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 14)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: AppRadius.md)
-                            .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
-                            .foregroundStyle(AppColor.dashedBorder)
-                    )
-            } else {
+            if !entries.isEmpty {
                 // One grouped card per meal, rows split by inset hairlines —
                 // reads as a single meal rather than a stack of loose foods.
                 VStack(spacing: 0) {
@@ -313,13 +312,15 @@ struct TodayView: View {
                 measurements: viewModel.bodyMeasurements,
                 lastLoggedWeight: viewModel.lastLoggedWeight,
                 preferences: viewModel.preferences,
-                onLogWeight: { viewModel.isPresentingLogWeight = true }
+                onLogWeight: { viewModel.isPresentingLogWeight = true },
+                isToday: viewModel.isViewingToday
             )
 
             ExerciseTodayCard(
                 durationMinutes: viewModel.exerciseDurationMinutes,
                 caloriesBurned: viewModel.exerciseCaloriesBurned,
-                hasLogged: viewModel.hasLoggedExercise
+                hasLogged: viewModel.hasLoggedExercise,
+                isToday: viewModel.isViewingToday
             ) {
                 viewModel.isPresentingLogExercise = true
             }

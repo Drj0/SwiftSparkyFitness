@@ -14,6 +14,8 @@ struct ExerciseTodayCard: View {
     let durationMinutes: Double
     let caloriesBurned: Double
     let hasLogged: Bool
+    /// False while Today is showing a past day from the week strip.
+    var isToday = true
     let onTap: () -> Void
 
     var body: some View {
@@ -44,7 +46,7 @@ struct ExerciseTodayCard: View {
                     }
                     .contentTransition(.numericText())
                 } else {
-                    Text("Log today's →")
+                    Text(isToday ? "Log today's →" : "Log →")
                         .appBody(13, weight: .semibold)
                         .foregroundStyle(AppColor.accent)
                 }
@@ -54,7 +56,7 @@ struct ExerciseTodayCard: View {
         }
         .buttonStyle(.pressable)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel(hasLogged ? "Exercise" : "Log today's exercise")
+        .accessibilityLabel(hasLogged ? "Exercise" : isToday ? "Log today's exercise" : "Log exercise")
         .accessibilityValue(
             hasLogged
                 ? "\(Int(durationMinutes)) minutes, \(Int(caloriesBurned)) calories burned"

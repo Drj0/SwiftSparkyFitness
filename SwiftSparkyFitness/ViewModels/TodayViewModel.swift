@@ -66,6 +66,14 @@ final class TodayViewModel: ObservableObject {
 
     var isViewingToday: Bool { selectedDay == nil }
 
+    /// The day `summary` was loaded for. Differs from `today` while a
+    /// newly picked day is still loading, so the screen can dim the old one.
+    @Published private(set) var loadedDay: Date?
+    var isSwitchingDay: Bool {
+        guard let loadedDay else { return false }
+        return !Calendar.current.isDate(loadedDay, inSameDayAs: today)
+    }
+
     /// The day new entries are logged to. `today` is a load-time snapshot,
     /// so after a background trip past midnight it can still be yesterday;
     /// the live case reads the clock instead.
@@ -207,6 +215,7 @@ final class TodayViewModel: ObservableObject {
             // a day the user already left must not paint over the newer day.
             guard day == today else { return }
             summary = loadedSummary
+            loadedDay = day
             water.adopt(summary: loadedSummary)
             // Quick-add has to name the primary container explicitly, so the
             // screen needs to know which one that is before the first tap.
