@@ -94,6 +94,14 @@ struct TodayView: View {
         }
         .background(AppColor.background)
         .task { await viewModel.load() }
+        .alert("Couldn't remove that", isPresented: Binding(
+            get: { viewModel.deleteError != nil },
+            set: { if !$0 { viewModel.deleteError = nil } }
+        )) {
+            Button("OK") { viewModel.deleteError = nil }
+        } message: {
+            Text(viewModel.deleteError ?? "")
+        }
         .sheet(isPresented: $viewModel.isPresentingLogChoice, onDismiss: {
             switch viewModel.pendingLogTarget {
             case .food: viewModel.isPresentingFoodSearch = true
@@ -116,7 +124,9 @@ struct TodayView: View {
             Task { await viewModel.load() }
         }) {
             FoodSearchView(mealTypes: viewModel.loggableMealTypes, initialMealType: viewModel.pendingMealType,
-                           entryDate: viewModel.entryDate)
+                           entryDate: viewModel.entryDate) {
+                viewModel.isPresentingFoodSearch = false
+            }
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -290,6 +300,17 @@ struct TodayView: View {
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(entry.foodName), \(portion(entry))")
         .accessibilityValue("\(Int(entry.calories)) calories")
+        // Long-press to remove a mistaken entry. Not swipe: that needs a
+        // List, and this screen is a scroll of cards.
+        .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: AppRadius.md))
+        .contextMenu {
+            Button("Delete", systemImage: "trash", role: .destructive) {
+                Task { await viewModel.deleteFoodEntry(entry) }
+            }
+        }
+        .accessibilityAction(named: "Delete") {
+            Task { await viewModel.deleteFoodEntry(entry) }
+        }
     }
 
     /// Water, weight and exercise. Water and weight were read-only stubs

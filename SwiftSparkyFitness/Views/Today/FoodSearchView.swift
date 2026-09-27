@@ -41,13 +41,40 @@ struct FoodSearchView: View {
 
     /// The day a picked food is logged to — Today can be viewing a past day.
     private let entryDate: Date
+    /// Called once a food is logged. The presenter should close this sheet
+    /// by its own binding: that removes Log Food and the detail sheet on top
+    /// of it in one animation, where this sheet's `dismiss()` closed the
+    /// detail first and flashed Log Food back up before it went too.
+    private let onLogged: (() -> Void)?
 
-    init(mealTypes: [MealType], initialMealType: MealType? = nil, entryDate: Date = Date()) {
+    init(mealTypes: [MealType], initialMealType: MealType? = nil, entryDate: Date = Date(),
+         onLogged: (() -> Void)? = nil) {
         self.entryDate = entryDate
+        self.onLogged = onLogged
         _viewModel = StateObject(wrappedValue: FoodSearchViewModel(mealTypes: mealTypes, initialMealType: initialMealType))
     }
 
+    // Picking a food slides its detail in *inside* this sheet (the detail
+    // already carries its own "‹ Back"), rather than stacking a second sheet
+    // on top. Two stacked sheets close one after the other, so logging
+    // flashed Log Food back up for a beat before the whole thing went away.
     var body: some View {
+        NavigationStack {
+            searchContent
+                .toolbar(.hidden, for: .navigationBar)
+                .navigationDestination(item: $pushedFood) { food in
+                    if let mealType = viewModel.selectedMealType {
+                        FoodDetailView(food: food, mealTypes: viewModel.mealTypes, initialMealType: mealType,
+                                       entryDate: entryDate, dismissesOnSave: false) {
+                            if let onLogged { onLogged() } else { dismiss() }
+                        }
+                        .toolbar(.hidden, for: .navigationBar)
+                    }
+                }
+        }
+    }
+
+    private var searchContent: some View {
         VStack(spacing: 0) {
             header
 
@@ -73,15 +100,6 @@ struct FoodSearchView: View {
         .background(AppColor.surface)
         .scrollDismissesKeyboard(.interactively)
         .task { await viewModel.loadRecents() }
-        .sheet(item: $pushedFood) { food in
-            if let mealType = viewModel.selectedMealType {
-                FoodDetailView(food: food, mealTypes: viewModel.mealTypes, initialMealType: mealType, entryDate: entryDate) {
-                    dismiss()
-                }
-                .presentationDetents([.medium, .large])
-                .presentationDragIndicator(.visible)
-            }
-        }
         .sheet(isPresented: $isPresentingCustomFood) {
             CustomFoodView { dismiss() }
                 .presentationDetents([.medium, .large])

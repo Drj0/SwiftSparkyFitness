@@ -13,12 +13,18 @@ struct FoodDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let onLogged: () -> Void
+    /// False when the caller closes the whole sheet itself on save (Log
+    /// Food): going Back here first slid the search list in under a sheet
+    /// already on its way down.
+    private let dismissesOnSave: Bool
 
     init(
         food: Food, mealTypes: [MealType], initialMealType: MealType,
         existingEntryId: String? = nil, initialQuantity: Double? = nil, entryDate: Date = Date(),
+        dismissesOnSave: Bool = true,
         onLogged: @escaping () -> Void
     ) {
+        self.dismissesOnSave = dismissesOnSave
         _viewModel = StateObject(wrappedValue: FoodDetailViewModel(
             food: food, mealTypes: mealTypes, initialMealType: initialMealType,
             existingEntryId: existingEntryId, initialQuantity: initialQuantity, entryDate: entryDate
@@ -58,7 +64,7 @@ struct FoodDetailView: View {
             ) {
                 Task {
                     if await viewModel.save() {
-                        dismiss()
+                        if dismissesOnSave { dismiss() }
                         onLogged()
                     }
                 }

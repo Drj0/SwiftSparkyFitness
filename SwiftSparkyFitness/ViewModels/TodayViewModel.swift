@@ -231,6 +231,21 @@ final class TodayViewModel: ObservableObject {
         }
     }
 
+    /// Set when removing a food fails. Separate from `errorMessage`, which
+    /// only shows when the whole day failed to load.
+    @Published var deleteError: String?
+
+    func deleteFoodEntry(_ entry: FoodEntrySummary) async {
+        do {
+            try await apiClient.deleteFoodEntry(id: entry.id)
+            Haptics.success()
+            await load()
+        } catch {
+            deleteError = error.localizedDescription
+            Haptics.error()
+        }
+    }
+
     /// Re-reads only the check-in row — used after a body sheet saves, so
     /// the card updates without re-fetching the whole day.
     func reloadBodyMeasurements() async {
