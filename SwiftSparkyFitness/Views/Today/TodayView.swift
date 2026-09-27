@@ -379,7 +379,8 @@ struct TodayView: View {
                 lastLoggedWeight: viewModel.lastLoggedWeight,
                 preferences: viewModel.preferences,
                 onLogWeight: { viewModel.isPresentingLogWeight = true },
-                isToday: viewModel.isViewingToday
+                isToday: viewModel.isViewingToday,
+                referenceDate: viewModel.today
             )
 
             ExerciseTodayCard(

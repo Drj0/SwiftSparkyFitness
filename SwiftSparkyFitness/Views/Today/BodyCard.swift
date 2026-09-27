@@ -31,6 +31,13 @@ struct BodyCard: View {
     let onLogWeight: () -> Void
     /// False while Today is showing a past day from the week strip.
     var isToday = true
+    /// The day on screen — what "3 days ago" and the two-week rule are
+    /// measured from, so a past day reads relative to itself.
+    var referenceDate = Date()
+
+    /// An older weight keeps standing in for two weeks; after that the card
+    /// still shows it, but asks for a fresh one.
+    static let staleAfterDays = 14
 
     private var displayWeight: Double? {
         measurements.weight ?? lastLoggedWeight?.value
@@ -44,17 +51,30 @@ struct BodyCard: View {
         guard isShowingStaleWeight, let date = lastLoggedWeight?.date else { return nil }
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
-        return formatter.localizedString(for: date, relativeTo: Date())
+        return formatter.localizedString(for: date, relativeTo: referenceDate)
+    }
+
+    private var needsUpdate: Bool {
+        guard isShowingStaleWeight, let date = lastLoggedWeight?.date else { return false }
+        return Self.needsUpdate(loggedOn: date, viewing: referenceDate)
+    }
+
+    /// Up to and including day 14 the old weight stands; from day 15 it asks.
+    static func needsUpdate(loggedOn date: Date, viewing day: Date) -> Bool {
+        let calendar = Calendar.current
+        let days = calendar.dateComponents([.day], from: calendar.startOfDay(for: date), to: calendar.startOfDay(for: day)).day ?? 0
+        return days > staleAfterDays
     }
 
     var body: some View {
         Button(action: onLogWeight) {
             TodayStatTile(
                 title: "⚖️ Weight",
-                value: displayWeight.map(preferences.formatted),
-                unit: preferences.weightUnitLabel,
+                value: displayWeight.map(preferences.formatted) ?? "Not set",
+                valueIsEmpty: displayWeight == nil,
+                unit: displayWeight == nil ? "" : preferences.weightUnitLabel,
                 caption: caption,
-                captionIsAction: displayWeight == nil
+                captionIsAction: displayWeight == nil || needsUpdate
             )
         }
         .buttonStyle(.pressable)
@@ -66,7 +86,8 @@ struct BodyCard: View {
     /// An older weight standing in for today's says so — the one job of this
     /// line is to stop it being mistaken for today's figure.
     private var caption: String {
-        if displayWeight == nil { return isToday ? "Log today's →" : "Log →" }
+        if displayWeight == nil { return "Log weight →" }
+        if needsUpdate { return "Time to update →" }
         if let staleCaption { return "Logged \(staleCaption)" }
         return "Tap to update"
     }
@@ -75,6 +96,6 @@ struct BodyCard: View {
         guard let displayWeight else { return "Not logged" }
         let base = "\(preferences.formatted(displayWeight)) \(preferences.weightUnitLabel)"
         guard let staleCaption else { return base }
-        return "\(base), logged \(staleCaption)"
+        return "\(base), logged \(staleCaption)" + (needsUpdate ? ", time to update" : "")
     }
 }

@@ -3131,4 +3131,14 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertEqual(window.allDays.first, day("2026-09-20"))
         XCTAssertEqual(window.allDays.last, day("2026-09-23"))
     }
+
+    /// A past weight stands in for two weeks, then the card asks for a new one.
+    func testWeightAsksForUpdateAfterTwoWeeks() {
+        let calendar = Calendar.current
+        let today = calendar.startOfDay(for: Date())
+        let daysAgo = { (n: Int) in calendar.date(byAdding: .day, value: -n, to: today)! }
+        XCTAssertFalse(BodyCard.needsUpdate(loggedOn: daysAgo(3), viewing: today))
+        XCTAssertFalse(BodyCard.needsUpdate(loggedOn: daysAgo(14), viewing: today))
+        XCTAssertTrue(BodyCard.needsUpdate(loggedOn: daysAgo(15), viewing: today))
+    }
 }
