@@ -511,3 +511,63 @@ final class LocalModeTests: XCTestCase {
         XCTAssertEqual(preferences.defaultWeightUnit, "kg")
     }
 }
+
+// MARK: - Copying a server diary to this device
+
+extension LocalModeTests {
+    /// Another local store stands in for the server: it speaks the same
+    /// protocol, so the import reads it exactly as it would read a server.
+    func testImportCopiesEachDayAndMatchesItsTotals() async throws {
+        let server = makeLocal()
+        let destination = makeLocal()
+        let mealType = try await server.mealTypes().first!
+        let oats = try await seedFood(server, id: "oats", calories: 380)
+        let today = Calendar.current.startOfDay(for: Date())
+        let yesterday = Calendar.current.date(byAdding: .day, value: -1, to: today)!
+
+        // Same food on two days, at two portions.
+        try await server.createFoodEntry(FoodEntryInput(food: oats, mealTypeId: mealType.id, quantity: 50, entryDate: yesterday))
+        try await server.createFoodEntry(FoodEntryInput(food: oats, mealTypeId: mealType.id, quantity: 150, entryDate: today))
+        let running = try await server.createCustomExercise(CustomExerciseInput(name: "Running", category: "cardio", modality: .durationDistance))
+        _ = try await server.createExerciseEntry(ExerciseEntryInput(
+            exerciseId: running.id, modality: .durationDistance, entryDate: today,
+            durationMinutes: 30, caloriesBurned: 310, distance: 5
+        ))
+        _ = try await server.logWaterAmount(date: today, milliliters: 500)
+        _ = try await server.upsertBodyMeasurements(BodyMeasurementsInput(date: yesterday, values: [.weight: 72.5]))
+
+        // Something already on the device, which the copy replaces.
+        let stray = try await seedFood(destination, id: "stray")
+        try await destination.createFoodEntry(FoodEntryInput(food: stray, mealTypeId: mealType.id, quantity: 100, entryDate: today))
+
+        try await ServerDataImport(server: server, local: destination).run(from: yesterday) { _ in }
+
+        for date in [yesterday, today] {
+            let source = try await server.dailySummary(date: date)
+            let copy = try await destination.dailySummary(date: date)
+            XCTAssertEqual(copy.foodEntries.map(\.foodName), source.foodEntries.map(\.foodName))
+            XCTAssertEqual(copy.calorieBalance.eaten, source.calorieBalance.eaten, accuracy: 0.01)
+            XCTAssertEqual(copy.waterIntake, source.waterIntake, accuracy: 0.01)
+            XCTAssertEqual(copy.exerciseSessions.map(\.caloriesBurned), source.exerciseSessions.map(\.caloriesBurned))
+        }
+        let session = try await destination.dailySummary(date: today).exerciseSessions.first
+        XCTAssertEqual(session?.distance, 5)
+        XCTAssertEqual(session?.durationMinutes, 30)
+        let weight = try await destination.bodyMeasurements(date: yesterday).weight
+        XCTAssertEqual(weight, 72.5)
+        // One food logged on two days stays one food.
+        XCTAssertEqual(destination.store.all(LocalFood.self).map(\.id), ["oats"])
+    }
+
+    func testImportMakesTheCopiedHistoryReachable() async throws {
+        let server = makeLocal()
+        let destination = makeLocal()
+        let start = Calendar.current.date(byAdding: .day, value: -3, to: Calendar.current.startOfDay(for: Date()))!
+        let saved = UserDefaults.standard.object(forKey: LocalAPIClient.firstUseKey)
+        defer { UserDefaults.standard.set(saved, forKey: LocalAPIClient.firstUseKey) }
+
+        try await ServerDataImport(server: server, local: destination).run(from: start) { _ in }
+
+        XCTAssertEqual(destination.firstUseDate, start)
+    }
+}

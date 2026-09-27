@@ -67,6 +67,13 @@ struct SettingsView: View {
     /// Collapsed by default. See `localDataSection`.
     @State private var isShowingDataDetail = false
     @State private var healthRequest: HealthRequestState = .idle
+    /// Switching to this device only asks first: copy the server's diary
+    /// over, or start with an empty one.
+    @State private var isChoosingLocalData = false
+    @State private var localHasEntries = false
+    @State private var importProgress: ServerDataImport.Progress?
+    @State private var importTask: Task<Void, Never>?
+    @State private var importError: String?
 
     @ObservedObject private var sync = CloudSyncStatus.shared
     @Environment(\.openURL) private var openURL
@@ -162,6 +169,30 @@ struct SettingsView: View {
             // of small dishonesty that makes the rest of the warning suspect.
             Text("Every food, exercise, water, weight and measurement entry on this iPhone is erased, and your meal categories and unit settings go back to their defaults. This can't be undone.")
         }
+        // An alert for the same reason as the wipe below: every choice here
+        // has to be a real button, Cancel included.
+        .alert("Bring your diary to this iPhone?", isPresented: $isChoosingLocalData) {
+            Button("Copy my data") { startImport() }
+            Button("Start fresh", role: localHasEntries ? .destructive : nil) { startFresh() }
+            if localHasEntries {
+                Button("Keep this iPhone's diary") { switchMode(to: .local) }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            if localHasEntries {
+                Text("Copy your foods, exercise, water, weight, measurements and goals from the server, or start with an empty diary. This iPhone already has a diary of its own: copying or starting fresh replaces it. The server keeps its copy either way.")
+            } else {
+                Text("Copy your foods, exercise, water, weight, measurements and goals from the server, or start with an empty diary. The server keeps its copy either way.")
+            }
+        }
+        .sheet(isPresented: Binding(
+            get: { importProgress != nil || importError != nil },
+            set: { if !$0 { cancelImport() } }
+        )) {
+            ImportProgressSheet(progress: importProgress, error: importError, onRetry: startImport, onCancel: cancelImport)
+                .presentationDetents([.height(260)])
+                .interactiveDismissDisabled(importError == nil)
+        }
         .alert("Sign out?", isPresented: $isConfirmingSignOut) {
             Button("Cancel", role: .cancel) {}
             Button("Sign out", role: .destructive, action: onSignOut)
@@ -195,7 +226,10 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
 
-            actionRow("Use this device only", icon: "iphone") { switchMode(to: .local) }
+            actionRow("Use this device only", icon: "iphone") {
+                localHasEntries = ServerDataImport.localStoreHasEntries()
+                isChoosingLocalData = true
+            }
         } header: {
             sectionHeader("YOUR DATA")
         } footer: {
@@ -633,6 +667,57 @@ struct SettingsView: View {
         Haptics.success()
     }
 
+    /// Reads the whole account, then replaces this device's diary with it
+    /// and switches. Nothing local changes until every read has succeeded,
+    /// so Cancel or a dropped connection leaves both sides as they were.
+    private func startImport() {
+        importError = nil
+        importProgress = ServerDataImport.Progress(daysRead: 0, totalDays: 0)
+        let start = user.createdAt ?? Calendar.current.date(byAdding: .year, value: -1, to: Date()) ?? Date()
+        importTask = Task {
+            do {
+                try await ServerDataImport().run(from: start) { progress in
+                    Task { @MainActor in
+                        if importProgress != nil { importProgress = progress }
+                    }
+                }
+                importTask = nil
+                importProgress = nil
+                NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+                switchMode(to: .local)
+            } catch is CancellationError {
+                importTask = nil
+                importProgress = nil
+            } catch {
+                importTask = nil
+                importProgress = nil
+                importError = error.localizedDescription
+                Haptics.error()
+            }
+        }
+    }
+
+    private func cancelImport() {
+        importTask?.cancel()
+        importTask = nil
+        importProgress = nil
+        importError = nil
+    }
+
+    /// An empty diary, whatever this device held before, starting today.
+    private func startFresh() {
+        do {
+            try LocalStore.shared.deleteEverything()
+        } catch {
+            importError = "Couldn't clear this iPhone's diary. \(error.localizedDescription)"
+            Haptics.error()
+            return
+        }
+        UserDefaults.standard.removeObject(forKey: LocalAPIClient.firstUseKey)
+        NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+        switchMode(to: .local)
+    }
+
     /// Erases the store and tells the day screens to re-read, so Today and
     /// Diary don't keep rendering rows that no longer exist.
     private func wipeLocalData() {
@@ -847,6 +932,57 @@ enum HealthRequestState: Equatable {
 /// that's deliberate: a row appearing under the switch would put the section
 /// back to changing height between states, which is the thing the fixed
 /// subtitle and the two-line floor exist to prevent.
+/// Copying the server's diary: a count while it reads, or what went wrong.
+private struct ImportProgressSheet: View {
+    let progress: ServerDataImport.Progress?
+    let error: String?
+    let onRetry: () -> Void
+    let onCancel: () -> Void
+
+    var body: some View {
+        VStack(spacing: 16) {
+            if let error {
+                Image(systemName: "exclamationmark.triangle.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(AppColor.destructive)
+                    .accessibilityHidden(true)
+                Text("Couldn't copy your diary")
+                    .appBody(17, weight: .semibold)
+                    .foregroundStyle(AppColor.ink)
+                Text("Nothing on this iPhone changed, and you're still using the server. \(error)")
+                    .appBody(13)
+                    .foregroundStyle(AppColor.secondaryText)
+                    .multilineTextAlignment(.center)
+                PrimaryButton(title: "Try again", action: onRetry)
+            } else {
+                Text("Copying your diary")
+                    .appBody(17, weight: .semibold)
+                    .foregroundStyle(AppColor.ink)
+                if let progress, progress.totalDays > 0 {
+                    ProgressView(value: Double(progress.daysRead), total: Double(progress.totalDays))
+                        .tint(AppColor.accent)
+                    Text("\(progress.daysRead) of \(progress.totalDays) days")
+                        .appBody(13)
+                        .foregroundStyle(AppColor.secondaryText)
+                        .monospacedDigit()
+                } else {
+                    ProgressView().tint(AppColor.accent)
+                }
+                Text("Keep the app open until it finishes.")
+                    .appBody(12)
+                    .foregroundStyle(AppColor.placeholder)
+            }
+            Button(error == nil ? "Cancel" : "Close", action: onCancel)
+                .appBody(15, weight: .semibold)
+                .foregroundStyle(AppColor.accent)
+                .frame(minHeight: 44)
+        }
+        .padding(24)
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(AppColor.surface)
+    }
+}
+
 struct Footnote {
     let text: String
     var link: String? = nil
