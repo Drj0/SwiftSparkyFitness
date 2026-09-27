@@ -26,6 +26,45 @@ enum PendingServerHandoff {
     }
 }
 
+/// Server → this device's own diary. See docs/SYNC_SWITCHING_PLAN.md,
+/// "Server → iCloud".
+@MainActor
+enum ServerToDeviceMove {
+    /// Moves server mode's copy of the diary into this device's own diary.
+    /// The copy is brought up to date first when the server answers — what's
+    /// waiting is sent, and the whole history is fetched if this device never
+    /// had it — but the move itself needs no server, so it works with the
+    /// server out of range or gone. A merge: nothing only this device's diary
+    /// has is touched, and rows it already has from an earlier move are
+    /// matched rather than copied again. The caller switches the mode.
+    static func run(user: SessionUser, serverURL: String = ServerConfig.urlString, sync: ServerSync = .shared) async throws {
+        let account = SyncAccount.key(serverURL: serverURL, email: user.email)
+        if sync.account != account { sync.activate(user: user, serverURL: serverURL) }
+        // Cancelling ends the wait; the sync finishes in the background and
+        // nothing is moved.
+        await sync.syncNow()
+        try Task.checkCancellation()
+        try StoreTransfer.copy(from: ServerCache.store(for: account), to: .shared, account: account)
+        // A copy that couldn't be brought up to date is current only to its
+        // last sync; the handoff says so.
+        let upToDate = sync.status == .idle && InitialPull.isDone(account: account)
+        LocalStore.shared.recordHandoff(from: .server, to: .local, serverAccount: account,
+                                        gapUntil: upToDate ? nil : (sync.lastSyncedAt ?? .distantPast))
+        // Local mode floors day navigation on its first-use date; the copied
+        // history has to be reachable.
+        let start = Calendar.current.startOfDay(for: user.createdAt ?? Calendar.current.date(byAdding: .year, value: -1, to: Date()) ?? Date())
+        let firstUse = UserDefaults.standard.object(forKey: LocalAPIClient.firstUseKey) as? Date
+        if firstUse.map({ start < $0 }) ?? true {
+            UserDefaults.standard.set(start, forKey: LocalAPIClient.firstUseKey)
+        }
+        // Everything the copy held — rows, links, unsent deletes — is now in
+        // this diary. Keeping the copy too would let its unsent changes reach
+        // the server a second time on a later return.
+        sync.deactivate(removingCopy: true)
+        NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+    }
+}
+
 @MainActor
 final class ServerHandoffModel: ObservableObject {
     enum Phase: Equatable {
@@ -116,7 +155,11 @@ final class ServerHandoffModel: ObservableObject {
     }
 
     private func complete(with report: ServerPush.Report) {
-        store.recordHandoff(from: .local, to: .server, serverAccount: account)
+        // Sending entries logged after the move isn't a new move: recording
+        // one would make every other device offer "your diary moved" again.
+        let latest = store.latestHandoff
+        let alreadyThere = latest?.toMode == AppMode.server.rawValue && latest?.serverAccount == account
+        if !alreadyThere { store.recordHandoff(from: .local, to: .server, serverAccount: account) }
         // Rows the server refused stay unlinked; keeping the offer in
         // Settings is how they get sent once whatever blocked them is fixed.
         PendingServerHandoff.isPending = !report.failures.isEmpty

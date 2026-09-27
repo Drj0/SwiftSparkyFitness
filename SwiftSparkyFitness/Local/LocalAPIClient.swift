@@ -82,8 +82,15 @@ final class LocalAPIClient: APIClientProtocol {
 
     // MARK: - Meal types
 
+    /// One per id: two devices each seed the four defaults before iCloud
+    /// meets them, and an exact tie between those copies isn't deleted (see
+    /// `LocalStore.removeDuplicateRows`), so it's hidden here — newest first.
     func mealTypes() async throws -> [MealType] {
-        store.all(LocalMealType.self, sortBy: [SortDescriptor(\.sortOrder)]).map(Self.mealType)
+        var seen: Set<String> = []
+        return store.all(LocalMealType.self, sortBy: [SortDescriptor(\.sortOrder)])
+            .sorted { $0.sortOrder != $1.sortOrder ? $0.sortOrder < $1.sortOrder : $0.updatedAt > $1.updatedAt }
+            .filter { seen.insert($0.id).inserted }
+            .map(Self.mealType)
     }
 
     static func mealType(_ row: LocalMealType) -> MealType {

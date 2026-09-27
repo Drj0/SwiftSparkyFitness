@@ -302,6 +302,9 @@ final class LocalStore {
     /// back on — the user should be able to start over deliberately rather
     /// than only by deleting the app.
     func deleteEverything() throws {
+        // Starting over includes the automatic backups of what's being
+        // deleted — otherwise a wiped diary could be offered back later.
+        if self === LocalStore.shared { AutoBackup.removeAll() }
         try context.delete(model: LocalFood.self)
         try context.delete(model: LocalFoodEntry.self)
         try context.delete(model: LocalExercise.self)

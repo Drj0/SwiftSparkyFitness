@@ -83,6 +83,7 @@ struct SettingsView: View {
     @State private var archiveNoticeIsError = false
     @State private var lastExportedAt = DiaryExportRecord.lastExportedAt
     @AppStorage(PendingServerHandoff.defaultsKey) private var isHandoffPending = false
+    @AppStorage(ICloudIdentity.changedAtKey) private var iCloudAccountChangedAtRaw: Double = 0
     @State private var isPresentingHandoff = false
 
     @ObservedObject private var sync = CloudSyncStatus.shared
@@ -361,6 +362,14 @@ struct SettingsView: View {
                 actionRow("Open iPhone Settings", icon: "gear", tint: AppColor.secondaryText) { openURL(url) }
             }
 
+            // After a change of Apple ID, iOS can swap this device's iCloud
+            // diary for the new account's; the copy kept here brings it back.
+            if iCloudAccountChangedAt != nil, let backup = AutoBackup.beforeAccountChange() {
+                actionRow("Restore this iPhone's backup from \(backup.date.formatted(date: .abbreviated, time: .omitted))", icon: "clock.arrow.circlepath") {
+                    restoreAutomaticBackup()
+                }
+            }
+
             // The copy that works when neither iCloud nor a server can: a
             // file the user keeps in Files, another app, or another device.
             actionRow("Export diary", icon: "square.and.arrow.up", action: exportDiary)
@@ -384,6 +393,10 @@ struct SettingsView: View {
             sectionFooter {
                 if let warning = sync.state.dataLossWarning {
                     footnote(warning, color: AppColor.destructive)
+                }
+
+                if iCloudAccountChangedAt != nil, AutoBackup.beforeAccountChange() != nil {
+                    footnote("This iPhone's iCloud account changed. If your diary is missing entries, restore the copy this iPhone kept.", color: AppColor.destructive)
                 }
 
                 if let archiveNotice {
@@ -804,46 +817,16 @@ struct SettingsView: View {
         return false
     }
 
-    /// Moves server mode's copy of the diary into this device's own diary and
-    /// switches. The copy is brought up to date first when the server
-    /// answers — what's waiting is sent, and the whole history is fetched if
-    /// this iPhone never had it — but the move itself needs no server, so it
-    /// works with the server out of range or gone. A merge: nothing only this
-    /// device's diary has is touched, and rows it already has from an earlier
-    /// move are matched rather than copied again.
+    /// Moves server mode's copy of the diary here and switches — see
+    /// `ServerToDeviceMove`.
     private func startImport() {
         importError = nil
         importProgress = ServerPull.Progress(daysRead: 0, totalDays: 0)
-        let start = user.createdAt ?? Calendar.current.date(byAdding: .year, value: -1, to: Date()) ?? Date()
-        let account = SyncAccount.key(serverURL: ServerConfig.urlString, email: user.email)
-        let serverSync = ServerSync.shared
         importTask = Task {
             do {
-                if serverSync.account != account { serverSync.activate(user: user) }
-                // Cancel works: the wait ends, the sync finishes in the
-                // background, and nothing is moved.
-                await serverSync.syncNow()
-                try Task.checkCancellation()
-                try StoreTransfer.copy(from: ServerCache.store(for: account), to: .shared, account: account)
-                // A copy that couldn't be brought up to date is current only
-                // to its last sync; the handoff says so.
-                let upToDate = serverSync.status == .idle && InitialPull.isDone(account: account)
-                LocalStore.shared.recordHandoff(from: .server, to: .local, serverAccount: account,
-                                                gapUntil: upToDate ? nil : (serverSync.lastSyncedAt ?? .distantPast))
-                // Everything the copy held — rows, links, unsent deletes — is
-                // now in this diary. Keeping the copy too would let its unsent
-                // changes reach the server a second time on a later return.
-                serverSync.deactivate(removingCopy: true)
-                // Local mode floors day navigation on its first-use date; the
-                // copied history has to be reachable.
-                let firstUse = UserDefaults.standard.object(forKey: LocalAPIClient.firstUseKey) as? Date
-                let startDay = Calendar.current.startOfDay(for: start)
-                if firstUse.map({ startDay < $0 }) ?? true {
-                    UserDefaults.standard.set(startDay, forKey: LocalAPIClient.firstUseKey)
-                }
+                try await ServerToDeviceMove.run(user: user)
                 importTask = nil
                 importProgress = nil
-                NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
                 switchMode(to: .local)
             } catch is CancellationError {
                 importTask = nil
@@ -930,6 +913,26 @@ struct SettingsView: View {
                 : "Restored \(result.added) new and \(result.updated) updated items. \(result.kept) were already up to date here."
             showArchiveNotice(summary, isError: false)
             Haptics.success()
+        } catch {
+            showArchiveNotice(error.localizedDescription, isError: true)
+        }
+    }
+
+    private var iCloudAccountChangedAt: Date? {
+        iCloudAccountChangedAtRaw > 0 ? Date(timeIntervalSinceReferenceDate: iCloudAccountChangedAtRaw) : nil
+    }
+
+    /// Merges the newest automatic backup back in: nothing is deleted, the
+    /// newer copy of each row wins.
+    private func restoreAutomaticBackup() {
+        do {
+            if let backup = AutoBackup.beforeAccountChange() {
+                let result = try AutoBackup.restore(backup)
+                NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+                showArchiveNotice("Restored \(result.added) new and \(result.updated) updated items from this iPhone's backup.", isError: false)
+                Haptics.success()
+            }
+            ICloudIdentity.changedAt = nil
         } catch {
             showArchiveNotice(error.localizedDescription, isError: true)
         }

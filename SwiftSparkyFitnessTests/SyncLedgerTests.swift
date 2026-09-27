@@ -305,8 +305,12 @@ final class StubURLProtocol: URLProtocol {
     /// Set to answer every request as if the server were out of range.
     nonisolated(unsafe) static var failure: URLError?
 
+    /// Set to accept every request and never answer — a server that's hung.
+    nonisolated(unsafe) static var hangs = false
+
     override func startLoading() {
         Self.lastRequest = request
+        if Self.hangs { return }
         if let failure = Self.failure {
             client?.urlProtocol(self, didFailWithError: failure)
             return

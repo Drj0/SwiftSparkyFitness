@@ -141,13 +141,31 @@ final class LocalHandoff {
     /// Set when the move had to leave data behind — a dead server's copy was
     /// only current up to this moment, so anything newer is still there.
     var gapUntil: Date?
+    /// The install that made the move, so other devices can tell a move made
+    /// elsewhere (offer to follow it) from their own.
+    var deviceId: String?
 
-    init(fromMode: String, toMode: String, serverAccount: String? = nil, gapUntil: Date? = nil, date: Date = Date()) {
+    init(fromMode: String, toMode: String, serverAccount: String? = nil, gapUntil: Date? = nil, date: Date = Date(), deviceId: String? = DeviceIdentity.id) {
         self.fromMode = fromMode
         self.toMode = toMode
         self.serverAccount = serverAccount
         self.gapUntil = gapUntil
         self.date = date
+        self.deviceId = deviceId
+    }
+}
+
+/// This install, as far as the handoff log is concerned. Not
+/// `identifierForVendor`, which can change under an app that's still
+/// installed; a UUID of its own is stable for the life of the install.
+enum DeviceIdentity {
+    private static let defaultsKey = "syncDeviceId"
+
+    static var id: String {
+        if let existing = UserDefaults.standard.string(forKey: defaultsKey) { return existing }
+        let fresh = UUID().uuidString
+        UserDefaults.standard.set(fresh, forKey: defaultsKey)
+        return fresh
     }
 }
 
@@ -226,6 +244,7 @@ extension LocalStore {
 
     @discardableResult
     func recordHandoff(from: AppMode, to: AppMode, serverAccount: String?, gapUntil: Date? = nil) -> LocalHandoff {
+        if self === LocalStore.shared { DiaryHome.usesICloudDiary = true }
         let handoff = LocalHandoff(fromMode: from.rawValue, toMode: to.rawValue, serverAccount: serverAccount, gapUntil: gapUntil)
         insert(handoff)
         return handoff

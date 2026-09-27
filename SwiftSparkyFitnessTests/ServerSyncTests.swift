@@ -16,6 +16,18 @@ import SwiftData
 final class ServerSyncTests: XCTestCase {
 
     private let serverURL = "http://sparky.local:3010"
+
+    /// These tests run inside the app on a real simulator: the signed-in
+    /// session they overwrite belongs to whoever uses that simulator.
+    private var savedSession: Any?
+
+    override func setUp() async throws {
+        savedSession = UserDefaults.standard.object(forKey: "cachedSessionUser")
+    }
+
+    override func tearDown() async throws {
+        UserDefaults.standard.set(savedSession, forKey: "cachedSessionUser")
+    }
     private let user = SessionUser(email: "me@example.com", name: "Me", createdAt: LocalDay.date("2026-08-01"))
     private let today = Calendar.current.startOfDay(for: Date())
 
@@ -270,6 +282,22 @@ final class ServerSyncTests: XCTestCase {
 
         XCTAssertEqual(session?.email, user.email)
         XCTAssertTrue(sync.isActive)
+    }
+
+    /// A server that accepts the connection and never answers can't hold the
+    /// launch for the whole request timeout when a session is saved.
+    func testAHungServerOpensTheSavedSessionQuickly() async throws {
+        let sync = ServerSync(server: FakeSyncServer(), storeFor: { _ in LocalStore(inMemory: true) })
+        let client = ServerModeClient(remote: APIClient(session: StubURLProtocol.session()), sync: sync)
+        SessionCache.save(user, serverURL: ServerConfig.urlString)
+        StubURLProtocol.hangs = true
+        defer { StubURLProtocol.hangs = false }
+        let started = Date()
+
+        let session = try await client.currentSession()
+
+        XCTAssertEqual(session?.email, user.email)
+        XCTAssertLessThan(Date().timeIntervalSince(started), 5)
     }
 
     func testOutOfRangeWithNoSavedSessionStillReportsUnreachable() async throws {

@@ -79,6 +79,20 @@ final class ServerModeClient: APIClientProtocol {
     /// is believed, and clears it.
     func currentSession() async throws -> SessionUser? {
         let serverURL = ServerConfig.urlString
+        let remote = self.remote
+        // With a saved session, a server that accepts the connection and
+        // then hangs mustn't hold the launch for the whole request timeout:
+        // after a moment the diary opens from this device, and the check
+        // finishes on its own — signing out then if the session was gone.
+        if let cached = SessionCache.user(forServer: serverURL) {
+            let check = Task { try await remote.currentSession() }
+            guard let early = await Self.result(of: check, within: .seconds(3)) else {
+                sync.activate(user: cached, serverURL: serverURL)
+                Task { await self.finishSessionCheck(check) }
+                return cached
+            }
+            return try resolveSession(early, cached: cached, serverURL: serverURL)
+        }
         do {
             guard let user = try await remote.currentSession() else {
                 SessionCache.clear()
@@ -94,6 +108,70 @@ final class ServerModeClient: APIClientProtocol {
             guard let cached = SessionCache.user(forServer: serverURL) else { throw error }
             sync.activate(user: cached, serverURL: serverURL)
             return cached
+        }
+    }
+
+    private func resolveSession(_ result: Result<SessionUser?, Error>, cached: SessionUser, serverURL: String) throws -> SessionUser? {
+        switch result {
+        case .success(let user?):
+            signedIn(user)
+            return user
+        case .success(nil):
+            SessionCache.clear()
+            sync.deactivate(removingCopy: false)
+            return nil
+        case .failure(let error):
+            guard error.isTransientFailure || error is DecodingError else { throw error }
+            sync.activate(user: cached, serverURL: serverURL)
+            return cached
+        }
+    }
+
+    /// The rest of a session check the launch stopped waiting for.
+    private func finishSessionCheck(_ check: Task<SessionUser?, Error>) async {
+        switch await check.result {
+        case .success(let user?):
+            signedIn(user)
+        case .success(nil):
+            // The server answered after all: this session is over. The copy
+            // stays; signing in again returns to it.
+            SessionCache.clear()
+            NotificationCenter.default.post(name: .sessionExpired, object: nil)
+        case .failure:
+            break // still out of range: carry on from this device
+        }
+    }
+
+    /// `task`'s result if it finishes within `limit`, else nil — without
+    /// cancelling it or waiting for it.
+    private static func result(of task: Task<SessionUser?, Error>, within limit: Duration) async -> Result<SessionUser?, Error>? {
+        let box = FirstResult()
+        return await withCheckedContinuation { continuation in
+            box.install(continuation)
+            Task { box.finish(await task.result) }
+            Task { try? await Task.sleep(for: limit); box.finish(nil) }
+        }
+    }
+
+    /// Resumes once, with whichever of the result and the deadline is first.
+    private final class FirstResult: @unchecked Sendable {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Result<SessionUser?, Error>?, Never>?
+        private var done = false
+
+        func install(_ continuation: CheckedContinuation<Result<SessionUser?, Error>?, Never>) {
+            lock.lock()
+            self.continuation = continuation
+            lock.unlock()
+        }
+
+        func finish(_ value: Result<SessionUser?, Error>?) {
+            lock.lock()
+            guard !done, let continuation else { lock.unlock(); return }
+            done = true
+            self.continuation = nil
+            lock.unlock()
+            continuation.resume(returning: value)
         }
     }
 

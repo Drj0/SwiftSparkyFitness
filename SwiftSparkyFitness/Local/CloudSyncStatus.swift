@@ -126,7 +126,14 @@ final class CloudSyncStatus: ObservableObject {
                 guard let event = note.userInfo?[
                     NSPersistentCloudKitContainer.eventNotificationUserInfoKey
                 ] as? NSPersistentCloudKitContainer.Event else { return }
-                Task { @MainActor in self?.apply(event) }
+                let finishedImport = event.type == .import && event.endDate != nil && event.error == nil
+                Task { @MainActor in
+                    self?.apply(event)
+                    // Another device's rows just arrived: fold away copies of
+                    // the same row (seeded defaults, a row both pulled from
+                    // a server) once iCloud goes quiet.
+                    if finishedImport { DuplicateSweep.schedule() }
+                }
             }
         )
         observers.append(
