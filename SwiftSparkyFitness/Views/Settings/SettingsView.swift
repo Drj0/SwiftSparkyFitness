@@ -324,7 +324,16 @@ struct SettingsView: View {
             // The copy that works when neither iCloud nor a server can: a
             // file the user keeps in Files, another app, or another device.
             actionRow("Export diary", icon: "square.and.arrow.up", action: exportDiary)
-            actionRow("Restore from export", icon: "square.and.arrow.down") { isRestoringArchive = true }
+            actionRow("Restore from export", icon: "square.and.arrow.down") {
+                // Mid-download, iCloud's copies of these rows haven't landed
+                // yet, so restoring would create a second row for each one
+                // (nothing can enforce uniqueness across CloudKit).
+                if case .syncing = sync.state {
+                    showArchiveNotice("iCloud is still bringing this iPhone up to date. Restore once it says Synced.", isError: true)
+                } else {
+                    isRestoringArchive = true
+                }
+            }
 
             actionRow("Connect Sparky server", icon: "externaldrive.connected.to.line.below") {
                 isPresentingConnect = true

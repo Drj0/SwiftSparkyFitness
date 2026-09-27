@@ -163,6 +163,45 @@ final class DiaryArchiveTests: XCTestCase {
         XCTAssertEqual(weight, 70)
     }
 
+    /// Settings changed before stamping existed read as never-stamped, the
+    /// same as a fresh device's seeded defaults. The file must still win.
+    func testPreTrackingSettingsBeatAFreshDevicesDefaults() async throws {
+        let source = makeLocal()
+        _ = try await source.updateUserPreference(.weight, to: "lbs")
+        let prefs = try XCTUnwrap(source.store.all(LocalPreferences.self).first)
+        prefs.updatedAt = .distantPast
+        source.store.preservingStamps { source.store.save() }
+        let archive = try roundTrip(DiaryArchive(from: source.store))
+
+        let fresh = makeLocal()
+        let first = try archive.restore(into: fresh.store)
+        let restored = try await fresh.userPreferences()
+        XCTAssertEqual(restored.defaultWeightUnit, "lbs")
+        XCTAssertGreaterThan(first.updated, 0)
+
+        let again = try archive.restore(into: fresh.store)
+        XCTAssertEqual(again.updated, 0)
+    }
+
+    /// A server-linked entry deleted after the export has a tombstone newer
+    /// than the file's copy; restoring must not resurrect it (or clear the
+    /// tombstone that will delete its server copy).
+    func testRestoringDoesNotResurrectALinkedRowDeletedSince() async throws {
+        let local = makeLocal()
+        try await seedDiary(local)
+        let entry = try XCTUnwrap(local.store.all(LocalFoodEntry.self).first)
+        let entryId = entry.id
+        local.store.setLink(entry, serverId: "srv", account: "acct")
+        let archive = try roundTrip(DiaryArchive(from: local.store))
+        try await Task.sleep(for: .milliseconds(1100))
+        try await local.deleteFoodEntry(id: entryId)
+
+        _ = try archive.restore(into: local.store)
+
+        XCTAssertTrue(local.store.fetch(LocalFoodEntry.self, where: #Predicate { $0.id == entryId }).isEmpty)
+        XCTAssertEqual(local.store.tombstones(kind: LocalFoodEntry.syncKind).map(\.localKey), [entryId])
+    }
+
     // MARK: - Bad files
 
     func testAFileThatIsntADiaryIsRefused() {

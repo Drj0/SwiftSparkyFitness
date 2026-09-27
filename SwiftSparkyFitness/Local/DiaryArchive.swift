@@ -14,7 +14,10 @@
 //  Restoring merges, it never deletes. A row is matched by the same key the
 //  sync ledger uses; the file's copy wins only when it is newer. So restoring
 //  the same file twice is a no-op, and restoring an old file can't roll back
-//  anything edited since. Row ids survive the round trip, which also means a
+//  anything edited since, nor bring back a server-linked row deleted since
+//  (its tombstone is newer). A delete of a row that was never on a server
+//  leaves no record, so restoring an older file does bring that row back —
+//  the one thing a merge can't know. Row ids survive the round trip, which also means a
 //  restored food entry still dedupes on a server (its `source_id` is its id).
 //  Links and tombstones are not in the file — they describe one server's copy,
 //  and a file may be restored long after that stopped being true.
@@ -52,10 +55,12 @@ struct DiaryArchive: Codable {
     enum ArchiveError: LocalizedError, Equatable {
         case notADiary
         case tooNew(Int)
+        case couldNotSave
 
         var errorDescription: String? {
             switch self {
             case .notADiary: return "That file isn't a SparkyFitness diary export."
+            case .couldNotSave: return "Couldn't save the restored diary on this iPhone. Nothing was changed."
             case .tooNew(let version): return "That export was made by a newer version of the app (format \(version)). Update the app to restore it."
             }
         }
@@ -91,7 +96,7 @@ struct DiaryArchive: Codable {
 // MARK: - Rows
 
 extension DiaryArchive {
-    struct Food: Codable {
+    struct Food: Codable, Equatable {
         var id, name: String
         var brand: String?
         var servingSize: Double, servingUnit: String
@@ -102,7 +107,7 @@ extension DiaryArchive {
         var updatedAt: Date
     }
 
-    struct FoodEntry: Codable {
+    struct FoodEntry: Codable, Equatable {
         var id, dayKey: String
         var entryDate: Date
         var foodId, foodName: String
@@ -114,14 +119,14 @@ extension DiaryArchive {
         var updatedAt: Date
     }
 
-    struct Exercise: Codable {
+    struct Exercise: Codable, Equatable {
         var id, name: String
         var category, modality: String?
         var caloriesPerHour: Double?
         var updatedAt: Date
     }
 
-    struct ExerciseEntry: Codable {
+    struct ExerciseEntry: Codable, Equatable {
         var id, dayKey: String
         var entryDate: Date
         var exerciseId, name: String
@@ -133,7 +138,7 @@ extension DiaryArchive {
         var updatedAt: Date
     }
 
-    struct Water: Codable {
+    struct Water: Codable, Equatable {
         var id, dayKey: String
         var waterMl: Double
         var source: String
@@ -142,7 +147,7 @@ extension DiaryArchive {
         var updatedAt: Date
     }
 
-    struct WaterContainer: Codable {
+    struct WaterContainer: Codable, Equatable {
         var id: Int
         var name: String
         var volume: Double, unit: String
@@ -150,20 +155,20 @@ extension DiaryArchive {
         var servingsPerContainer: Int
     }
 
-    struct CheckIn: Codable {
+    struct CheckIn: Codable, Equatable {
         var id, dayKey: String
         var weight, neck, waist, hips, height: Double?
         var bodyFatPercentage, muscleMassKg, boneMassKg, bodyWaterPercentage, bmr: Double?
         var updatedAt: Date
     }
 
-    struct Goal: Codable {
+    struct Goal: Codable, Equatable {
         var dayKey: String
         var rawJSON: Data
         var updatedAt: Date
     }
 
-    struct Preferences: Codable {
+    struct Preferences: Codable, Equatable {
         var id, defaultWeightUnit, defaultMeasurementUnit, waterDisplayUnit: String
         var measurementDecimalPlaces, itemDisplayLimit: Int
         var defaultDistanceUnit, activityLevel: String
@@ -171,7 +176,7 @@ extension DiaryArchive {
         var updatedAt: Date
     }
 
-    struct MealType: Codable {
+    struct MealType: Codable, Equatable {
         var id, name: String
         var sortOrder: Int
         var isVisible, isSystemDefault: Bool
@@ -185,55 +190,76 @@ extension DiaryArchive {
 extension DiaryArchive {
     @MainActor
     init(from store: LocalStore) {
-        foods = store.all(LocalFood.self).map {
-            Food(id: $0.id, name: $0.name, brand: $0.brand, servingSize: $0.servingSize, servingUnit: $0.servingUnit,
-                 calories: $0.calories, protein: $0.protein, carbs: $0.carbs, fat: $0.fat, isCustom: $0.isCustom,
-                 lastUsedAt: $0.lastUsedAt, usageCount: $0.usageCount, updatedAt: $0.updatedAt)
-        }
-        foodEntries = store.all(LocalFoodEntry.self, sortBy: [SortDescriptor(\.dayKey)]).map {
-            FoodEntry(id: $0.id, dayKey: $0.dayKey, entryDate: $0.entryDate, foodId: $0.foodId, foodName: $0.foodName,
-                      brandName: $0.brandName, mealTypeId: $0.mealTypeId, mealTypeName: $0.mealTypeName,
-                      quantity: $0.quantity, unit: $0.unit, servingSize: $0.servingSize, servingUnit: $0.servingUnit,
-                      calories: $0.calories, protein: $0.protein, carbs: $0.carbs, fat: $0.fat, updatedAt: $0.updatedAt)
-        }
-        exercises = store.all(LocalExercise.self).map {
-            Exercise(id: $0.id, name: $0.name, category: $0.category, modality: $0.modality,
-                     caloriesPerHour: $0.caloriesPerHour, updatedAt: $0.updatedAt)
-        }
-        exerciseEntries = store.all(LocalExerciseEntry.self, sortBy: [SortDescriptor(\.dayKey)]).map {
-            ExerciseEntry(id: $0.id, dayKey: $0.dayKey, entryDate: $0.entryDate, exerciseId: $0.exerciseId, name: $0.name,
-                          durationMinutes: $0.durationMinutes, caloriesBurned: $0.caloriesBurned, modality: $0.modality,
-                          distance: $0.distance, avgHeartRate: $0.avgHeartRate, notes: $0.notes,
-                          entryTime: $0.entryTime, setsJSON: $0.setsJSON, updatedAt: $0.updatedAt)
-        }
-        water = store.all(LocalWaterEntry.self, sortBy: [SortDescriptor(\.dayKey)]).map {
-            Water(id: $0.id, dayKey: $0.dayKey, waterMl: $0.waterMl, source: $0.source,
-                  containerName: $0.containerName, loggedAt: $0.loggedAt, updatedAt: $0.updatedAt)
-        }
+        foods = store.all(LocalFood.self).map(Self.archived)
+        foodEntries = store.all(LocalFoodEntry.self, sortBy: [SortDescriptor(\.dayKey)]).map(Self.archived)
+        exercises = store.all(LocalExercise.self).map(Self.archived)
+        exerciseEntries = store.all(LocalExerciseEntry.self, sortBy: [SortDescriptor(\.dayKey)]).map(Self.archived)
+        water = store.all(LocalWaterEntry.self, sortBy: [SortDescriptor(\.dayKey)]).map(Self.archived)
         waterContainers = store.all(LocalWaterContainer.self).map {
             WaterContainer(id: $0.id, name: $0.name, volume: $0.volume, unit: $0.unit,
                            isPrimary: $0.isPrimary, servingsPerContainer: $0.servingsPerContainer)
         }
-        checkIns = store.all(LocalCheckIn.self, sortBy: [SortDescriptor(\.dayKey)]).map {
-            CheckIn(id: $0.id, dayKey: $0.dayKey, weight: $0.weight, neck: $0.neck, waist: $0.waist, hips: $0.hips,
-                    height: $0.height, bodyFatPercentage: $0.bodyFatPercentage, muscleMassKg: $0.muscleMassKg,
-                    boneMassKg: $0.boneMassKg, bodyWaterPercentage: $0.bodyWaterPercentage, bmr: $0.bmr,
-                    updatedAt: $0.updatedAt)
-        }
-        goals = store.all(LocalGoalRow.self, sortBy: [SortDescriptor(\.dayKey)]).map {
-            Goal(dayKey: $0.dayKey, rawJSON: $0.rawJSON, updatedAt: $0.updatedAt)
-        }
-        preferences = store.all(LocalPreferences.self).map {
-            Preferences(id: $0.id, defaultWeightUnit: $0.defaultWeightUnit, defaultMeasurementUnit: $0.defaultMeasurementUnit,
-                        waterDisplayUnit: $0.waterDisplayUnit, measurementDecimalPlaces: $0.measurementDecimalPlaces,
-                        itemDisplayLimit: $0.itemDisplayLimit, defaultDistanceUnit: $0.defaultDistanceUnit,
-                        activityLevel: $0.activityLevel, exerciseCaloriePercentage: $0.exerciseCaloriePercentage,
-                        updatedAt: $0.updatedAt)
-        }
-        mealTypes = store.all(LocalMealType.self).map {
-            MealType(id: $0.id, name: $0.name, sortOrder: $0.sortOrder, isVisible: $0.isVisible,
-                     isSystemDefault: $0.isSystemDefault, defaultTime: $0.defaultTime, updatedAt: $0.updatedAt)
-        }
+        checkIns = store.all(LocalCheckIn.self, sortBy: [SortDescriptor(\.dayKey)]).map(Self.archived)
+        goals = store.all(LocalGoalRow.self, sortBy: [SortDescriptor(\.dayKey)]).map(Self.archived)
+        preferences = store.all(LocalPreferences.self).map(Self.archived)
+        mealTypes = store.all(LocalMealType.self).map(Self.archived)
+    }
+
+    // One per model, shared by export and by restore's "is this row
+    // actually different" check, so the two can't drift apart.
+
+    static func archived(_ row: LocalFood) -> Food {
+        Food(id: row.id, name: row.name, brand: row.brand, servingSize: row.servingSize, servingUnit: row.servingUnit,
+             calories: row.calories, protein: row.protein, carbs: row.carbs, fat: row.fat, isCustom: row.isCustom,
+             lastUsedAt: row.lastUsedAt, usageCount: row.usageCount, updatedAt: row.updatedAt)
+    }
+
+    static func archived(_ row: LocalFoodEntry) -> FoodEntry {
+        FoodEntry(id: row.id, dayKey: row.dayKey, entryDate: row.entryDate, foodId: row.foodId, foodName: row.foodName,
+                  brandName: row.brandName, mealTypeId: row.mealTypeId, mealTypeName: row.mealTypeName,
+                  quantity: row.quantity, unit: row.unit, servingSize: row.servingSize, servingUnit: row.servingUnit,
+                  calories: row.calories, protein: row.protein, carbs: row.carbs, fat: row.fat, updatedAt: row.updatedAt)
+    }
+
+    static func archived(_ row: LocalExercise) -> Exercise {
+        Exercise(id: row.id, name: row.name, category: row.category, modality: row.modality,
+                 caloriesPerHour: row.caloriesPerHour, updatedAt: row.updatedAt)
+    }
+
+    static func archived(_ row: LocalExerciseEntry) -> ExerciseEntry {
+        ExerciseEntry(id: row.id, dayKey: row.dayKey, entryDate: row.entryDate, exerciseId: row.exerciseId, name: row.name,
+                      durationMinutes: row.durationMinutes, caloriesBurned: row.caloriesBurned, modality: row.modality,
+                      distance: row.distance, avgHeartRate: row.avgHeartRate, notes: row.notes,
+                      entryTime: row.entryTime, setsJSON: row.setsJSON, updatedAt: row.updatedAt)
+    }
+
+    static func archived(_ row: LocalWaterEntry) -> Water {
+        Water(id: row.id, dayKey: row.dayKey, waterMl: row.waterMl, source: row.source,
+              containerName: row.containerName, loggedAt: row.loggedAt, updatedAt: row.updatedAt)
+    }
+
+    static func archived(_ row: LocalCheckIn) -> CheckIn {
+        CheckIn(id: row.id, dayKey: row.dayKey, weight: row.weight, neck: row.neck, waist: row.waist, hips: row.hips,
+                height: row.height, bodyFatPercentage: row.bodyFatPercentage, muscleMassKg: row.muscleMassKg,
+                boneMassKg: row.boneMassKg, bodyWaterPercentage: row.bodyWaterPercentage, bmr: row.bmr,
+                updatedAt: row.updatedAt)
+    }
+
+    static func archived(_ row: LocalGoalRow) -> Goal {
+        Goal(dayKey: row.dayKey, rawJSON: row.rawJSON, updatedAt: row.updatedAt)
+    }
+
+    static func archived(_ row: LocalPreferences) -> Preferences {
+        Preferences(id: row.id, defaultWeightUnit: row.defaultWeightUnit, defaultMeasurementUnit: row.defaultMeasurementUnit,
+                    waterDisplayUnit: row.waterDisplayUnit, measurementDecimalPlaces: row.measurementDecimalPlaces,
+                    itemDisplayLimit: row.itemDisplayLimit, defaultDistanceUnit: row.defaultDistanceUnit,
+                    activityLevel: row.activityLevel, exerciseCaloriePercentage: row.exerciseCaloriePercentage,
+                    updatedAt: row.updatedAt)
+    }
+
+    static func archived(_ row: LocalMealType) -> MealType {
+        MealType(id: row.id, name: row.name, sortOrder: row.sortOrder, isVisible: row.isVisible,
+                 isSystemDefault: row.isSystemDefault, defaultTime: row.defaultTime, updatedAt: row.updatedAt)
     }
 }
 
@@ -261,19 +287,36 @@ extension DiaryArchive {
             existing: [Row],
             existingKey: (Row) -> String,
             make: (Archived) -> Row,
-            apply: (Archived, Row) -> Void
-        ) {
+            apply: (Archived, Row) -> Void,
+            snapshot: (Row) -> Archived
+        ) where Archived: Equatable {
             var byKey: [String: Row] = [:]
             for row in existing { byKey[existingKey(row)] = row }
+            // A linked row deleted here after the file was made stays
+            // deleted: its tombstone is newer than the file's copy.
+            var deletedAt: [String: Date] = [:]
+            for tombstone in store.tombstones(kind: Row.syncKind) { deletedAt[tombstone.localKey] = tombstone.deletedAt }
             for item in archived {
                 if let row = byKey[key(item)] {
                     if stamp(item) > row.updatedAt {
                         apply(item, row)
                         row.updatedAt = stamp(item)
                         result.updated += 1
+                    } else if stamp(item) == .distantPast && row.updatedAt == .distantPast && snapshot(row) != item {
+                        // Neither side has ever been stamped — rows from
+                        // before tracking existed, against a fresh device's
+                        // seeded defaults — and they differ. The file holds
+                        // the user's real settings, so it wins; the row is
+                        // stamped just past "never" so restoring the same
+                        // file again is a no-op.
+                        apply(item, row)
+                        row.updatedAt = Date.distantPast.addingTimeInterval(1)
+                        result.updated += 1
                     } else {
                         result.kept += 1
                     }
+                } else if let deleted = deletedAt[key(item)], deleted >= stamp(item) {
+                    result.kept += 1
                 } else {
                     // `make` covers the initializer's required fields;
                     // `apply` fills in every other one.
@@ -288,31 +331,31 @@ extension DiaryArchive {
         }
 
         merge(foods, key: \.id, stamp: \.updatedAt, existing: store.all(LocalFood.self), existingKey: \.id,
-              make: { LocalFood(id: $0.id, name: $0.name) }, apply: Self.apply)
+              make: { LocalFood(id: $0.id, name: $0.name) }, apply: Self.apply, snapshot: Self.archived)
         merge(foodEntries, key: \.id, stamp: \.updatedAt, existing: store.all(LocalFoodEntry.self), existingKey: \.id,
               make: { LocalFoodEntry(id: $0.id, entryDate: $0.entryDate, foodId: $0.foodId, foodName: $0.foodName,
                                      mealTypeId: $0.mealTypeId, mealTypeName: $0.mealTypeName, quantity: $0.quantity,
                                      unit: $0.unit, servingSize: $0.servingSize, servingUnit: $0.servingUnit,
                                      calories: $0.calories, protein: $0.protein, carbs: $0.carbs, fat: $0.fat) },
-              apply: Self.apply)
+              apply: Self.apply, snapshot: Self.archived)
         merge(exercises, key: \.id, stamp: \.updatedAt, existing: store.all(LocalExercise.self), existingKey: \.id,
-              make: { LocalExercise(id: $0.id, name: $0.name) }, apply: Self.apply)
+              make: { LocalExercise(id: $0.id, name: $0.name) }, apply: Self.apply, snapshot: Self.archived)
         merge(exerciseEntries, key: \.id, stamp: \.updatedAt, existing: store.all(LocalExerciseEntry.self), existingKey: \.id,
               make: { LocalExerciseEntry(id: $0.id, entryDate: $0.entryDate, exerciseId: $0.exerciseId, name: $0.name,
                                          durationMinutes: $0.durationMinutes, caloriesBurned: $0.caloriesBurned) },
-              apply: Self.apply)
+              apply: Self.apply, snapshot: Self.archived)
         merge(water, key: \.id, stamp: \.updatedAt, existing: store.all(LocalWaterEntry.self), existingKey: \.id,
-              make: { LocalWaterEntry(id: $0.id, dayKey: $0.dayKey, waterMl: $0.waterMl) }, apply: Self.apply)
+              make: { LocalWaterEntry(id: $0.id, dayKey: $0.dayKey, waterMl: $0.waterMl) }, apply: Self.apply, snapshot: Self.archived)
         // One check-in per day on both sides, so a day's row is the same row
         // whatever id each copy happened to get.
         merge(checkIns, key: \.dayKey, stamp: \.updatedAt, existing: store.all(LocalCheckIn.self), existingKey: \.dayKey,
-              make: { LocalCheckIn(id: $0.id, dayKey: $0.dayKey) }, apply: Self.apply)
+              make: { LocalCheckIn(id: $0.id, dayKey: $0.dayKey) }, apply: Self.apply, snapshot: Self.archived)
         merge(goals, key: \.dayKey, stamp: \.updatedAt, existing: store.all(LocalGoalRow.self), existingKey: \.dayKey,
-              make: { LocalGoalRow(dayKey: $0.dayKey, rawJSON: $0.rawJSON) }, apply: { $1.rawJSON = $0.rawJSON })
+              make: { LocalGoalRow(dayKey: $0.dayKey, rawJSON: $0.rawJSON) }, apply: { $1.rawJSON = $0.rawJSON }, snapshot: Self.archived)
         merge(preferences, key: \.id, stamp: \.updatedAt, existing: store.all(LocalPreferences.self), existingKey: \.id,
-              make: { _ in LocalPreferences() }, apply: Self.apply)
+              make: { _ in LocalPreferences() }, apply: Self.apply, snapshot: Self.archived)
         merge(mealTypes, key: \.id, stamp: \.updatedAt, existing: store.all(LocalMealType.self), existingKey: \.id,
-              make: { LocalMealType(id: $0.id, name: $0.name, sortOrder: $0.sortOrder) }, apply: Self.apply)
+              make: { LocalMealType(id: $0.id, name: $0.name, sortOrder: $0.sortOrder) }, apply: Self.apply, snapshot: Self.archived)
 
         // Containers carry no stamp: added when missing, never overwritten.
         let containerIds = Set(store.all(LocalWaterContainer.self).map(\.id))
@@ -327,11 +370,11 @@ extension DiaryArchive {
         let saved = store.preservingStamps { store.save() }
         guard saved else {
             store.context.rollback()
-            throw store.lastSaveError ?? ArchiveError.notADiary
+            throw store.lastSaveError ?? ArchiveError.couldNotSave
         }
 
         let days = foodEntries.map(\.dayKey) + exerciseEntries.map(\.dayKey) + water.map(\.dayKey) + checkIns.map(\.dayKey)
-        result.earliestDay = days.min().flatMap(LocalDay.date)
+        result.earliestDay = days.filter { !$0.isEmpty }.min().flatMap(LocalDay.date)
         return result
     }
 
