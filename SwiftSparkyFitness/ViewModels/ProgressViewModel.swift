@@ -19,7 +19,7 @@ import SwiftUI
 final class ProgressViewModel: ObservableObject {
     // MARK: - Selection
 
-    @Published var preset: ProgressRangePreset = .month {
+    @Published var preset: ProgressRangePreset = .week {
         didSet { guard preset != oldValue else { return }; reloadForRangeChange() }
     }
 
@@ -81,7 +81,9 @@ final class ProgressViewModel: ObservableObject {
         maxDate = today
         minDate = min(calendar.startOfDay(for: user.createdAt ?? today), today)
         customEnd = today
-        customStart = calendar.date(byAdding: .day, value: -29, to: today) ?? today
+        // Floored to the account's start: a seed before it sits outside the
+        // pickers' allowed range and reads as a clamp that never happened.
+        customStart = max(calendar.date(byAdding: .day, value: -29, to: today) ?? today, minDate)
 
         // Settings can change the units every number here is labelled with,
         // and a live TabView keeps this screen alive across tab switches, so
@@ -135,7 +137,8 @@ final class ProgressViewModel: ObservableObject {
     var didClampCustomRange: Bool {
         guard preset == .custom else { return false }
         let calendar = Calendar.current
-        let asked = calendar.startOfDay(for: min(customStart, customEnd))
+        // The account-lifetime floor isn't the cap this message is about.
+        let asked = max(calendar.startOfDay(for: min(customStart, customEnd)), minDate)
         return asked < range.start
     }
 

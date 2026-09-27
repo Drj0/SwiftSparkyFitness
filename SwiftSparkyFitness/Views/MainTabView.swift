@@ -57,5 +57,8 @@ struct MainTabView: View {
             }
         }
         .tint(AppColor.accent)
+        // The system tab bar gives no haptic of its own on a switch; one
+        // tick per tab change, the same the week strip gives per day.
+        .sensoryFeedback(.selection, trigger: selection)
     }
 }

@@ -3007,6 +3007,18 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertTrue(viewModel.didClampCustomRange)
     }
 
+    /// A young account floors Custom to its creation day. That floor is not
+    /// the span cap, so the "showing the most recent N days" note must stay
+    /// hidden — it appeared on a 5-day range in the simulator.
+    @MainActor
+    func testCustomRangeOnANewAccountDoesNotClaimTheSpanCap() {
+        let (viewModel, _) = progressViewModel(createdDaysAgo: 4)
+        viewModel.preset = .custom
+
+        XCTAssertEqual(viewModel.customStart, viewModel.minDate)
+        XCTAssertFalse(viewModel.didClampCustomRange)
+    }
+
     /// Nothing may be charted from before the account existed.
     @MainActor
     func testRangeNeverStartsBeforeTheAccountWasCreated() {

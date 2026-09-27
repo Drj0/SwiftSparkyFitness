@@ -183,6 +183,9 @@ struct TodayView: View {
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
+        .sheet(item: $viewModel.editingFoodEntry, onDismiss: { Task { await viewModel.load() } }) { entry in
+            editFoodSheet(entry)
+        }
         .sheet(isPresented: $viewModel.isPresentingLogWeight) {
             bodySheet(kind: .weight)
         }
@@ -201,6 +204,21 @@ struct TodayView: View {
                 }
             }
             .presentationDetents([.large])
+            .presentationDragIndicator(.visible)
+        }
+    }
+
+    /// Diary's own edit sheet: the food's editor, opened on the logged
+    /// portion and meal, saving over the entry instead of adding another.
+    @ViewBuilder
+    private func editFoodSheet(_ entry: FoodEntrySummary) -> some View {
+        if let food = entry.editableFood,
+           let mealType = viewModel.mealTypes.first(where: { $0.name == entry.mealType }) ?? viewModel.loggableMealTypes.first {
+            FoodDetailView(
+                food: food, mealTypes: viewModel.loggableMealTypes, initialMealType: mealType,
+                existingEntryId: entry.id, initialQuantity: entry.quantity, entryDate: viewModel.today
+            ) {}
+            .presentationDetents([.medium, .large])
             .presentationDragIndicator(.visible)
         }
     }
@@ -331,25 +349,39 @@ struct TodayView: View {
     }
 
     private func foodRow(_ entry: FoodEntrySummary) -> some View {
-        HStack(spacing: 12) {
-            VStack(alignment: .leading, spacing: 3) {
-                Text(entry.foodName).appBody(16, weight: .semibold).foregroundStyle(AppColor.ink)
-                Text(portion(entry)).appBody(13).foregroundStyle(AppColor.secondaryText)
+        let canEdit = entry.editableFood != nil
+        return Button {
+            if canEdit { viewModel.editingFoodEntry = entry }
+        } label: {
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.foodName).appBody(16, weight: .semibold).foregroundStyle(AppColor.ink)
+                    Text(portion(entry)).appBody(13).foregroundStyle(AppColor.secondaryText)
+                }
+                Spacer(minLength: 8)
+                Text("\(Int(entry.calories)) kcal").appBody(14, weight: .semibold).foregroundStyle(AppColor.secondaryText)
             }
-            Spacer(minLength: 8)
-            Text("\(Int(entry.calories)) kcal").appBody(14, weight: .semibold).foregroundStyle(AppColor.secondaryText)
+            .padding(.horizontal, 16)
+            .padding(.vertical, 13)
+            // The white behind a row is the meal card's, so without this
+            // only the text itself took a tap or a long-press. The row's
+            // whole rectangle does now — and nothing outside the card.
+            .contentShape(Rectangle())
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 13)
+        .buttonStyle(.pressable)
         // Three VoiceOver stops per food — name, portion, and a bare
         // number with no unit. One stop, one sentence.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(entry.foodName), \(portion(entry))")
         .accessibilityValue("\(Int(entry.calories)) calories")
-        // Long-press to remove a mistaken entry. Not swipe: that needs a
-        // List, and this screen is a scroll of cards.
+        .accessibilityHint(canEdit ? "Opens for editing" : "")
+        // Long-press for both fixes to a mistaken entry. Not swipe: that
+        // needs a List, and this screen is a scroll of cards.
         .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: AppRadius.md))
         .contextMenu {
+            if canEdit {
+                Button("Edit", systemImage: "pencil") { viewModel.editingFoodEntry = entry }
+            }
             Button("Delete", systemImage: "trash", role: .destructive) {
                 Task { await viewModel.deleteFoodEntry(entry) }
             }

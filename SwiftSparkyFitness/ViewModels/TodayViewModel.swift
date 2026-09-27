@@ -27,6 +27,8 @@ final class TodayViewModel: ObservableObject {
     @Published var isPresentingLogWeight = false
     @Published var isPresentingLogMeasurements = false
     @Published var isPresentingSetGoals = false
+    /// The food whose editor is open — tapped, or Edit from its menu.
+    @Published var editingFoodEntry: FoodEntrySummary?
     /// Set by a meal section's "+" so Log Food opens on the meal the user
     /// actually tapped, instead of falling back to the time-of-day guess
     /// (tapping "+" beside Dinner at 9am used to open on Breakfast).

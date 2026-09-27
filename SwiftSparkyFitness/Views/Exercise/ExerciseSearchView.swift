@@ -80,6 +80,9 @@ struct ExerciseSearchView: View {
         .scrollDismissesKeyboard(.interactively)
         .task { await viewModel.loadRecents() }
         .task { await viewModel.loadWeight() }
+        // What's on screen is what's likely to be picked: fetch those photos
+        // now, so the editor opens with them already there.
+        .task(id: prefetchNames) { ExercisePhotoStore.prefetch(prefetchNames) }
         .sheet(isPresented: $isPresentingCustomExercise) {
             CustomExerciseView { exercise in
                 pushedExercise = exercise
@@ -240,6 +243,17 @@ struct ExerciseSearchView: View {
         .overlay(Rectangle().fill(AppColor.inputBackground).frame(height: 1), alignment: .bottom)
     }
 
+    /// The first screenful — results can run long, and each photo is a
+    /// download.
+    private var prefetchNames: [String] {
+        let names: [String]
+        switch viewModel.outcome {
+        case .results(let results): names = results.map(\.name)
+        default: names = viewModel.recentExercises.map(\.name) + viewModel.popularExercises.map(\.name)
+        }
+        return Array(names.prefix(10))
+    }
+
     private func subtitle(for result: ExerciseSearchResult) -> String {
         var parts: [String] = []
         if let category = result.category { parts.append(category.capitalized) }
@@ -252,8 +266,14 @@ struct ExerciseSearchView: View {
         materializingId = result.id
         Task {
             defer { materializingId = nil }
+            // Alongside materializing, which already shows the row's
+            // spinner: the editor then opens with its photos in place
+            // rather than popping them in a moment later.
+            async let photos: Void = ExercisePhotoStore.waitForPhotos(of: result.name, upTo: .seconds(1.5))
             do {
-                pushedExercise = try await viewModel.exercise(for: result)
+                let exercise = try await viewModel.exercise(for: result)
+                await photos
+                pushedExercise = exercise
             } catch {
                 materializeError = error.localizedDescription
                 Haptics.error()
