@@ -200,7 +200,7 @@ final class AuthViewModel: ObservableObject {
     }
 
     private func apply(_ error: APIError) {
-        guard case .server(let message, let code) = error else {
+        guard case .server(let message, let code, _) = error else {
             bannerMessage = error.localizedDescription
             return
         }

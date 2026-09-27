@@ -29,6 +29,9 @@ struct MainTabView: View {
     let user: SessionUser
     var onSignOut: () -> Void = {}
     @State private var selection: AppTab = .today
+    /// Offered once, right after signing in to a server from this device's
+    /// diary. "Not now" leaves a row in Settings to come back to.
+    @State private var isOfferingHandoff = false
 
     var body: some View {
         TabView(selection: $selection) {
@@ -60,5 +63,12 @@ struct MainTabView: View {
         // The system tab bar gives no haptic of its own on a switch; one
         // tick per tab change, the same the week strip gives per day.
         .sensoryFeedback(.selection, trigger: selection)
+        .task {
+            if !AppMode.isLocal, PendingServerHandoff.isPending { isOfferingHandoff = true }
+        }
+        .sheet(isPresented: $isOfferingHandoff) {
+            ServerHandoffSheet(user: user)
+                .presentationDetents([.medium, .large])
+        }
     }
 }

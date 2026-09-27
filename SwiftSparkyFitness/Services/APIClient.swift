@@ -112,6 +112,11 @@ struct CustomFoodInput {
     let protein: Double
     let carbs: Double
     let fat: Double
+    /// Set only by the sync engine. The server returns the user's existing
+    /// food when both match one, so creating the same local food twice
+    /// yields one server food.
+    var providerExternalId: String? = nil
+    var providerType: String? = nil
 }
 
 struct FoodEntryInput {
@@ -217,7 +222,7 @@ final class APIClient: APIClientProtocol {
         if status == 401 {
             NotificationCenter.default.post(name: .sessionExpired, object: nil)
         }
-        return .server(message: errBody?.message ?? errBody?.error ?? fallback, code: errBody?.code)
+        return .server(message: errBody?.message ?? errBody?.error ?? fallback, code: errBody?.code, status: status)
     }
 
     /// Shared request path: builds the URL, JSON-encodes `body` if given,
@@ -530,13 +535,16 @@ final class APIClient: APIClientProtocol {
         let protein: Double
         let carbs: Double
         let fat: Double
+        let providerExternalId: String?
+        let providerType: String?
     }
 
     func createCustomFood(_ input: CustomFoodInput) async throws -> Food {
         let body = CustomFoodRequest(
             name: input.name, brand: input.brand,
             servingSize: input.servingSize, servingUnit: input.servingUnit,
-            calories: input.calories, protein: input.protein, carbs: input.carbs, fat: input.fat
+            calories: input.calories, protein: input.protein, carbs: input.carbs, fat: input.fat,
+            providerExternalId: input.providerExternalId, providerType: input.providerType
         )
         return try await send("api/foods", method: "POST", body: body)
     }
@@ -882,6 +890,50 @@ final class APIClient: APIClientProtocol {
         let type: String
         let value: Double
         let date: String
+    }
+
+    private struct WaterIngest: Encodable {
+        let type = "water"
+        let value: Int
+        let date: String
+        let source: String
+        let sourceId: String
+    }
+
+    private struct IngestResponse: Decodable {
+        struct Processed: Decodable {
+            struct Row: Decodable { let id: String }
+            let data: Row?
+        }
+        let processed: [Processed]?
+    }
+
+    /// One drink, keyed by the device's own id for it. The ingest upserts on
+    /// (user, source, source_id), so sending the same drink again — a retry
+    /// after a dropped connection — updates it instead of adding another.
+    /// Whole millilitres: the ingest stores water as an integer.
+    func pushWater(milliliters: Double, date: Date, sourceId: String) async throws -> String {
+        let response: IngestResponse = try await send(
+            "api/measurements/health-data",
+            method: "POST",
+            body: [WaterIngest(
+                value: Int(milliliters.rounded()),
+                date: dateFormatter.string(from: date),
+                source: SyncServerSource.tag,
+                sourceId: sourceId
+            )]
+        )
+        guard let id = response.processed?.first?.data?.id else { throw APIError.invalidResponse }
+        return id
+    }
+
+    private struct VersionResponse: Decodable { let version: String }
+
+    /// Unauthenticated, so it answers "is this a SparkyFitness server, and
+    /// which one" before anything is sent.
+    func serverVersion() async throws -> String {
+        let response: VersionResponse = try await send("api/version/current")
+        return response.version
     }
 
     // MARK: - Goals

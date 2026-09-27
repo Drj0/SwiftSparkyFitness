@@ -82,6 +82,8 @@ struct SettingsView: View {
     @State private var archiveNotice: String?
     @State private var archiveNoticeIsError = false
     @State private var lastExportedAt = DiaryExportRecord.lastExportedAt
+    @AppStorage(PendingServerHandoff.defaultsKey) private var isHandoffPending = false
+    @State private var isPresentingHandoff = false
 
     @ObservedObject private var sync = CloudSyncStatus.shared
     @Environment(\.openURL) private var openURL
@@ -154,8 +156,11 @@ struct SettingsView: View {
             ServerAddressSheet(
                 title: "Connect Sparky Server",
                 saveTitle: "Connect",
-                note: "Your on-device data stays on this iPhone and isn't sent to the server. It reappears if you switch back."
+                note: "After you sign in, you can send this iPhone's diary to the server. This iPhone keeps its copy either way."
             ) {
+                // The send needs a signed-in session, which the login screen
+                // provides after this switch; MainTabView offers it then.
+                PendingServerHandoff.isPending = ServerDataImport.localStoreHasEntries()
                 switchMode(to: .server)
             }
             .presentationDetents([.medium, .large])
@@ -203,6 +208,10 @@ struct SettingsView: View {
             case .failure(let error):
                 showArchiveNotice("Couldn't save the export. \(error.localizedDescription)", isError: true)
             }
+        }
+        .sheet(isPresented: $isPresentingHandoff) {
+            ServerHandoffSheet(user: user)
+                .presentationDetents([.medium, .large])
         }
         .fileImporter(isPresented: $isRestoringArchive, allowedContentTypes: [.json]) { result in
             switch result {
@@ -266,6 +275,13 @@ struct SettingsView: View {
                 )
             }
             .buttonStyle(.plain)
+
+            // Until the offer made after sign-in is answered.
+            if isHandoffPending {
+                actionRow("Send this iPhone's diary", icon: "square.and.arrow.up.on.square") {
+                    isPresentingHandoff = true
+                }
+            }
 
             actionRow("Use this device only", icon: "iphone") {
                 localHasEntries = ServerDataImport.localStoreHasEntries()

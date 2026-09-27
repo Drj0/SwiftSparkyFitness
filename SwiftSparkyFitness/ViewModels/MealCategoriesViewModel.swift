@@ -120,7 +120,7 @@ final class MealCategoriesViewModel: ObservableObject {
             Haptics.warning()
             await load()
         } catch let error as APIError {
-            if case .server(let message, _) = error, message.localizedCaseInsensitiveContains("still in use") {
+            if case .server(let message, _, _) = error, message.localizedCaseInsensitiveContains("still in use") {
                 errorMessage = "“\(category.displayName)” still has food logged against it. Move or delete those entries first."
             } else {
                 errorMessage = error.localizedDescription

@@ -96,14 +96,20 @@ final class LocalSyncLink {
     /// `SyncAccount.key` — a different server or account has no links, so it
     /// is treated as a fresh destination rather than matched by accident.
     var serverAccount: String = ""
+    /// When the two sides last agreed. A row stamped later than this has been
+    /// edited here since, and is what the next push sends.
     var linkedAt: Date = Date()
+    /// Foods only: the server food's default variant, which every food entry
+    /// logged against it must name alongside the food id.
+    var serverVariantId: String?
 
-    init(kind: String, localKey: String, serverId: String, serverAccount: String, linkedAt: Date = Date()) {
+    init(kind: String, localKey: String, serverId: String, serverAccount: String, linkedAt: Date = Date(), serverVariantId: String? = nil) {
         self.kind = kind
         self.localKey = localKey
         self.serverId = serverId
         self.serverAccount = serverAccount
         self.linkedAt = linkedAt
+        self.serverVariantId = serverVariantId
     }
 }
 
@@ -175,17 +181,36 @@ extension LocalStore {
 
     /// Links a row, replacing any earlier link for the same row and account —
     /// a row has exactly one server copy per account.
+    /// `version` is the `updatedAt` of the copy the server now holds. The
+    /// sync engine passes the stamp it read *before* sending, so an edit made
+    /// while the request was in flight is newer than the link and goes out on
+    /// the next push instead of being marked as synced. Omitted, the link is
+    /// as fresh as the row.
     @discardableResult
-    func setLink<T: SyncTracked>(_ row: T, serverId: String, account: String) -> LocalSyncLink {
-        if let existing = link(for: row, account: account) {
+    func setLink<T: SyncTracked>(_ row: T, serverId: String, account: String, serverVariantId: String? = nil, version: Date? = nil) -> LocalSyncLink {
+        setLink(kind: T.syncKind, localKey: row.syncKey, serverId: serverId, account: account,
+                serverVariantId: serverVariantId, version: version ?? max(Date(), row.updatedAt))
+    }
+
+    @discardableResult
+    func setLink(kind: String, localKey: String, serverId: String, account: String, serverVariantId: String? = nil, version: Date) -> LocalSyncLink {
+        if let existing = link(kind: kind, localKey: localKey, account: account) {
             existing.serverId = serverId
-            existing.linkedAt = Date()
+            existing.linkedAt = version
+            if let serverVariantId { existing.serverVariantId = serverVariantId }
             save()
             return existing
         }
-        let created = LocalSyncLink(kind: T.syncKind, localKey: row.syncKey, serverId: serverId, serverAccount: account)
+        let created = LocalSyncLink(kind: kind, localKey: localKey, serverId: serverId,
+                                    serverAccount: account, linkedAt: version, serverVariantId: serverVariantId)
         insert(created)
         return created
+    }
+
+    /// Edited here since it last matched the server, or never sent at all.
+    func needsPush<T: SyncTracked>(_ row: T, account: String) -> Bool {
+        guard let link = link(for: row, account: account) else { return true }
+        return row.updatedAt > link.linkedAt
     }
 
     func links(kind: String, account: String) -> [LocalSyncLink] {
