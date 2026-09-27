@@ -184,7 +184,17 @@ struct ExerciseDiaryView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(session.name ?? "Exercise").appBody(15, weight: .semibold).foregroundStyle(AppColor.ink)
-                    Text(subtitle(session)).appBody(12).foregroundStyle(AppColor.secondaryText)
+                    HStack(spacing: 4) {
+                        // Health's own heart, so an imported workout reads
+                        // as "measured by your Watch", not typed in.
+                        if session.isHealthWorkout {
+                            Image(systemName: "heart.fill")
+                                .font(.system(size: 10, weight: .semibold))
+                                .foregroundStyle(Color.red)
+                            Text("Apple Health ·").appBody(12).foregroundStyle(AppColor.secondaryText)
+                        }
+                        Text(subtitle(session)).appBody(12).foregroundStyle(AppColor.secondaryText)
+                    }
                 }
                 Spacer()
                 Text("\(Int(session.caloriesBurned ?? 0))").appBody(14, weight: .semibold).foregroundStyle(AppColor.energy)
@@ -198,7 +208,7 @@ struct ExerciseDiaryView: View {
         }
         .buttonStyle(.pressable)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(session.name ?? "Exercise"), \(subtitle(session))")
+        .accessibilityLabel("\(session.name ?? "Exercise"), \(session.isHealthWorkout ? "from Apple Health, " : "")\(subtitle(session))")
         .accessibilityValue("\(Int(session.caloriesBurned ?? 0)) calories burned")
         .accessibilityHint("Opens for editing")
     }

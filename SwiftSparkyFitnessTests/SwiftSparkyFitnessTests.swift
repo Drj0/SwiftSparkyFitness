@@ -199,7 +199,8 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         func createFoodEntry(_ input: FoodEntryInput) async throws {}
         func updateFoodEntry(id: String, _ input: FoodEntryInput) async throws {}
         func deleteFoodEntry(id: String) async throws {}
-        func searchExercises(query: String) async throws -> [Exercise] { [] }
+        var ownedExercisesToReturn: [Exercise] = []
+        func searchExercises(query: String) async throws -> [Exercise] { ownedExercisesToReturn }
         func recentExercises() async throws -> [Exercise] { recentExercisesToReturn }
         func searchExternalExercises(query: String) async throws -> [ExternalExerciseResult] { externalExerciseResultsToReturn }
         func materializeExternalExercise(_ result: ExternalExerciseResult) async throws -> Exercise {
@@ -1247,6 +1248,74 @@ final class SwiftSparkyFitnessTests: XCTestCase {
             return reading
         }
         func hasRecentEnergy(days: Int) async -> Bool { recentEnergy }
+        var workoutsToReturn: [HealthWorkout] = []
+        func workouts(on date: Date) async throws -> [HealthWorkout] { workoutsToReturn }
+    }
+
+    /// A Health workout arrives with Health's measured calories (not the
+    /// catalog's estimate), mapped onto the catalog's exercise, and only
+    /// once — the second load must not log it again.
+    @MainActor
+    func testHealthWorkoutImportsOnceWithMeasuredCalories() async {
+        HealthSync.isEnabled = true
+        defer { HealthSync.isEnabled = false }
+        let workout = HealthWorkout(
+            id: UUID(), catalogName: "Running", start: Date(), durationMinutes: 30,
+            kilocalories: 312, distanceMeters: 5000
+        )
+        defer {
+            let key = "healthImportedWorkoutIDs"
+            UserDefaults.standard.set((UserDefaults.standard.stringArray(forKey: key) ?? []).filter { $0 != workout.id.uuidString }, forKey: key)
+        }
+        let health = StubHealthKit()
+        health.workoutsToReturn = [workout]
+        let stub = StubAPIClient()
+
+        let first = await HealthWorkoutImporter.importWorkouts(on: Date(), apiClient: stub, health: health)
+        XCTAssertTrue(first)
+        let sent = try? XCTUnwrap(stub.createdExerciseEntries.first)
+        XCTAssertEqual(sent?.caloriesBurned, 312)
+        XCTAssertEqual(sent?.distance, 5)
+        XCTAssertEqual(sent?.modality, .durationDistance)
+        XCTAssertEqual(sent?.notes, HealthWorkoutImporter.note)
+        XCTAssertEqual(stub.createdCustomExercises.map(\.name), ["Running"])
+
+        let second = await HealthWorkoutImporter.importWorkouts(on: Date(), apiClient: stub, health: health)
+        XCTAssertFalse(second)
+        XCTAssertEqual(stub.createdExerciseEntries.count, 1)
+    }
+
+    /// Today and Diary can load the same day at the same moment; the
+    /// workout must still be logged once, not once per caller.
+    @MainActor
+    func testConcurrentHealthImportsLogTheWorkoutOnce() async {
+        HealthSync.isEnabled = true
+        defer { HealthSync.isEnabled = false }
+        let workout = HealthWorkout(id: UUID(), catalogName: "Cycling", start: Date(), durationMinutes: 45, kilocalories: 400, distanceMeters: 15000)
+        defer {
+            let key = "healthImportedWorkoutIDs"
+            UserDefaults.standard.set((UserDefaults.standard.stringArray(forKey: key) ?? []).filter { $0 != workout.id.uuidString }, forKey: key)
+        }
+        let health = StubHealthKit()
+        health.workoutsToReturn = [workout]
+        let stub = StubAPIClient()
+
+        async let first = HealthWorkoutImporter.importWorkouts(on: Date(), apiClient: stub, health: health)
+        async let second = HealthWorkoutImporter.importWorkouts(on: Date(), apiClient: stub, health: health)
+        _ = await (first, second)
+        XCTAssertEqual(stub.createdExerciseEntries.count, 1)
+    }
+
+    /// Nothing is read from Health unless the user turned sync on.
+    @MainActor
+    func testHealthWorkoutImportNeedsSyncEnabled() async {
+        HealthSync.isEnabled = false
+        let health = StubHealthKit()
+        health.workoutsToReturn = [HealthWorkout(id: UUID(), catalogName: "Yoga", start: Date(), durationMinutes: 20, kilocalories: 80, distanceMeters: nil)]
+        let stub = StubAPIClient()
+        let imported = await HealthWorkoutImporter.importWorkouts(on: Date(), apiClient: stub, health: health)
+        XCTAssertFalse(imported)
+        XCTAssertTrue(stub.createdExerciseEntries.isEmpty)
     }
 
     /// The switch used to stay on no matter what came back from Health, which
@@ -3140,5 +3209,61 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertFalse(BodyCard.needsUpdate(loggedOn: daysAgo(3), viewing: today))
         XCTAssertFalse(BodyCard.needsUpdate(loggedOn: daysAgo(14), viewing: today))
         XCTAssertTrue(BodyCard.needsUpdate(loggedOn: daysAgo(15), viewing: today))
+    }
+
+    // MARK: - Exercise sources
+
+    /// One exercise appears once, from the highest-priority source: the
+    /// catalog row wins over the same name in the library or from Free
+    /// Exercise DB, and the catalog's rate is what the editor gets.
+    @MainActor
+    func testExerciseSearchShowsEachNameOnceCatalogFirst() async {
+        let stub = StubAPIClient()
+        stub.ownedExercisesToReturn = [Exercise(id: "mine", name: "Push-ups", category: "strength", modality: .repsOnly)]
+        stub.externalExerciseResultsToReturn = [ExternalExerciseResult(
+            id: "Pushups", name: "Pushups", category: "strength", modality: .repsOnly, caloriesPerHour: nil,
+            source: "free-exercise-db", force: nil, level: nil, mechanic: nil, equipment: [],
+            primaryMuscles: [], secondaryMuscles: [], instructions: [], images: []
+        )]
+        let viewModel = ExerciseSearchViewModel(apiClient: stub)
+        viewModel.query = "push"
+        await viewModel.search()
+
+        guard case .results(let results) = viewModel.outcome else { return XCTFail("expected results") }
+        let pushUps = results.filter { ExerciseCatalog.normalized($0.name) == "pushups" }
+        XCTAssertEqual(pushUps.count, 1)
+        XCTAssertEqual(pushUps.first?.id, "catalog-Push-Ups")
+
+        // Picking the catalog row reuses the library's own Push-ups rather
+        // than creating a second one, and carries MET × fallback weight.
+        let exercise = try? await viewModel.exercise(for: pushUps[0])
+        XCTAssertEqual(exercise?.id, "mine")
+        XCTAssertEqual(exercise?.caloriesPerHour, 8.0 * ExerciseCatalog.fallbackWeightKg)
+        XCTAssertTrue(stub.createdCustomExercises.isEmpty)
+    }
+
+    /// A set-based exercise with no duration typed still gets a calorie
+    /// estimate (and saves), timed at two minutes a set.
+    @MainActor
+    func testSetsAloneEstimateDurationAndCalories() async {
+        let stub = StubAPIClient()
+        let exercise = Exercise(id: "bp", name: "Bench Press", category: "strength", modality: .weightReps, caloriesPerHour: 300)
+        let viewModel = ExerciseEntryEditorViewModel(exercise: exercise, apiClient: stub)
+        viewModel.setRows[0].repsText = "10"
+        viewModel.addSet()
+        viewModel.setRows[1].repsText = "8"
+        viewModel.applyEstimateIfNeeded()
+        XCTAssertEqual(viewModel.caloriesText, "20") // 4 min at 300 kcal/h
+        XCTAssertTrue(viewModel.caloriesAreEstimated)
+
+        // More sets keep updating an estimate the user hasn't touched.
+        viewModel.addSet()
+        viewModel.setRows[2].repsText = "6"
+        viewModel.applyEstimateIfNeeded()
+        XCTAssertEqual(viewModel.caloriesText, "30")
+
+        let saved = await viewModel.save()
+        XCTAssertTrue(saved)
+        XCTAssertEqual(stub.createdExerciseEntries.first?.durationMinutes, 6)
     }
 }

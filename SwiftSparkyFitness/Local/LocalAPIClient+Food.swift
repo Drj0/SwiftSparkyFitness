@@ -304,10 +304,11 @@ extension LocalAPIClient {
         return orderedIds.compactMap { exercisesById[$0] }.map(LocalAPIClient.exercise)
     }
 
-    /// No server means no Free Exercise DB/Wger call — the same quiet
-    /// degrade `searchUsdaFoods` already uses for "this deployment has no
-    /// provider configured".
-    func searchExternalExercises(query: String) async throws -> [ExternalExerciseResult] { [] }
+    /// No server to proxy Free Exercise DB/Wger, so local mode searches Free
+    /// Exercise DB's public dataset directly (Wger needs the server).
+    func searchExternalExercises(query: String) async throws -> [ExternalExerciseResult] {
+        try await FreeExerciseDB.shared.search(query)
+    }
 
     /// Never actually reached in local mode (searchExternalExercises always
     /// returns empty), but implemented honestly rather than left throwing —

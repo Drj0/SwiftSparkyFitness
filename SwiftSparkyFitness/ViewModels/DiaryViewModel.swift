@@ -181,6 +181,7 @@ final class DiaryViewModel: ObservableObject {
         errorMessage = nil
         defer { isLoading = false }
         water.setDate(selectedDate)
+        await HealthWorkoutImporter.importWorkouts(on: selectedDate, apiClient: apiClient)
         do {
             async let summaryTask = apiClient.dailySummary(date: selectedDate)
             async let mealTypesTask = mealTypes.isEmpty ? apiClient.mealTypes() : mealTypes

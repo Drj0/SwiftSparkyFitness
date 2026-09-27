@@ -79,6 +79,7 @@ struct ExerciseSearchView: View {
         .background(AppColor.surface)
         .scrollDismissesKeyboard(.interactively)
         .task { await viewModel.loadRecents() }
+        .task { await viewModel.loadWeight() }
         .sheet(isPresented: $isPresentingCustomExercise) {
             CustomExerciseView { exercise in
                 pushedExercise = exercise
@@ -158,24 +159,21 @@ struct ExerciseSearchView: View {
 
     @ViewBuilder
     private var idlePrompt: some View {
-        if !viewModel.recentExercises.isEmpty {
-            VStack(spacing: 0) {
+        // Recent, then Popular from the built-in catalog: most logs are one
+        // tap away without typing anything.
+        VStack(spacing: 0) {
+            if !viewModel.recentExercises.isEmpty {
                 heading("RECENT")
                 ForEach(viewModel.recentExercises) { exercise in
                     resultRow(.owned(exercise))
                 }
             }
-            .padding(.horizontal, 20)
-        } else if viewModel.isLoadingRecents {
-            Color.clear.frame(height: 1)
-        } else {
-            ContentUnavailableView {
-                Label("Search for an exercise", systemImage: "figure.run")
-            } description: {
-                Text("Try a name, like \"Squat\" or \"Running\". Nothing matching? Add it yourself below.")
+            heading("POPULAR")
+            ForEach(viewModel.popularExercises) { entry in
+                resultRow(.catalog(entry))
             }
-            .padding(.top, 40)
         }
+        .padding(.horizontal, 20)
     }
 
     private var searchingState: some View {
@@ -212,7 +210,13 @@ struct ExerciseSearchView: View {
         Button {
             select(result)
         } label: {
-            HStack {
+            HStack(spacing: 12) {
+                Image(systemName: result.symbol)
+                    .font(.system(size: 17, weight: .medium))
+                    .foregroundStyle(AppColor.accent)
+                    .frame(width: 36, height: 36)
+                    .background(AppColor.accentSoft, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                    .accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 2) {
                     Text(result.name).appBody(15, weight: .semibold).foregroundStyle(AppColor.ink)
                     Text(subtitle(for: result)).appBody(12).foregroundStyle(AppColor.secondaryText)
@@ -244,20 +248,15 @@ struct ExerciseSearchView: View {
     }
 
     private func select(_ result: ExerciseSearchResult) {
-        switch result {
-        case .owned(let exercise):
-            pushedExercise = exercise
-        case .external(let external):
-            materializeError = nil
-            materializingId = result.id
-            Task {
-                defer { materializingId = nil }
-                do {
-                    pushedExercise = try await viewModel.apiClient.materializeExternalExercise(external)
-                } catch {
-                    materializeError = error.localizedDescription
-                    Haptics.error()
-                }
+        materializeError = nil
+        materializingId = result.id
+        Task {
+            defer { materializingId = nil }
+            do {
+                pushedExercise = try await viewModel.exercise(for: result)
+            } catch {
+                materializeError = error.localizedDescription
+                Haptics.error()
             }
         }
     }

@@ -197,6 +197,7 @@ final class TodayViewModel: ObservableObject {
         today = day
         water.setDate(day)
         await syncHealthActiveEnergy()
+        await HealthWorkoutImporter.importWorkouts(on: day, apiClient: apiClient, health: health)
         do {
             async let summaryTask = apiClient.dailySummary(date: today)
             async let mealTypesTask = mealTypes.isEmpty ? apiClient.mealTypes() : mealTypes

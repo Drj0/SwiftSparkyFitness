@@ -51,11 +51,16 @@ struct ExerciseEntryEditorView: View {
                         ErrorBanner(message: bannerMessage)
                     }
 
+                    ExercisePhotos(exerciseName: viewModel.exercise.name)
+
                     exerciseNameRow
 
                     labeledField("DURATION", error: viewModel.durationError) {
                         AppTextField(
-                            placeholder: "Required", text: $viewModel.durationMinutesText, style: .filled,
+                            // Set-based sessions rarely get timed; their
+                            // sets stand in for it (see effectiveMinutes).
+                            placeholder: viewModel.modality.usesSets ? "Optional · about 2 min a set" : "Required",
+                            text: $viewModel.durationMinutesText, style: .filled,
                             isInvalid: viewModel.durationError != nil, keyboardType: .numberPad,
                             suffix: "min", focus: $durationFocused
                         )
@@ -64,6 +69,7 @@ struct ExerciseEntryEditorView: View {
 
                     if viewModel.modality.usesSets {
                         setsEditor
+                            .onChange(of: viewModel.setRows) { _, _ in viewModel.applyEstimateIfNeeded() }
                     }
 
                     if viewModel.modality == .durationDistance {
@@ -88,6 +94,11 @@ struct ExerciseEntryEditorView: View {
                             isInvalid: viewModel.caloriesError != nil, keyboardType: .numberPad,
                             suffix: "kcal", focus: $caloriesFocused
                         )
+                        if viewModel.caloriesAreEstimated {
+                            Text("Estimated from the exercise's intensity and your weight. Type your own to replace it.")
+                                .appBody(12)
+                                .foregroundStyle(AppColor.secondaryText)
+                        }
                     }
 
                     labeledField("NOTES (OPTIONAL)", error: nil) {

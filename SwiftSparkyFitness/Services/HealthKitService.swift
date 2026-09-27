@@ -110,6 +110,24 @@ protocol HealthKitReading {
     /// Whether Health has handed over any active energy in the last `days`.
     /// False means "nothing arrived", never "you were refused".
     func hasRecentEnergy(days: Int) async -> Bool
+    func workouts(on date: Date) async throws -> [HealthWorkout]
+}
+
+extension HealthKitReading {
+    func workouts(on date: Date) async throws -> [HealthWorkout] { [] }
+}
+
+/// One workout recorded in Health (Apple Watch, or any app that writes
+/// there), reduced to what an exercise entry needs. Calories are Health's
+/// own measured figure — the top of ExerciseCatalog's source priority.
+struct HealthWorkout: Equatable {
+    let id: UUID
+    /// ExerciseCatalog name this workout type maps to.
+    let catalogName: String
+    let start: Date
+    let durationMinutes: Double
+    let kilocalories: Double?
+    let distanceMeters: Double?
 }
 
 final class HealthKitService: HealthKitReading {
@@ -118,7 +136,13 @@ final class HealthKitService: HealthKitReading {
     private let store = HKHealthStore()
     private let energyType = HKQuantityType(.activeEnergyBurned)
 
-    private var readTypes: Set<HKObjectType> { [energyType] }
+    /// Workouts and their distances, alongside active energy: an imported
+    /// workout's calories and distance are read from its statistics, which
+    /// needs read access to those quantity types too.
+    private var readTypes: Set<HKObjectType> {
+        [energyType, .workoutType(),
+         HKQuantityType(.distanceWalkingRunning), HKQuantityType(.distanceCycling), HKQuantityType(.distanceSwimming)]
+    }
 
     var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
 
@@ -174,5 +198,93 @@ final class HealthKitService: HealthKitReading {
         }
         let kilocalories = sum.doubleValue(for: .kilocalorie())
         return kilocalories > 0 ? .kilocalories(kilocalories) : .noData
+    }
+}
+
+extension HealthKitService {
+    func workouts(on date: Date) async throws -> [HealthWorkout] {
+        guard isAvailable else { return [] }
+        let calendar = Calendar(identifier: .gregorian)
+        let start = calendar.startOfDay(for: date)
+        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return [] }
+
+        let descriptor = HKSampleQueryDescriptor(
+            predicates: [.workout(HKQuery.predicateForSamples(withStart: start, end: end))],
+            sortDescriptors: [SortDescriptor(\.startDate)]
+        )
+        let distanceTypes = [HKQuantityType(.distanceWalkingRunning), HKQuantityType(.distanceCycling), HKQuantityType(.distanceSwimming)]
+        return try await descriptor.result(for: store).map { workout in
+            HealthWorkout(
+                id: workout.uuid,
+                catalogName: Self.catalogName(for: workout.workoutActivityType),
+                start: workout.startDate,
+                durationMinutes: workout.duration / 60,
+                kilocalories: workout.statistics(for: energyType)?.sumQuantity()?.doubleValue(for: .kilocalorie()),
+                distanceMeters: distanceTypes.lazy
+                    .compactMap { workout.statistics(for: $0)?.sumQuantity()?.doubleValue(for: .meter()) }
+                    .first { $0 > 0 }
+            )
+        }
+    }
+
+    /// Health's workout types onto ExerciseCatalog names. Anything without a
+    /// match lands on the catalog's generic "Workout" rather than being
+    /// dropped — the calories are real either way.
+    static func catalogName(for type: HKWorkoutActivityType) -> String {
+        switch type {
+        case .walking: return "Walking"
+        case .running: return "Running"
+        case .hiking: return "Hiking"
+        case .cycling: return "Cycling"
+        case .handCycling: return "Hand Cycling"
+        case .swimming: return "Swimming"
+        case .rowing: return "Rowing"
+        case .elliptical: return "Elliptical"
+        case .stairClimbing: return "Stair Climber"
+        case .stairs: return "Stair Climbing"
+        case .stepTraining: return "Step Aerobics"
+        case .jumpRope: return "Jump Rope"
+        case .skatingSports: return "Skating"
+        case .crossCountrySkiing: return "Cross-Country Skiing"
+        case .downhillSkiing: return "Downhill Skiing"
+        case .snowboarding: return "Snowboarding"
+        case .mixedCardio: return "Mixed Cardio"
+        case .highIntensityIntervalTraining: return "HIIT"
+        case .crossTraining: return "Circuit Training"
+        case .cardioDance, .socialDance: return "Dance Workout"
+        case .yoga: return "Yoga"
+        case .pilates: return "Pilates"
+        case .flexibility: return "Stretching"
+        case .barre: return "Barre"
+        case .taiChi: return "Tai Chi"
+        case .cooldown: return "Cooldown"
+        case .mindAndBody: return "Mind & Body"
+        case .traditionalStrengthTraining: return "Strength Training"
+        case .functionalStrengthTraining: return "Functional Strength Training"
+        case .coreTraining: return "Core Training"
+        case .basketball: return "Basketball"
+        case .soccer: return "Soccer"
+        case .tennis: return "Tennis"
+        case .badminton: return "Badminton"
+        case .cricket: return "Cricket"
+        case .volleyball: return "Volleyball"
+        case .tableTennis: return "Table Tennis"
+        case .squash: return "Squash"
+        case .pickleball: return "Pickleball"
+        case .golf: return "Golf"
+        case .baseball: return "Baseball"
+        case .hockey: return "Hockey"
+        case .rugby: return "Rugby"
+        case .americanFootball: return "American Football"
+        case .climbing: return "Climbing"
+        case .boxing: return "Boxing"
+        case .kickboxing: return "Kickboxing"
+        case .martialArts: return "Martial Arts"
+        case .wrestling: return "Wrestling"
+        case .surfingSports: return "Surfing"
+        case .bowling: return "Bowling"
+        case .gymnastics: return "Gymnastics"
+        default: return "Workout"
+        }
     }
 }

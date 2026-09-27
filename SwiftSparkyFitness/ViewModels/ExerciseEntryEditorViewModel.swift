@@ -133,22 +133,44 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
         Double(distanceText).flatMap { $0 > 0 ? $0 : nil }
     }
 
+    /// Rough time for a set-based session the user didn't time: about two
+    /// minutes a set including rest. Only used when duration is left blank.
+    static let minutesPerSet: Double = 2
+
+    /// What the calorie math and the saved entry use: the typed duration, or
+    /// for a set-based exercise with none typed, one derived from its sets.
+    var effectiveMinutes: Double? {
+        if let durationMinutes { return durationMinutes }
+        guard modality.usesSets else { return nil }
+        let sets = setRows.filter { !$0.isBlank }.count
+        return sets > 0 ? Double(sets) * Self.minutesPerSet : nil
+    }
+
+    /// The last figure this model wrote into the calories field. While the
+    /// field still holds it, it's ours to update; once it differs, the user
+    /// typed their own number and it's left alone.
+    private var lastEstimateText: String?
+
+    var caloriesAreEstimated: Bool { !caloriesText.isEmpty && caloriesText == lastEstimateText }
+
     /// A default the user can override, not a locked-in figure — the server
-    /// never recalculates this, it stores whatever is sent. `caloriesPerHour`
-    /// only has a real value once an exercise has been materialized from
-    /// Free Exercise DB (search results themselves carry 0 — verified live);
-    /// a custom exercise has none, so there is nothing to default from.
+    /// never recalculates this, it stores whatever is sent. The rate comes
+    /// from ExerciseSearchViewModel (catalog MET × weight, else a provider's
+    /// figure); a custom exercise has none, so there is nothing to default
+    /// from. nil once the user has typed their own number.
     var estimatedCalories: Double? {
-        guard caloriesText.isEmpty, let rate = exercise.caloriesPerHour, rate > 0, let minutes = durationMinutes else { return nil }
+        guard caloriesText.isEmpty || caloriesAreEstimated,
+              let rate = exercise.caloriesPerHour, rate > 0, let minutes = effectiveMinutes else { return nil }
         return (rate * minutes / 60).rounded()
     }
 
-    /// Applies the estimate into the field once duration is known, so Save
-    /// has something reasonable even if the user never looks at the
-    /// calories field — still freely overridable before saving.
+    /// Keeps the calories field following duration/sets as they change, so
+    /// Save has a sensible figure even if the user never looks at it — and
+    /// stops the moment they type their own.
     func applyEstimateIfNeeded() {
-        guard caloriesText.isEmpty, let estimated = estimatedCalories else { return }
+        guard let estimated = estimatedCalories else { return }
         caloriesText = String(Int(estimated))
+        lastEstimateText = caloriesText
     }
 
     func addSet() {
@@ -162,7 +184,7 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
 
     @discardableResult
     private func validate() -> Bool {
-        durationError = durationMinutes == nil ? "How many minutes?" : nil
+        durationError = effectiveMinutes == nil ? "How many minutes?" : nil
         caloriesError = caloriesBurned == nil ? "How many calories?" : nil
         distanceError = modality == .durationDistance && distance == nil ? "How far?" : nil
         if modality.usesSets {
@@ -175,7 +197,7 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
     }
 
     private func buildInput() -> ExerciseEntryInput? {
-        guard validate(), let minutes = durationMinutes, let calories = caloriesBurned else { return nil }
+        guard validate(), let minutes = effectiveMinutes, let calories = caloriesBurned else { return nil }
         var input = ExerciseEntryInput(
             exerciseId: exercise.id, modality: modality, entryDate: entryDate,
             durationMinutes: minutes, caloriesBurned: calories,
