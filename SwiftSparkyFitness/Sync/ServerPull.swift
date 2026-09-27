@@ -122,10 +122,33 @@ final class ServerPull {
 
     // MARK: - Apply
 
+    /// This account's links, loaded once per apply and kept current as rows
+    /// are linked, so no row costs a fetch to look up.
+    private struct Links {
+        var byLocal: [String: LocalSyncLink] = [:]
+        var byServer: [String: String] = [:]
+
+        static func key(_ kind: String, _ id: String) -> String { "\(kind)|\(id)" }
+
+        func link(_ kind: String, local: String) -> LocalSyncLink? { byLocal[Self.key(kind, local)] }
+        func localKey(_ kind: String, server: String) -> String? { byServer[Self.key(kind, server)] }
+    }
+
+    private var links = Links()
+    private var tombstones: [String: Set<String>] = [:]
+
     private func apply(_ snapshot: Snapshot) throws -> Report {
         var report = Report()
         let now = Date()
         let dayKeys = Set(snapshot.days.map(\.key))
+
+        links = Links()
+        for link in store.all(LocalSyncLink.self) where link.serverAccount == account {
+            links.byLocal[Links.key(link.kind, link.localKey)] = link
+            links.byServer[Links.key(link.kind, link.serverId)] = link.localKey
+        }
+        tombstones = [:]
+        for tombstone in store.all(LocalTombstone.self) { tombstones[tombstone.kind, default: []].insert(tombstone.localKey) }
 
         try store.applyingRemoteChanges {
             let meals = applyMealTypes(snapshot.mealTypes, now: now, report: &report)
@@ -135,6 +158,8 @@ final class ServerPull {
             applyWater(snapshot.days, dayKeys: dayKeys, now: now, report: &report)
             applyCheckIns(snapshot.body, dayKeys: dayKeys, now: now, report: &report)
             applyGoals(snapshot.goals, now: now, report: &report)
+            // One save for the whole range: until it lands, nothing here has
+            // changed, and a failure rolls all of it back.
             guard store.save() else {
                 store.context.rollback()
                 throw ServerPush.LocalSaveFailure(underlying: store.lastSaveError)
@@ -143,77 +168,104 @@ final class ServerPull {
         return report
     }
 
+    private func link<Row: SyncTracked>(for row: Row) -> LocalSyncLink? {
+        links.link(Row.syncKind, local: row.syncKey)
+    }
+
+    /// Unsent, or edited here since it last matched the server.
+    private func dirty<Row: SyncTracked>(_ row: Row) -> Bool {
+        guard let link = link(for: row) else { return true }
+        return row.updatedAt > link.linkedAt
+    }
+
     /// The row as the server has it now: stamped and linked at one instant,
-    /// so it reads as in sync rather than as a local edit.
+    /// so it reads as in sync rather than as a local edit. Only for rows that
+    /// were inserted, changed, or not yet linked — re-stamping unchanged
+    /// rows would make every routine pull rewrite (and re-upload to iCloud)
+    /// the whole range.
     private func markSynced<Row: SyncTracked>(_ row: Row, serverId: String, now: Date, serverVariantId: String? = nil) {
         row.updatedAt = now
-        store.setLink(row, serverId: serverId, account: account, serverVariantId: serverVariantId, version: now)
+        let link = store.setLink(kind: Row.syncKind, localKey: row.syncKey, serverId: serverId, account: account,
+                                 serverVariantId: serverVariantId, version: now, save: false)
+        links.byLocal[Links.key(Row.syncKind, row.syncKey)] = link
+        links.byServer[Links.key(Row.syncKind, serverId)] = row.syncKey
     }
 
-    /// serverId → local key, for every row of a kind this account links.
-    private func localKeys(kind: String) -> [String: String] {
-        var keys: [String: String] = [:]
-        for link in store.links(kind: kind, account: account) { keys[link.serverId] = link.localKey }
-        return keys
+    private func isTombstoned(_ kind: String, _ localKey: String?) -> Bool {
+        guard let localKey else { return false }
+        return tombstones[kind]?.contains(localKey) ?? false
     }
-
-    /// Keys waiting to be deleted on the server: their server copies must not
-    /// be brought back here in the meantime.
-    private func tombstoned(kind: String) -> Set<String> {
-        Set(store.tombstones(kind: kind).map(\.localKey))
-    }
-
-    private func dirty<Row: SyncTracked>(_ row: Row) -> Bool { store.needsPush(row, account: account) }
 
     /// Removes a row the server deleted, and its link, without a tombstone.
     private func deleteLocally<Row: SyncTracked>(_ row: Row) {
-        if let link = store.link(for: row, account: account) { store.context.delete(link) }
+        let key = Links.key(Row.syncKind, row.syncKey)
+        if let link = links.byLocal.removeValue(forKey: key) {
+            links.byServer[Links.key(Row.syncKind, link.serverId)] = nil
+            store.context.delete(link)
+        }
         store.context.delete(row)
     }
 
     // MARK: Meal types
 
-    /// Returns server meal id → local meal id.
-    private func applyMealTypes(_ serverMeals: [MealType], now: Date, report: inout Report) -> [String: String] {
-        var mapping: [String: String] = [:]
-        let linked = localKeys(kind: LocalMealType.syncKind)
-        let locals = store.all(LocalMealType.self)
+    /// Returns server meal id → (local id, local name).
+    private func applyMealTypes(_ serverMeals: [MealType], now: Date, report: inout Report) -> [String: (id: String, name: String)] {
+        let kind = LocalMealType.syncKind
+        var mapping: [String: (id: String, name: String)] = [:]
+        var locals = store.all(LocalMealType.self)
         for meal in serverMeals {
-            let row = linked[meal.id].flatMap { key in locals.first { $0.id == key } }
-                ?? locals.first { $0.name.caseInsensitiveCompare(meal.name) == .orderedSame }
+            let linkedKey = links.localKey(kind, server: meal.id)
+            // Deleted here, waiting to be deleted there.
+            if isTombstoned(kind, linkedKey) { continue }
+            let isSystem = meal.userId == nil
+            // A linked row first; otherwise only an *unlinked* row may be
+            // matched — the server's four by their seeded id (renaming a seed
+            // here must not make the server's one look new), custom ones by
+            // name.
+            let row = linkedKey.flatMap { key in locals.first { $0.id == key } }
+                ?? locals.first { local in
+                    guard link(for: local) == nil else { return false }
+                    return isSystem
+                        ? local.isSystemDefault && (local.id == meal.name.lowercased() || local.name.caseInsensitiveCompare(meal.name) == .orderedSame)
+                        : local.name.caseInsensitiveCompare(meal.name) == .orderedSame
+                }
             if let row {
-                mapping[meal.id] = row.id
-                let isLinked = store.link(for: row, account: account) != nil
+                mapping[meal.id] = (row.id, row.name)
+                let isLinked = link(for: row) != nil
                 // A seeded row nobody touched carries no intent; an unlinked
                 // edited one is waiting to be pushed.
-                let untouched = row.updatedAt == .distantPast
-                if isLinked ? !dirty(row) : untouched {
-                    // The server's four keep this device's capitalised names.
-                    if !row.isSystemDefault { row.name = meal.name; row.sortOrder = meal.sortOrder }
-                    if let visible = meal.isVisible, visible != row.isVisible { row.isVisible = visible; report.updated += 1 }
-                    markSynced(row, serverId: meal.id, now: now)
+                guard isLinked ? !dirty(row) : row.updatedAt == .distantPast else { continue }
+                var changed = false
+                // The server's four keep this device's capitalised names.
+                if !row.isSystemDefault, row.name != meal.name || row.sortOrder != meal.sortOrder {
+                    row.name = meal.name
+                    row.sortOrder = meal.sortOrder
+                    changed = true
                 }
+                if let visible = meal.isVisible, visible != row.isVisible {
+                    row.isVisible = visible
+                    changed = true
+                }
+                if changed { report.updated += 1 }
+                if changed || !isLinked { markSynced(row, serverId: meal.id, now: now) }
+                mapping[meal.id] = (row.id, row.name)
             } else {
                 let created = LocalMealType(id: meal.id, name: meal.name, sortOrder: meal.sortOrder,
-                                            isVisible: meal.isVisible ?? true, isSystemDefault: meal.userId == nil)
+                                            isVisible: meal.isVisible ?? true, isSystemDefault: isSystem)
                 store.context.insert(created)
+                locals.append(created)
                 markSynced(created, serverId: meal.id, now: now)
-                mapping[meal.id] = created.id
+                mapping[meal.id] = (created.id, created.name)
                 report.added += 1
             }
         }
         return mapping
     }
 
-    private func localMealId(serverId: String?, name: String, mapping: [String: String]) -> (id: String, name: String) {
-        if let serverId, let local = mapping[serverId] {
-            let localName = store.fetch(LocalMealType.self, where: #Predicate { $0.id == local }).first?.name ?? name
-            return (local, localName)
-        }
-        if let match = store.all(LocalMealType.self).first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) {
-            return (match.id, match.name)
-        }
-        return (store.all(LocalMealType.self, sortBy: [SortDescriptor(\.sortOrder)]).first?.id ?? "", name)
+    private func localMeal(serverId: String?, name: String, mapping: [String: (id: String, name: String)]) -> (id: String, name: String) {
+        if let serverId, let local = mapping[serverId] { return local }
+        if let match = mapping.values.first(where: { $0.name.caseInsensitiveCompare(name) == .orderedSame }) { return match }
+        return mapping.values.first ?? ("", name)
     }
 
     // MARK: Preferences
@@ -224,20 +276,19 @@ final class ServerPull {
             store.context.insert(fresh)
             return fresh
         }()
-        let isLinked = store.link(for: row, account: account) != nil
+        let isLinked = link(for: row) != nil
         guard isLinked ? !dirty(row) : row.updatedAt == .distantPast else { return }
+        let before = DiaryArchive.archived(row)
         for setting in UserPreferences.Setting.allCases {
             LocalAPIClient.apply(setting, server.value(for: setting), to: row)
         }
-        markSynced(row, serverId: row.id, now: now)
+        if DiaryArchive.archived(row) != before || !isLinked { markSynced(row, serverId: row.id, now: now) }
     }
 
     // MARK: Food entries
 
-    private func applyFoodEntries(_ days: [Day], dayKeys: Set<String>, meals: [String: String], now: Date, report: inout Report) {
+    private func applyFoodEntries(_ days: [Day], dayKeys: Set<String>, meals: [String: (id: String, name: String)], now: Date, report: inout Report) {
         let kind = LocalFoodEntry.syncKind
-        let linked = localKeys(kind: kind)
-        let pendingDelete = tombstoned(kind: kind)
         var rowsById: [String: LocalFoodEntry] = [:]
         for row in store.all(LocalFoodEntry.self) { rowsById[row.id] = row }
         var seen: Set<String> = []
@@ -245,23 +296,24 @@ final class ServerPull {
         for day in days {
             for entry in day.summary.foodEntries {
                 seen.insert(entry.id)
-                let localKey = linked[entry.id]
-                if let localKey, pendingDelete.contains(localKey) { continue }
-                let meal = localMealId(serverId: entry.mealTypeId, name: entry.mealType, mapping: meals)
+                let localKey = links.localKey(kind, server: entry.id)
+                if isTombstoned(kind, localKey) { continue }
+                let meal = localMeal(serverId: entry.mealTypeId, name: entry.mealType, mapping: meals)
                 if let localKey, let row = rowsById[localKey] {
                     guard !dirty(row) else { continue }
-                    if Self.differs(row, entry, dayKey: day.key, meal: meal) {
-                        Self.fill(row, entry, day: day, meal: meal)
+                    let foodId = localFood(for: entry, now: now) ?? row.foodId
+                    if Self.differs(row, entry, dayKey: day.key, meal: meal, foodId: foodId) {
+                        Self.fill(row, entry, day: day, meal: meal, foodId: foodId)
                         report.updated += 1
+                        markSynced(row, serverId: entry.id, now: now)
                     }
-                    markSynced(row, serverId: entry.id, now: now)
                 } else if localKey == nil {
-                    ensureFood(for: entry, now: now)
-                    let row = LocalFoodEntry(id: entry.id, entryDate: day.date, foodId: entry.foodId ?? "imported-\(entry.id)",
+                    let foodId = localFood(for: entry, now: now) ?? "imported-\(entry.id)"
+                    let row = LocalFoodEntry(id: entry.id, entryDate: day.date, foodId: foodId,
                                              foodName: entry.foodName, mealTypeId: meal.id, mealTypeName: meal.name,
                                              quantity: entry.quantity, unit: entry.unit, servingSize: 0, servingUnit: "",
                                              calories: 0, protein: 0, carbs: 0, fat: 0)
-                    Self.fill(row, entry, day: day, meal: meal)
+                    Self.fill(row, entry, day: day, meal: meal, foodId: foodId)
                     store.context.insert(row)
                     markSynced(row, serverId: entry.id, now: now)
                     rowsById[row.id] = row
@@ -270,26 +322,28 @@ final class ServerPull {
             }
         }
         // Linked rows inside the range the server no longer has.
-        for (serverId, localKey) in linked where !seen.contains(serverId) {
+        for (key, link) in links.byLocal where link.kind == kind && !seen.contains(link.serverId) {
+            let localKey = String(key.dropFirst(kind.count + 1))
             guard let row = rowsById[localKey], dayKeys.contains(row.dayKey), !dirty(row) else { continue }
             deleteLocally(row)
             report.deleted += 1
         }
     }
 
-    private static func differs(_ row: LocalFoodEntry, _ entry: FoodEntrySummary, dayKey: String, meal: (id: String, name: String)) -> Bool {
-        row.dayKey != dayKey || row.mealTypeId != meal.id || abs(row.quantity - entry.quantity) > 0.0001
-            || row.unit != entry.unit || abs(row.calories - entry.calories) > 0.0001
+    private static func differs(_ row: LocalFoodEntry, _ entry: FoodEntrySummary, dayKey: String, meal: (id: String, name: String), foodId: String) -> Bool {
+        row.dayKey != dayKey || row.mealTypeId != meal.id || row.foodId != foodId
+            || abs(row.quantity - entry.quantity) > 0.0001 || row.unit != entry.unit
+            || abs(row.calories - entry.calories) > 0.0001
             || abs(row.protein - (entry.protein ?? 0)) > 0.0001 || abs(row.carbs - (entry.carbs ?? 0)) > 0.0001
             || abs(row.fat - (entry.fat ?? 0)) > 0.0001 || row.foodName != entry.foodName
     }
 
     /// Nutrition is stored as the server reports it for the entry — the same
     /// numbers server mode has always displayed for it.
-    private static func fill(_ row: LocalFoodEntry, _ entry: FoodEntrySummary, day: Day, meal: (id: String, name: String)) {
+    private static func fill(_ row: LocalFoodEntry, _ entry: FoodEntrySummary, day: Day, meal: (id: String, name: String), foodId: String) {
         row.dayKey = day.key
         row.entryDate = day.date
-        if let foodId = entry.foodId { row.foodId = foodId }
+        row.foodId = foodId
         row.foodName = entry.foodName
         row.brandName = entry.brandName
         row.mealTypeId = meal.id
@@ -304,50 +358,66 @@ final class ServerPull {
         row.fat = entry.fat ?? 0
     }
 
-    /// The food an entry points at, so it shows in recents and can be logged
-    /// again offline. Keyed by the server's food id and linked with its
-    /// variant, so logging it again here reuses the same server food.
-    private func ensureFood(for entry: FoodEntrySummary, now: Date) {
-        guard let foodId = entry.foodId else { return }
-        guard store.fetch(LocalFood.self, where: #Predicate { $0.id == foodId }).isEmpty else { return }
+    /// The local food behind a server entry's food, so it shows in recents
+    /// and can be logged again offline. Through the food links first — a food
+    /// this device created and pushed is the same food, under its local id —
+    /// then a local food already under the server's id, then a new one.
+    private func localFood(for entry: FoodEntrySummary, now: Date) -> String? {
+        let kind = LocalFood.syncKind
+        guard let serverFoodId = entry.foodId else { return nil }
+        if let key = links.localKey(kind, server: serverFoodId),
+           !store.fetch(LocalFood.self, where: #Predicate { $0.id == key }).isEmpty {
+            return key
+        }
+        if let existing = store.fetch(LocalFood.self, where: #Predicate { $0.id == serverFoodId }).first {
+            if link(for: existing) == nil { markSynced(existing, serverId: serverFoodId, now: now, serverVariantId: entry.variantId) }
+            return existing.id
+        }
         let serving = entry.servingSize ?? entry.quantity
         let scale = entry.quantity > 0 ? serving / entry.quantity : 1
-        let food = LocalFood(id: foodId, name: entry.foodName, brand: entry.brandName,
+        let food = LocalFood(id: serverFoodId, name: entry.foodName, brand: entry.brandName,
                              servingSize: serving, servingUnit: entry.servingUnit ?? entry.unit,
                              calories: entry.calories * scale, protein: (entry.protein ?? 0) * scale,
                              carbs: (entry.carbs ?? 0) * scale, fat: (entry.fat ?? 0) * scale, isCustom: false)
         store.context.insert(food)
-        markSynced(food, serverId: foodId, now: now, serverVariantId: entry.variantId)
+        markSynced(food, serverId: serverFoodId, now: now, serverVariantId: entry.variantId)
+        return food.id
     }
 
     // MARK: Exercise
 
     private func applyExerciseEntries(_ days: [Day], dayKeys: Set<String>, now: Date, report: inout Report) {
         let kind = LocalExerciseEntry.syncKind
-        let linked = localKeys(kind: kind)
-        let pendingDelete = tombstoned(kind: kind)
         var rowsById: [String: LocalExerciseEntry] = [:]
-        for row in store.all(LocalExerciseEntry.self) { rowsById[row.id] = row }
+        var sentinels: [String: LocalExerciseEntry] = [:]
+        let sentinel = ExerciseSessionSummary.healthActiveEnergyName
+        for row in store.all(LocalExerciseEntry.self) {
+            rowsById[row.id] = row
+            if row.name == sentinel { sentinels[row.dayKey] = row }
+        }
+        var exercises: [String: LocalExercise] = [:]
+        for exercise in store.all(LocalExercise.self) { exercises[exercise.id] = exercise }
         var seen: Set<String> = []
 
         for day in days {
             for session in day.summary.exerciseSessions {
                 if session.isHealthActiveEnergy {
-                    applyActiveEnergy(session, day: day, rows: rowsById, now: now, report: &report)
+                    applyActiveEnergy(session, day: day, sentinels: &sentinels, exercises: &exercises, now: now, report: &report)
                     continue
                 }
                 seen.insert(session.id)
-                let localKey = linked[session.id]
-                if let localKey, pendingDelete.contains(localKey) { continue }
-                let exerciseId = ensureExercise(for: session, now: now)
+                let localKey = links.localKey(kind, server: session.id)
+                if isTombstoned(kind, localKey) { continue }
                 if let localKey, let row = rowsById[localKey] {
                     guard !dirty(row) else { continue }
+                    let exerciseId = localExercise(for: session, exercises: &exercises, now: now)
                     if Self.differs(row, session, dayKey: day.key, exerciseId: exerciseId) {
                         Self.fill(row, session, day: day, exerciseId: exerciseId)
                         report.updated += 1
+                        markSynced(row, serverId: session.id, now: now)
                     }
-                    markSynced(row, serverId: session.id, now: now)
                 } else if localKey == nil {
+                    let exerciseId = localExercise(for: session, exercises: &exercises, now: now)
                     let row = LocalExerciseEntry(id: session.id, entryDate: day.date, exerciseId: exerciseId,
                                                  name: "", durationMinutes: 0, caloriesBurned: 0)
                     Self.fill(row, session, day: day, exerciseId: exerciseId)
@@ -358,7 +428,8 @@ final class ServerPull {
                 }
             }
         }
-        for (serverId, localKey) in linked where !seen.contains(serverId) && !serverId.hasPrefix("active-energy:") {
+        for (key, link) in links.byLocal where link.kind == kind && !seen.contains(link.serverId) && !link.serverId.hasPrefix("active-energy:") {
+            let localKey = String(key.dropFirst(kind.count + 1))
             guard let row = rowsById[localKey], dayKeys.contains(row.dayKey), !dirty(row) else { continue }
             deleteLocally(row)
             report.deleted += 1
@@ -366,25 +437,31 @@ final class ServerPull {
     }
 
     /// Health's figure is one per day on both sides, whatever each side's id.
-    private func applyActiveEnergy(_ session: ExerciseSessionSummary, day: Day, rows: [String: LocalExerciseEntry], now: Date, report: inout Report) {
+    private func applyActiveEnergy(_ session: ExerciseSessionSummary, day: Day, sentinels: inout [String: LocalExerciseEntry],
+                                   exercises: inout [String: LocalExercise], now: Date, report: inout Report) {
         let sentinel = ExerciseSessionSummary.healthActiveEnergyName
         let serverId = "active-energy:\(day.key)"
         let calories = session.caloriesBurned ?? 0
-        if let row = rows.values.first(where: { $0.dayKey == day.key && $0.name == sentinel }) {
+        if let row = sentinels[day.key] {
             // Unsent or edited here: this device's figure goes out next push.
             guard !dirty(row) else { return }
-            if abs(row.caloriesBurned - calories) > 0.0001 { row.caloriesBurned = calories; report.updated += 1 }
-            markSynced(row, serverId: serverId, now: now)
+            if abs(row.caloriesBurned - calories) > 0.0001 {
+                row.caloriesBurned = calories
+                report.updated += 1
+                markSynced(row, serverId: serverId, now: now)
+            }
         } else {
-            let exerciseId = store.all(LocalExercise.self).first { $0.name == sentinel }?.id ?? {
+            let exerciseId = exercises.values.first { $0.name == sentinel }?.id ?? {
                 let created = LocalExercise(name: sentinel, category: "Cardio")
                 store.context.insert(created)
+                exercises[created.id] = created
                 return created.id
             }()
             let row = LocalExerciseEntry(entryDate: day.date, exerciseId: exerciseId, name: sentinel,
                                          durationMinutes: 0, caloriesBurned: calories)
             store.context.insert(row)
             markSynced(row, serverId: serverId, now: now)
+            sentinels[day.key] = row
             report.added += 1
         }
     }
@@ -431,22 +508,23 @@ final class ServerPull {
         return String(data: data, encoding: .utf8)
     }
 
-    /// The local exercise for a server session's exercise, created under the
-    /// server's id the first time it is seen.
-    private func ensureExercise(for session: ExerciseSessionSummary, now: Date) -> String {
+    /// The local exercise for a server session's exercise: through the links
+    /// (one this device created and pushed), then one already under the
+    /// server's id, then a new one.
+    private func localExercise(for session: ExerciseSessionSummary, exercises: inout [String: LocalExercise], now: Date) -> String {
         let exercise = session.asExercise
         let serverId = session.exerciseId ?? exercise.id
-        if let key = store.links(kind: LocalExercise.syncKind, account: account).first(where: { $0.serverId == serverId })?.localKey,
-           !store.fetch(LocalExercise.self, where: #Predicate { $0.id == key }).isEmpty {
+        if let key = links.localKey(LocalExercise.syncKind, server: serverId), exercises[key] != nil {
             return key
         }
-        if let existing = store.fetch(LocalExercise.self, where: #Predicate { $0.id == serverId }).first {
-            markSynced(existing, serverId: serverId, now: now)
+        if let existing = exercises[serverId] {
+            if link(for: existing) == nil { markSynced(existing, serverId: serverId, now: now) }
             return existing.id
         }
         let created = LocalExercise(id: serverId, name: exercise.name, category: exercise.category,
                                     modality: session.effectiveModality.rawValue)
         store.context.insert(created)
+        exercises[created.id] = created
         markSynced(created, serverId: serverId, now: now)
         return created.id
     }
@@ -455,8 +533,6 @@ final class ServerPull {
 
     private func applyWater(_ days: [Day], dayKeys: Set<String>, now: Date, report: inout Report) {
         let kind = LocalWaterEntry.syncKind
-        let linked = localKeys(kind: kind)
-        let pendingDelete = tombstoned(kind: kind)
         var rowsById: [String: LocalWaterEntry] = [:]
         for row in store.all(LocalWaterEntry.self) { rowsById[row.id] = row }
         var seen: Set<String> = []
@@ -464,16 +540,16 @@ final class ServerPull {
         for day in days {
             for drink in day.water {
                 seen.insert(drink.id)
-                let localKey = linked[drink.id]
-                if let localKey, pendingDelete.contains(localKey) { continue }
+                let localKey = links.localKey(kind, server: drink.id)
+                if isTombstoned(kind, localKey) { continue }
                 if let localKey, let row = rowsById[localKey] {
                     guard !dirty(row) else { continue }
                     if abs(row.waterMl - drink.waterMl) > 0.0001 || row.dayKey != day.key {
                         row.waterMl = drink.waterMl
                         row.dayKey = day.key
                         report.updated += 1
+                        markSynced(row, serverId: drink.id, now: now)
                     }
-                    markSynced(row, serverId: drink.id, now: now)
                 } else if localKey == nil {
                     let row = LocalWaterEntry(id: drink.id, dayKey: day.key, waterMl: drink.waterMl,
                                               source: Self.localWaterSource(drink.source),
@@ -485,7 +561,8 @@ final class ServerPull {
                 }
             }
         }
-        for (serverId, localKey) in linked where !seen.contains(serverId) {
+        for (key, link) in links.byLocal where link.kind == kind && !seen.contains(link.serverId) {
+            let localKey = String(key.dropFirst(kind.count + 1))
             guard let row = rowsById[localKey], dayKeys.contains(row.dayKey), !dirty(row) else { continue }
             deleteLocally(row)
             report.deleted += 1
@@ -504,26 +581,26 @@ final class ServerPull {
     // MARK: Check-ins
 
     private func applyCheckIns(_ rows: [DatedBodyMeasurements], dayKeys: Set<String>, now: Date, report: inout Report) {
+        let kind = LocalCheckIn.syncKind
         var byDay: [String: LocalCheckIn] = [:]
         for row in store.all(LocalCheckIn.self) { byDay[row.dayKey] = row }
         var seenDays: Set<String> = []
-        let pendingDelete = tombstoned(kind: LocalCheckIn.syncKind)
-        let linked = localKeys(kind: LocalCheckIn.syncKind)
 
         for dated in rows {
             let key = String(dated.entryDate.prefix(10))
             seenDays.insert(key)
             let values = dated.measurements
             let serverId = values.id ?? key
+            if isTombstoned(kind, links.localKey(kind, server: serverId)) { continue }
             if let row = byDay[key] {
                 // Unlinked means logged here and not yet sent: newer.
-                guard store.link(for: row, account: account) != nil, !dirty(row) else { continue }
+                guard link(for: row) != nil, !dirty(row) else { continue }
                 if LocalAPIClient.measurements(row) != Self.withId(values, row.id) {
                     Self.fill(row, values)
                     report.updated += 1
+                    markSynced(row, serverId: serverId, now: now)
                 }
-                markSynced(row, serverId: serverId, now: now)
-            } else if !(linked[serverId].map(pendingDelete.contains) ?? false) {
+            } else {
                 let row = LocalCheckIn(id: serverId, dayKey: key)
                 Self.fill(row, values)
                 store.context.insert(row)
@@ -533,7 +610,7 @@ final class ServerPull {
             }
         }
         for row in byDay.values where dayKeys.contains(row.dayKey) && !seenDays.contains(row.dayKey) {
-            guard store.link(for: row, account: account) != nil, !dirty(row) else { continue }
+            guard link(for: row) != nil, !dirty(row) else { continue }
             deleteLocally(row)
             report.deleted += 1
         }
@@ -562,41 +639,47 @@ final class ServerPull {
     // MARK: Goals
 
     /// The server answers per day with goals carried forward; locally a row
-    /// means "from this day on". So a row is written only on a day where the
-    /// server's goal differs from what this device would already show —
-    /// never one per day, and never over a goal set here and not yet sent.
+    /// means "from this day on". So only days where the *server's* goal
+    /// changes are considered, and a row is written there only when it
+    /// differs from what this device would already show. A goal set here and
+    /// not yet sent is never overwritten, and — because only the server's
+    /// own change days are looked at — never undone on the days after it.
     private func applyGoals(_ serverGoals: [String: NutritionGoals], now: Date, report: inout Report) {
-        let rows = store.all(LocalGoalRow.self, sortBy: [SortDescriptor(\.dayKey)])
-        var effective: [(key: String, goals: NutritionGoals)] = rows.map { ($0.dayKey, LocalAPIClient.goals(from: $0)) }
+        var rows: [String: LocalGoalRow] = [:]
+        for row in store.all(LocalGoalRow.self) { rows[row.dayKey] = row }
 
-        func localGoals(on key: String) -> NutritionGoals? {
-            effective.last { $0.key <= key }?.goals
+        func governing(_ key: String) -> LocalGoalRow? {
+            rows.keys.filter { $0 <= key }.max().flatMap { rows[$0] }
         }
 
+        var previous: [String: JSONValue]?
         for key in serverGoals.keys.sorted() {
             guard let server = serverGoals[key], server.isSet else { continue }
-            let local = localGoals(on: key)
-            // Both through the same conversion the local store applies, so
-            // equal goals compare equal whatever each side's raw bag holds.
-            if let local, LocalAPIClient.bag(from: local, dayKey: key) == LocalAPIClient.bag(from: server, dayKey: key) { continue }
-            if let row = store.fetch(LocalGoalRow.self, where: #Predicate { $0.dayKey == key }).first {
-                guard !dirty(row) else { continue }
-                row.rawJSON = Self.encode(server, dayKey: key)
+            let serverBag = LocalAPIClient.bag(from: server, dayKey: key)
+            defer { previous = serverBag }
+            if let previous, previous == serverBag { continue }
+
+            if let current = governing(key) {
+                // The row in force here is waiting to be sent: it wins.
+                if dirty(current) && current.dayKey == key { continue }
+                let localBag = LocalAPIClient.bag(from: LocalAPIClient.goals(from: current), dayKey: key)
+                // An unsent goal from an earlier day doesn't block this one:
+                // the server changed its goal later, from this day on.
+                if localBag == serverBag { continue }
+            }
+            let data = (try? JSONEncoder().encode(serverBag)) ?? Data()
+            if let row = rows[key] {
+                row.rawJSON = data
                 markSynced(row, serverId: key, now: now)
                 report.updated += 1
             } else {
-                let row = LocalGoalRow(dayKey: key, rawJSON: Self.encode(server, dayKey: key))
+                let row = LocalGoalRow(dayKey: key, rawJSON: data)
                 store.context.insert(row)
                 markSynced(row, serverId: key, now: now)
+                rows[key] = row
                 report.added += 1
             }
-            effective.append((key, server))
-            effective.sort { $0.key < $1.key }
         }
-    }
-
-    private static func encode(_ goals: NutritionGoals, dayKey: String) -> Data {
-        (try? JSONEncoder().encode(LocalAPIClient.bag(from: goals, dayKey: dayKey))) ?? Data()
     }
 }
 

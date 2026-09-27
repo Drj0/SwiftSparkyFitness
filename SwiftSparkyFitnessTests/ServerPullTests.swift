@@ -202,6 +202,79 @@ final class ServerPullTests: XCTestCase {
         XCTAssertEqual(calories, 2100)
     }
 
+    /// A routine pull must not rewrite rows it didn't change: on the iCloud
+    /// store every rewrite is an upload, and a stamp that reaches another
+    /// device before its link reads there as an unsent edit.
+    func testAPullLeavesUnchangedRowsUntouched() async throws {
+        let server = FakeSyncServer()
+        try await seedServer(server)
+        let device = makeDevice()
+        _ = try await pull(device, from: server)
+        let stamps = device.store.all(LocalFoodEntry.self).map(\.updatedAt)
+        let linkStamps = device.store.all(LocalSyncLink.self).map(\.linkedAt).sorted()
+
+        _ = try await pull(device, from: server)
+
+        XCTAssertEqual(device.store.all(LocalFoodEntry.self).map(\.updatedAt), stamps)
+        XCTAssertEqual(device.store.all(LocalSyncLink.self).map(\.linkedAt).sorted(), linkStamps)
+    }
+
+    /// A food this device created and pushed is the same food when its entry
+    /// comes back: no second copy under the server's id.
+    func testAPushedFoodDoesNotComeBackAsASecondFood() async throws {
+        let device = makeDevice()
+        let food = try await oats(device)
+        try await device.createFoodEntry(FoodEntryInput(food: food, mealTypeId: "lunch", quantity: 50, entryDate: day))
+        let server = FakeSyncServer()
+        _ = try await push(device, to: server)
+
+        _ = try await pull(device, from: server)
+
+        XCTAssertEqual(device.store.all(LocalFood.self).count, 1)
+        XCTAssertEqual(device.store.all(LocalFoodEntry.self).first?.foodId, "oats")
+    }
+
+    /// Goals set here from day P, not yet sent, while the server still has
+    /// the old ones: the days after P keep the new goals.
+    func testAnUnsentGoalIsNotUndoneOnTheDaysAfterIt() async throws {
+        let server = FakeSyncServer()
+        try await seedServer(server) // 2100 from `day`
+        let device = makeDevice()
+        _ = try await pull(device, from: server)
+        let changeDay = Calendar.current.date(byAdding: .day, value: 2, to: day)!
+        var mine = try await device.goals(date: changeDay)
+        mine.calories = 1800
+        try await device.saveGoals(mine, startingOn: changeDay)
+        let later = Calendar.current.date(byAdding: .day, value: 5, to: day)!
+
+        _ = try await ServerPull(store: device.store, server: server, account: account).run(from: day, to: later)
+
+        let onChange = try await device.goals(date: changeDay).calories
+        let after = try await device.goals(date: Calendar.current.date(byAdding: .day, value: 1, to: changeDay)!).calories
+        XCTAssertEqual(onChange, 1800)
+        XCTAssertEqual(after, 1800)
+        let before = try await device.goals(date: day).calories
+        XCTAssertEqual(before, 2100)
+    }
+
+    /// A meal category deleted here, waiting to be deleted on the server,
+    /// stays deleted.
+    func testADeletedMealCategoryIsNotBroughtBack() async throws {
+        let server = FakeSyncServer()
+        _ = try await server.backing.createMealType(name: "Supper", sortOrder: 50)
+        let device = makeDevice()
+        _ = try await pull(device, from: server)
+        let supper = try XCTUnwrap(device.store.all(LocalMealType.self).first { $0.name == "Supper" })
+        try await device.deleteMealType(id: supper.id)
+
+        _ = try await pull(device, from: server)
+
+        XCTAssertFalse(device.store.all(LocalMealType.self).contains { $0.name == "Supper" })
+        _ = try await push(device, to: server)
+        let serverMeals = try await server.backing.mealTypes()
+        XCTAssertFalse(serverMeals.contains { $0.name == "Supper" }, "the push then deletes it there")
+    }
+
     // MARK: - Round trips with the push
 
     /// Pushed rows are linked under the ids the server gave them, which are

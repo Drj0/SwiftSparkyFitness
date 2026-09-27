@@ -192,18 +192,21 @@ extension LocalStore {
                 serverVariantId: serverVariantId, version: version ?? max(Date(), row.updatedAt))
     }
 
+    /// `save: false` leaves the change pending for the caller's own save —
+    /// the pull, which must land a whole range in one.
     @discardableResult
-    func setLink(kind: String, localKey: String, serverId: String, account: String, serverVariantId: String? = nil, version: Date) -> LocalSyncLink {
+    func setLink(kind: String, localKey: String, serverId: String, account: String, serverVariantId: String? = nil, version: Date, save shouldSave: Bool = true) -> LocalSyncLink {
         if let existing = link(kind: kind, localKey: localKey, account: account) {
             existing.serverId = serverId
             existing.linkedAt = version
             if let serverVariantId { existing.serverVariantId = serverVariantId }
-            save()
+            if shouldSave { save() }
             return existing
         }
         let created = LocalSyncLink(kind: kind, localKey: localKey, serverId: serverId,
                                     serverAccount: account, linkedAt: version, serverVariantId: serverVariantId)
-        insert(created)
+        context.insert(created)
+        if shouldSave { save() }
         return created
     }
 
