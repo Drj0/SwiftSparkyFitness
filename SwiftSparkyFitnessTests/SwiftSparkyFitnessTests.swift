@@ -196,7 +196,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
             return Food(id: "created-food", name: input.name, brand: input.brand, defaultVariant: nil)
         }
         func materializeExternalFood(_ food: Food) async throws -> Food { fatalError("unused") }
-        func createFoodEntry(_ input: FoodEntryInput) async throws {}
+        func createFoodEntry(_ input: FoodEntryInput) async throws -> String { "created-entry" }
         func updateFoodEntry(id: String, _ input: FoodEntryInput) async throws {}
         func deleteFoodEntry(id: String) async throws {}
         var ownedExercisesToReturn: [Exercise] = []

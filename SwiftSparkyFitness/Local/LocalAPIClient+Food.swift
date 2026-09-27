@@ -220,9 +220,10 @@ extension LocalAPIClient {
         row.usageCount += 1
     }
 
-    func createFoodEntry(_ input: FoodEntryInput) async throws {
+    @discardableResult
+    func createFoodEntry(_ input: FoodEntryInput) async throws -> String {
         let values = scaled(input)
-        store.insert(LocalFoodEntry(
+        let row = LocalFoodEntry(
             entryDate: input.entryDate,
             foodId: input.food.id,
             foodName: input.food.name,
@@ -237,9 +238,11 @@ extension LocalAPIClient {
             protein: values.protein,
             carbs: values.carbs,
             fat: values.fat
-        ))
+        )
+        store.insert(row)
         markUsed(input.food.id)
         store.save()
+        return row.id
     }
 
     func updateFoodEntry(id: String, _ input: FoodEntryInput) async throws {

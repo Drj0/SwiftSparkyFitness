@@ -54,7 +54,9 @@ protocol APIClientProtocol {
     func searchUsdaFoods(query: String) async throws -> [Food]
     func createCustomFood(_ input: CustomFoodInput) async throws -> Food
     func materializeExternalFood(_ food: Food) async throws -> Food
-    func createFoodEntry(_ input: FoodEntryInput) async throws
+    /// Returns the new entry's id, which the switching flows link to.
+    @discardableResult
+    func createFoodEntry(_ input: FoodEntryInput) async throws -> String
     func updateFoodEntry(id: String, _ input: FoodEntryInput) async throws
     func deleteFoodEntry(id: String) async throws
     /// Exercises already in the user's own library (materialized custom or
@@ -117,6 +119,12 @@ struct FoodEntryInput {
     let mealTypeId: String
     let quantity: Double
     let entryDate: Date
+    /// Set only when copying a local diary to a server. The server has a
+    /// unique index on (user, source, source_id) and upserts on it, so a
+    /// re-sent entry updates its first copy instead of duplicating it.
+    /// Nil for everyday logging, which leaves the request exactly as before.
+    var source: String? = nil
+    var sourceId: String? = nil
 }
 
 /// What the app sends to log or edit a session. `calories_burned` and
@@ -147,7 +155,15 @@ final class APIClient: APIClientProtocol {
     /// See ServerConfig for why this isn't a constant any more.
     var baseURL: URL { ServerConfig.url }
 
-    private let session: URLSession = {
+    private let session: URLSession
+
+    /// `session` is a test seam (a stubbed `URLProtocol`); the app always
+    /// uses the default.
+    init(session: URLSession = APIClient.makeSession()) {
+        self.session = session
+    }
+
+    static func makeSession() -> URLSession {
         let config = URLSessionConfiguration.default
         config.httpCookieStorage = .shared
         config.httpShouldSetCookies = true
@@ -158,7 +174,7 @@ final class APIClient: APIClientProtocol {
         config.timeoutIntervalForRequest = 12
         config.timeoutIntervalForResource = 30
         return URLSession(configuration: config)
-    }()
+    }
 
     private let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
@@ -553,6 +569,9 @@ final class APIClient: APIClientProtocol {
         let protein: Double?
         let carbs: Double?
         let fat: Double?
+        /// Optional, so synthesized encoding omits them when nil.
+        let source: String?
+        let sourceId: String?
     }
 
     private func foodEntryBody(_ input: FoodEntryInput) -> FoodEntryRequest {
@@ -570,7 +589,9 @@ final class APIClient: APIClientProtocol {
             calories: (variant?.calories ?? 0) * scale,
             protein: variant?.protein.map { $0 * scale },
             carbs: variant?.carbs.map { $0 * scale },
-            fat: variant?.fat.map { $0 * scale }
+            fat: variant?.fat.map { $0 * scale },
+            source: input.source,
+            sourceId: input.sourceId
         )
     }
 
@@ -588,8 +609,10 @@ final class APIClient: APIClientProtocol {
     /// `input.food` must already be a real, locally-persisted food (a plain
     /// search result, or the output of materializeExternalFood) — its id and
     /// variant id are what the RLS policy checks against.
-    func createFoodEntry(_ input: FoodEntryInput) async throws {
-        let _: FoodEntryAck = try await send("api/food-entries", method: "POST", body: foodEntryBody(input))
+    @discardableResult
+    func createFoodEntry(_ input: FoodEntryInput) async throws -> String {
+        let ack: FoodEntryAck = try await send("api/food-entries", method: "POST", body: foodEntryBody(input))
+        return ack.id
     }
 
     private struct MessageResponse: Decodable { let message: String? }

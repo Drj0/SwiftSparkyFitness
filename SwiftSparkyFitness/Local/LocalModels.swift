@@ -43,6 +43,8 @@ enum LocalDay {
 @Model
 final class LocalFood {
     var id: String = UUID().uuidString
+    /// Stamped by `LocalStore.save()`; see SyncTracked.
+    var updatedAt: Date = Date.distantPast
     var name: String = ""
     var brand: String?
     var servingSize: Double = 100
@@ -94,6 +96,8 @@ final class LocalFood {
 @Model
 final class LocalFoodEntry {
     var id: String = UUID().uuidString
+    /// Stamped by `LocalStore.save()`; see SyncTracked.
+    var updatedAt: Date = Date.distantPast
     var dayKey: String = ""
     var entryDate: Date = Date()
     var foodId: String = ""
@@ -149,6 +153,8 @@ final class LocalFoodEntry {
 @Model
 final class LocalExercise {
     var id: String = UUID().uuidString
+    /// Stamped by `LocalStore.save()`; see SyncTracked.
+    var updatedAt: Date = Date.distantPast
     var name: String = ""
     var category: String?
     /// Additive (Module 12): the real taxonomy the server keys logging UI
@@ -169,6 +175,8 @@ final class LocalExercise {
 @Model
 final class LocalExerciseEntry {
     var id: String = UUID().uuidString
+    /// Stamped by `LocalStore.save()`; see SyncTracked.
+    var updatedAt: Date = Date.distantPast
     var dayKey: String = ""
     var entryDate: Date = Date()
     var exerciseId: String = ""
@@ -224,6 +232,8 @@ final class LocalExerciseEntry {
 @Model
 final class LocalWaterEntry {
     var id: String = UUID().uuidString
+    /// Stamped by `LocalStore.save()`; see SyncTracked.
+    var updatedAt: Date = Date.distantPast
     var dayKey: String = ""
     var waterMl: Double = 0
     /// "manual" for a tap, or a provider name. Only manual rows are undoable,
@@ -275,6 +285,8 @@ final class LocalWaterContainer {
 @Model
 final class LocalCheckIn {
     var id: String = UUID().uuidString
+    /// Stamped by `LocalStore.save()`; see SyncTracked.
+    var updatedAt: Date = Date.distantPast
     var dayKey: String = ""
     var weight: Double?
     var neck: Double?
@@ -301,6 +313,8 @@ final class LocalCheckIn {
 @Model
 final class LocalGoalRow {
     var dayKey: String = ""
+    /// Stamped by `LocalStore.save()`; see SyncTracked.
+    var updatedAt: Date = Date.distantPast
     /// The whole goal bag as JSON, so columns this app doesn't model survive
     /// exactly as `NutritionGoals` already preserves them over the wire.
     var rawJSON: Data = Data()
@@ -314,6 +328,8 @@ final class LocalGoalRow {
 @Model
 final class LocalPreferences {
     var id: String = "preferences"
+    /// Stamped by `LocalStore.save()`; see SyncTracked.
+    var updatedAt: Date = Date.distantPast
     var defaultWeightUnit: String = "kg"
     var defaultMeasurementUnit: String = "cm"
     var waterDisplayUnit: String = "ml"
@@ -330,6 +346,8 @@ final class LocalPreferences {
 @Model
 final class LocalMealType {
     var id: String = UUID().uuidString
+    /// Stamped by `LocalStore.save()`; see SyncTracked.
+    var updatedAt: Date = Date.distantPast
     var name: String = ""
     var sortOrder: Int = 0
     var isVisible: Bool = true

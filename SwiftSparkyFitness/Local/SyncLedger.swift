@@ -1,0 +1,219 @@
+//
+//  SyncLedger.swift
+//  SwiftSparkyFitness
+//
+//  The bookkeeping that lets a diary move between the device store and a
+//  server, in either direction and any number of times, without copying a
+//  row twice or resurrecting one that was deleted. See
+//  docs/SYNC_SWITCHING_PLAN.md.
+//
+//  Three record types, all synced through CloudKit with the diary itself so
+//  every device agrees on them:
+//
+//  - `LocalSyncLink` pairs a local row with the server row it was copied
+//    to or from, per server account. A linked row is updated on the next
+//    switch, never created again.
+//  - `LocalTombstone` remembers that a *linked* row was deleted here, so the
+//    next switch can delete its server copy instead of leaving it behind.
+//    Unlinked rows need no tombstone: the server never had them.
+//  - `LocalHandoff` records each switch of the diary's home. The latest one
+//    bounds "what changed since we last moved", and its `toMode` is the
+//    home every device should be using.
+//
+//  Same CloudKit rules as LocalModels: no `.unique`, no relationships, every
+//  property defaulted.
+//
+
+import Foundation
+import SwiftData
+
+/// A local row that can be linked to a server row, and whose edits and
+/// deletes the switching flows need to see. `LocalStore.save()` stamps
+/// `updatedAt` and writes tombstones for every conforming model, so no write
+/// site has to remember to.
+protocol SyncTracked: PersistentModel {
+    /// Stable per type, and never renamed: links and tombstones store it.
+    static var syncKind: String { get }
+    /// What identifies the row across devices. The row's own id, except
+    /// goals, which are keyed by the day they take effect.
+    var syncKey: String { get }
+    /// `.distantPast` on rows written before tracking existed, which is the
+    /// honest "unknown": they are unlinked, so a switch copies them anyway.
+    var updatedAt: Date { get set }
+}
+
+extension LocalFood: SyncTracked {
+    static var syncKind: String { "food" }
+    var syncKey: String { id }
+}
+
+extension LocalFoodEntry: SyncTracked {
+    static var syncKind: String { "foodEntry" }
+    var syncKey: String { id }
+}
+
+extension LocalExercise: SyncTracked {
+    static var syncKind: String { "exercise" }
+    var syncKey: String { id }
+}
+
+extension LocalExerciseEntry: SyncTracked {
+    static var syncKind: String { "exerciseEntry" }
+    var syncKey: String { id }
+}
+
+extension LocalWaterEntry: SyncTracked {
+    static var syncKind: String { "waterEntry" }
+    var syncKey: String { id }
+}
+
+extension LocalCheckIn: SyncTracked {
+    static var syncKind: String { "checkIn" }
+    var syncKey: String { id }
+}
+
+extension LocalGoalRow: SyncTracked {
+    static var syncKind: String { "goal" }
+    var syncKey: String { dayKey }
+}
+
+extension LocalPreferences: SyncTracked {
+    static var syncKind: String { "preferences" }
+    var syncKey: String { id }
+}
+
+extension LocalMealType: SyncTracked {
+    static var syncKind: String { "mealType" }
+    var syncKey: String { id }
+}
+
+/// One local row paired with one server row, for one server account.
+@Model
+final class LocalSyncLink {
+    var kind: String = ""
+    var localKey: String = ""
+    var serverId: String = ""
+    /// `SyncAccount.key` — a different server or account has no links, so it
+    /// is treated as a fresh destination rather than matched by accident.
+    var serverAccount: String = ""
+    var linkedAt: Date = Date()
+
+    init(kind: String, localKey: String, serverId: String, serverAccount: String, linkedAt: Date = Date()) {
+        self.kind = kind
+        self.localKey = localKey
+        self.serverId = serverId
+        self.serverAccount = serverAccount
+        self.linkedAt = linkedAt
+    }
+}
+
+/// A linked row deleted on this side, waiting for the next switch to delete
+/// its server copy. Removed once that has happened.
+@Model
+final class LocalTombstone {
+    var kind: String = ""
+    var localKey: String = ""
+    var deletedAt: Date = Date()
+
+    init(kind: String, localKey: String, deletedAt: Date = Date()) {
+        self.kind = kind
+        self.localKey = localKey
+        self.deletedAt = deletedAt
+    }
+}
+
+/// One move of the diary's home.
+@Model
+final class LocalHandoff {
+    var id: String = UUID().uuidString
+    var date: Date = Date()
+    /// `AppMode` raw values.
+    var fromMode: String = ""
+    var toMode: String = ""
+    /// The server account on the server side of the move, when known.
+    var serverAccount: String?
+    /// Set when the move had to leave data behind — a dead server's copy was
+    /// only current up to this moment, so anything newer is still there.
+    var gapUntil: Date?
+
+    init(fromMode: String, toMode: String, serverAccount: String? = nil, gapUntil: Date? = nil, date: Date = Date()) {
+        self.fromMode = fromMode
+        self.toMode = toMode
+        self.serverAccount = serverAccount
+        self.gapUntil = gapUntil
+        self.date = date
+    }
+}
+
+/// Identifies a server account for links. The session carries no user id,
+/// so the account is the normalised server address plus the sign-in email;
+/// both are stable for an account and differ between accounts.
+enum SyncAccount {
+    static func key(serverURL: String, email: String) -> String {
+        var address = serverURL.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        while address.hasSuffix("/") { address.removeLast() }
+        let user = email.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return "\(address)|\(user)"
+    }
+}
+
+// MARK: - Store access
+
+extension LocalStore {
+    func link<T: SyncTracked>(for row: T, account: String) -> LocalSyncLink? {
+        link(kind: T.syncKind, localKey: row.syncKey, account: account)
+    }
+
+    /// Newest first: two devices linking one row before either has seen the
+    /// other's link leaves two (CloudKit can't enforce uniqueness), and the
+    /// latest is the one that reflects the server as it now is.
+    func link(kind: String, localKey: String, account: String) -> LocalSyncLink? {
+        fetch(LocalSyncLink.self, where: #Predicate {
+            $0.kind == kind && $0.localKey == localKey && $0.serverAccount == account
+        }, sortBy: [SortDescriptor(\.linkedAt, order: .reverse)]).first
+    }
+
+    /// Links a row, replacing any earlier link for the same row and account —
+    /// a row has exactly one server copy per account.
+    @discardableResult
+    func setLink<T: SyncTracked>(_ row: T, serverId: String, account: String) -> LocalSyncLink {
+        if let existing = link(for: row, account: account) {
+            existing.serverId = serverId
+            existing.linkedAt = Date()
+            save()
+            return existing
+        }
+        let created = LocalSyncLink(kind: T.syncKind, localKey: row.syncKey, serverId: serverId, serverAccount: account)
+        insert(created)
+        return created
+    }
+
+    func links(kind: String, account: String) -> [LocalSyncLink] {
+        fetch(LocalSyncLink.self, where: #Predicate { $0.kind == kind && $0.serverAccount == account })
+    }
+
+    func tombstones(kind: String) -> [LocalTombstone] {
+        fetch(LocalTombstone.self, where: #Predicate { $0.kind == kind }, sortBy: [SortDescriptor(\.deletedAt)])
+    }
+
+    @discardableResult
+    func recordHandoff(from: AppMode, to: AppMode, serverAccount: String?, gapUntil: Date? = nil) -> LocalHandoff {
+        let handoff = LocalHandoff(fromMode: from.rawValue, toMode: to.rawValue, serverAccount: serverAccount, gapUntil: gapUntil)
+        insert(handoff)
+        return handoff
+    }
+
+    /// Newest by date. Two devices switching at once both write one; the
+    /// later wins, which is what the plan specifies.
+    var latestHandoff: LocalHandoff? {
+        var descriptor = FetchDescriptor<LocalHandoff>(sortBy: [SortDescriptor(\.date, order: .reverse)])
+        descriptor.fetchLimit = 1
+        return (try? context.fetch(descriptor))?.first
+    }
+
+    /// Where the diary lives according to the synced log, which can differ
+    /// from this device's own `AppMode` when another device moved it.
+    var syncedHome: AppMode? {
+        latestHandoff.flatMap { AppMode(rawValue: $0.toMode) }
+    }
+}
