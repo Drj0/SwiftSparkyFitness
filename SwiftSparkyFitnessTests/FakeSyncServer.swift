@@ -52,9 +52,16 @@ final class FakeSyncServer: SyncServer {
     static let unauthorized = APIError.server(message: "Unauthorized", code: nil, status: 401)
     static let badGateway = APIError.server(message: "Bad gateway", code: nil, status: 502)
 
+    /// Out of range: every call fails as unreachable.
+    var isOffline = false
+    /// A slow server: every call waits this long first.
+    var delay: Duration?
+
     private func call<T>(_ name: String, _ body: () async throws -> T) async throws -> T {
         calls.append(name)
         beforeCall?(name)
+        if let delay { try? await Task.sleep(for: delay) }
+        if isOffline { throw Self.offline }
         if let error = failNext.removeValue(forKey: name) { throw error }
         if let limit = goOfflineAfterMutations, !Self.reads.contains(name), mutatingCalls.count > limit {
             throw Self.offline

@@ -86,6 +86,7 @@ struct SettingsView: View {
     @State private var isPresentingHandoff = false
 
     @ObservedObject private var sync = CloudSyncStatus.shared
+    @ObservedObject private var serverSync = ServerSync.shared
     @Environment(\.openURL) private var openURL
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
@@ -230,9 +231,9 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             if localHasEntries {
-                Text("Copy your foods, exercise, water, weight, measurements and goals from the server, or start with an empty diary. This iPhone already has a diary of its own: copying adds the server's to it without duplicating anything already here; starting fresh replaces it. The server keeps its copy either way.")
+                Text("Copy your foods, exercise, water, weight, measurements and goals from the server, or start with an empty diary. This iPhone already has a diary of its own: copying adds the server's to it without duplicating anything already here; starting fresh replaces it. The server keeps its copy either way.\(offlineCopyNote)")
             } else {
-                Text("Copy your foods, exercise, water, weight, measurements and goals from the server, or start with an empty diary. The server keeps its copy either way.")
+                Text("Copy your foods, exercise, water, weight, measurements and goals from the server, or start with an empty diary. The server keeps its copy either way.\(offlineCopyNote)")
             }
         }
         .sheet(isPresented: Binding(
@@ -244,12 +245,20 @@ struct SettingsView: View {
                 .interactiveDismissDisabled(importError == nil)
         }
         .alert("Sign out?", isPresented: $isConfirmingSignOut) {
+            if serverSync.pendingCount > 0 {
+                Button("Export first", action: exportDiary)
+            }
             Button("Cancel", role: .cancel) {}
             Button("Sign out", role: .destructive, action: onSignOut)
         } message: {
             // Nothing is lost — it all lives on the server — and saying so is
             // the point: without it this reads as destructive as the wipe.
-            Text("Your diary stays on the server. You'll need your email and password to sign back in.")
+            // Unless it doesn't all live there yet: then that comes first.
+            if serverSync.pendingCount > 0 {
+                Text("\(serverSync.pendingCount) change\(serverSync.pendingCount == 1 ? "" : "s") on this iPhone haven't reached the server yet. Signing out removes this iPhone's copy, and them with it.")
+            } else {
+                Text("Your diary stays on the server. You'll need your email and password to sign back in.")
+            }
         }
     }
 
@@ -276,6 +285,21 @@ struct SettingsView: View {
             }
             .buttonStyle(.plain)
 
+            Button { Task { await serverSync.syncNow() } } label: {
+                SettingsRow(
+                    icon: "arrow.triangle.2.circlepath",
+                    tint: serverSync.isReachable ? AppColor.water : AppColor.secondaryText,
+                    title: "Sync",
+                    value: serverSyncSummary,
+                    valueColor: serverSyncIsProblem ? AppColor.destructive : AppColor.secondaryText
+                )
+            }
+            .buttonStyle(.plain)
+            .disabled(serverSync.status == .syncing)
+            .accessibilityHint("Syncs now")
+
+            actionRow("Export diary", icon: "square.and.arrow.up", action: exportDiary)
+
             // Until the offer made after sign-in is answered.
             if isHandoffPending {
                 actionRow("Send this iPhone's diary", icon: "square.and.arrow.up.on.square") {
@@ -297,7 +321,7 @@ struct SettingsView: View {
                         color: AppColor.destructive
                     )
                 } else {
-                    footnote("Your diary is stored on this server and reaches every device you sign in on.")
+                    footnote("Your diary is stored on this server and reaches every device you sign in on. This iPhone keeps a copy, so it works away from your server and catches up when it's back.")
                 }
             }
         }
@@ -740,27 +764,76 @@ struct SettingsView: View {
     }
 
     private func switchMode(to mode: AppMode) {
+        // Leaving server mode stops its syncing; the copy stays on this
+        // device, so coming back resumes from it.
+        if mode == .local { ServerSync.shared.deactivate(removingCopy: false) }
         AppMode.current = mode
         Haptics.success()
     }
 
-    /// Reads the whole account, then merges it into this device's diary and
-    /// switches. A merge, not a replace: rows this device already has from an
-    /// earlier move are matched by their links rather than copied again, and
-    /// nothing only this device has is touched. Nothing local changes until
-    /// every read has succeeded, so Cancel or a dropped connection leaves
-    /// both sides as they were.
+    /// The sync row's value: what the user needs to know about their
+    /// changes, not what the sync engine is doing.
+    private var serverSyncSummary: String {
+        let waiting = serverSync.pendingCount
+        if !serverSync.isReachable && serverSync.status != .syncing {
+            return waiting > 0 ? "Offline · \(waiting) waiting" : "Offline"
+        }
+        switch serverSync.status {
+        case .syncing:
+            return "Syncing…"
+        case .offline:
+            return waiting > 0 ? "Offline · \(waiting) waiting" : "Offline"
+        case .failed:
+            return waiting > 0 ? "\(waiting) not synced" : "Sync problem"
+        case .idle:
+            if waiting > 0 { return "\(waiting) waiting" }
+            guard let last = serverSync.lastSyncedAt else { return "Up to date" }
+            return "Synced \(last.formatted(.relative(presentation: .named)))"
+        }
+    }
+
+    /// Out of range, the copy comes from what this iPhone already has.
+    private var offlineCopyNote: String {
+        guard !serverSync.isReachable else { return "" }
+        let when = serverSync.lastSyncedAt.map { " (last synced \($0.formatted(.relative(presentation: .named))))" } ?? ""
+        return "\n\nYour server can't be reached, so this copies what this iPhone has\(when) plus anything logged here since."
+    }
+
+    private var serverSyncIsProblem: Bool {
+        if case .failed = serverSync.status { return true }
+        return false
+    }
+
+    /// Moves server mode's copy of the diary into this device's own diary and
+    /// switches. The copy is brought up to date first when the server
+    /// answers — what's waiting is sent, and the whole history is fetched if
+    /// this iPhone never had it — but the move itself needs no server, so it
+    /// works with the server out of range or gone. A merge: nothing only this
+    /// device's diary has is touched, and rows it already has from an earlier
+    /// move are matched rather than copied again.
     private func startImport() {
         importError = nil
         importProgress = ServerPull.Progress(daysRead: 0, totalDays: 0)
         let start = user.createdAt ?? Calendar.current.date(byAdding: .year, value: -1, to: Date()) ?? Date()
         let account = SyncAccount.key(serverURL: ServerConfig.urlString, email: user.email)
+        let serverSync = ServerSync.shared
         importTask = Task {
             do {
-                _ = try await ServerPull(store: .shared, server: APIClient.shared, account: account).run(from: start) { progress in
-                    if importProgress != nil { importProgress = progress }
-                }
-                LocalStore.shared.recordHandoff(from: .server, to: .local, serverAccount: account)
+                if serverSync.account != account { serverSync.activate(user: user) }
+                // Cancel works: the wait ends, the sync finishes in the
+                // background, and nothing is moved.
+                await serverSync.syncNow()
+                try Task.checkCancellation()
+                try StoreTransfer.copy(from: ServerCache.store(for: account), to: .shared, account: account)
+                // A copy that couldn't be brought up to date is current only
+                // to its last sync; the handoff says so.
+                let upToDate = serverSync.status == .idle && InitialPull.isDone(account: account)
+                LocalStore.shared.recordHandoff(from: .server, to: .local, serverAccount: account,
+                                                gapUntil: upToDate ? nil : (serverSync.lastSyncedAt ?? .distantPast))
+                // Everything the copy held — rows, links, unsent deletes — is
+                // now in this diary. Keeping the copy too would let its unsent
+                // changes reach the server a second time on a later return.
+                serverSync.deactivate(removingCopy: true)
                 // Local mode floors day navigation on its first-use date; the
                 // copied history has to be reachable.
                 let firstUse = UserDefaults.standard.object(forKey: LocalAPIClient.firstUseKey) as? Date
@@ -825,7 +898,9 @@ struct SettingsView: View {
     /// build is reported here rather than as a sheet that saves nothing.
     private func exportDiary() {
         do {
-            let data = try DiaryArchive(from: LocalStore.shared).encoded()
+            // Server mode exports this device's copy of the server diary —
+            // the copy that matters most when the server is the thing gone.
+            let data = try DiaryArchive(from: isLocal ? LocalStore.shared : ServerSync.shared.store).encoded()
             exportDocument = DiaryArchiveDocument(data: data)
             isExportingArchive = true
         } catch {

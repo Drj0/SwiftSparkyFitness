@@ -120,6 +120,9 @@ final class ServerHandoffModel: ObservableObject {
         // Rows the server refused stay unlinked; keeping the offer in
         // Settings is how they get sent once whatever blocked them is fixed.
         PendingServerHandoff.isPending = !report.failures.isEmpty
+        // The server now has history server mode's copy on this device may
+        // have already read past; fetch it all again.
+        if report.sent > 0 || report.deleted > 0 { ServerSync.shared.requestFullPull() }
         phase = .finished(report)
     }
 }

@@ -302,8 +302,15 @@ final class StubURLProtocol: URLProtocol {
     override class func canInit(with request: URLRequest) -> Bool { true }
     override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
 
+    /// Set to answer every request as if the server were out of range.
+    nonisolated(unsafe) static var failure: URLError?
+
     override func startLoading() {
         Self.lastRequest = request
+        if let failure = Self.failure {
+            client?.urlProtocol(self, didFailWithError: failure)
+            return
+        }
         // URLSession hands a protocol the body as a stream, not httpBody.
         if let stream = request.httpBodyStream {
             stream.open()

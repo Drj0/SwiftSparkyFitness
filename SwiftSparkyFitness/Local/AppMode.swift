@@ -46,7 +46,9 @@ enum AppMode: String {
 /// server client" throughout the codebase, and having it sometimes return a
 /// local store would make every call site lie about what it talks to.
 enum AppServices {
+    /// Server mode reads and writes this device's copy of the diary and
+    /// syncs it (`ServerModeClient`), so it works out of range of the server.
     static var client: APIClientProtocol {
-        AppMode.isLocal ? LocalAPIClient.shared : APIClient.shared
+        AppMode.isLocal ? LocalAPIClient.shared : ServerModeClient.shared
     }
 }
