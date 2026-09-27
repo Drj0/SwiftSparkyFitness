@@ -16,21 +16,38 @@ struct TodayView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var dateLabel: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE, MMM d"
-        return formatter.string(from: Date())
+        viewModel.today.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
+    }
+
+    /// "Today", or the weekday name while a past day from the strip is open.
+    private var title: String {
+        viewModel.isViewingToday ? "Today" : viewModel.today.formatted(.dateTime.weekday(.wide))
+    }
+
+    /// Same floor Diary uses: no days before the account existed.
+    private var minDate: Date {
+        let today = Calendar.current.startOfDay(for: Date())
+        return min(Calendar.current.startOfDay(for: user.createdAt ?? Date()), today)
     }
 
     var body: some View {
         ZStack(alignment: .bottomTrailing) {
             ScrollView {
-                VStack(alignment: .leading, spacing: 14) {
-                    Text("Today")
-                        .appDisplay(26)
-                        .foregroundStyle(AppColor.ink)
-                    Text(dateLabel)
-                        .appBody(13)
-                        .foregroundStyle(AppColor.secondaryText)
+                VStack(alignment: .leading, spacing: 16) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(title)
+                            .appDisplay(32)
+                            .foregroundStyle(AppColor.ink)
+                            .accessibilityAddTraits(.isHeader)
+                        Text(dateLabel)
+                            .appBody(14)
+                            .foregroundStyle(AppColor.secondaryText)
+                    }
+
+                    WeekStrip(selected: viewModel.today, minDate: minDate) { day in
+                        Task { await viewModel.select(day: day) }
+                    }
+                    .padding(.bottom, 2)
 
                     if viewModel.isLoading && viewModel.summary == nil {
                         ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
@@ -90,7 +107,8 @@ struct TodayView: View {
             viewModel.pendingMealType = nil
             Task { await viewModel.load() }
         }) {
-            FoodSearchView(mealTypes: viewModel.loggableMealTypes, initialMealType: viewModel.pendingMealType)
+            FoodSearchView(mealTypes: viewModel.loggableMealTypes, initialMealType: viewModel.pendingMealType,
+                           entryDate: viewModel.entryDate)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -98,7 +116,7 @@ struct TodayView: View {
             // Module 12: search-and-materialize now stands between "Log
             // Exercise" and the entry editor, since a logged entry has to
             // reference an exercise already in the user's own library.
-            ExerciseSearchView()
+            ExerciseSearchView(entryDate: viewModel.entryDate)
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
@@ -131,7 +149,7 @@ struct TodayView: View {
         let maxDate = Calendar.current.startOfDay(for: Date())
         let minDate = min(Calendar.current.startOfDay(for: user.createdAt ?? Date()), maxDate)
         return LogBodyView(
-            kind: kind, date: maxDate,
+            kind: kind, date: min(Calendar.current.startOfDay(for: viewModel.entryDate), maxDate),
             existing: viewModel.bodyMeasurements,
             preferences: viewModel.preferences,
             minDate: minDate, maxDate: maxDate
@@ -144,7 +162,8 @@ struct TodayView: View {
 
     @ViewBuilder
     private func populated(_ summary: DailySummary) -> some View {
-        DailySummaryCard(summary: summary, macroTotals: viewModel.macroTotals, waterMl: viewModel.water.totalMl)
+        CalorieRingCard(summary: summary)
+        MacroGoalsCard(totals: viewModel.macroTotals, goals: summary.goals)
 
         ForEach(viewModel.entriesByMeal, id: \.mealType.id) { group in
             mealSection(group.mealType, group.entries)
@@ -163,32 +182,7 @@ struct TodayView: View {
 
     @ViewBuilder
     private func firstRun(_ summary: DailySummary) -> some View {
-        RingCard {
-            RingChart(layers: [
-                RingLayer(progress: 0, color: AppColor.accent),
-                RingLayer(progress: 0, color: AppColor.energy),
-                RingLayer(progress: 0, color: AppColor.water),
-            ], diameter: 190) {
-                VStack(spacing: 2) {
-                    Text("\(Int(summary.calorieBalance.goal))")
-                        .appDisplay(28)
-                        .foregroundStyle(AppColor.ink)
-                        .lineLimit(1)
-                        .minimumScaleFactor(0.6)
-                    Text("kcal goal")
-                        .appBody(12)
-                        .foregroundStyle(AppColor.secondaryText)
-                }
-                .frame(maxWidth: 120)
-                // Same reason as DailySummaryCard's centre: the ring is fixed
-                // geometry, so its label has to stop growing before it spills
-                // over the arcs.
-                .dynamicTypeSize(...DynamicTypeSize.xLarge)
-            }
-            Text("Nothing logged yet today")
-                .appBody(13)
-                .foregroundStyle(AppColor.secondaryText)
-        }
+        CalorieRingCard(summary: summary)
 
         VStack(alignment: .leading, spacing: 4) {
             Text("\u{201C}Let's get your first bite on the board.\u{201D}")
@@ -210,10 +204,11 @@ struct TodayView: View {
 
     private func mealSection(_ mealType: MealType, _ entries: [FoodEntrySummary]) -> some View {
         let total = entries.reduce(0) { $0 + $1.calories }
-        return VStack(alignment: .leading, spacing: 6) {
+        return VStack(alignment: .leading, spacing: 10) {
             HStack {
                 Text("\(mealType.name.capitalized) · \(Int(total)) kcal")
-                    .appBody(12, weight: .semibold)
+                    .appBody(13, weight: .semibold)
+                    .tracking(0.8)
                     .foregroundStyle(AppColor.secondaryText)
                     .textCase(.uppercase)
                     // The total changes under the user the moment a food
@@ -221,57 +216,81 @@ struct TodayView: View {
                     // number moved instead of silently swapping it.
                     .contentTransition(.numericText())
                     .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: total)
+                    .accessibilityAddTraits(.isHeader)
                 Spacer()
                 Button {
                     viewModel.pendingMealType = mealType
                     viewModel.isPresentingFoodSearch = true
                 } label: {
                     Image(systemName: "plus")
-                        .font(.system(size: 12, weight: .semibold))
+                        .font(.system(size: 13, weight: .semibold))
                         .foregroundStyle(AppColor.accent)
-                        .frame(width: 20, height: 20)
+                        .frame(width: 28, height: 28)
                         .background(AppColor.accentSoft, in: Circle())
-                        // 20pt glyph, 44pt target. The negative padding hands
-                        // the 24pt of growth back to the layout so the four
-                        // meal headers don't each gain a row's worth of
-                        // height, and the "+" stays flush with the card edge.
+                        // 28pt glyph, 44pt target. The negative padding hands
+                        // the growth back to the layout so the meal headers
+                        // don't each gain height, and the "+" stays flush
+                        // with the card edge.
                         .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
-                        .padding(.horizontal, -12)
-                        .padding(.vertical, -12)
+                        .padding(.horizontal, -8)
+                        .padding(.vertical, -8)
                 }
                 .buttonStyle(.pressable)
                 .accessibilityLabel("Add food to \(mealType.name.capitalized)")
             }
             if entries.isEmpty {
                 Text("Not logged yet")
-                    .appBody(13)
+                    .appBody(14)
                     .foregroundStyle(AppColor.placeholder)
-                    .padding(.bottom, 6)
+                    .padding(.horizontal, 16)
+                    .padding(.vertical, 14)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: AppRadius.md)
+                            .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                            .foregroundStyle(AppColor.dashedBorder)
+                    )
             } else {
-                ForEach(entries) { entry in
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(entry.foodName).appBody(15, weight: .semibold).foregroundStyle(AppColor.ink)
-                            Text("\(Int(entry.quantity))\(entry.unit)").appBody(12).foregroundStyle(AppColor.secondaryText)
+                // One grouped card per meal, rows split by inset hairlines —
+                // reads as a single meal rather than a stack of loose foods.
+                VStack(spacing: 0) {
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                        if index > 0 {
+                            Rectangle().fill(AppColor.hairline).frame(height: 1).padding(.leading, 16)
                         }
-                        Spacer()
-                        Text("\(Int(entry.calories))").appBody(14, weight: .semibold).foregroundStyle(AppColor.ink)
+                        foodRow(entry)
                     }
-                    .padding(.horizontal, 14)
-                    .padding(.vertical, 10)
-                    .background(AppColor.surface)
-                    .overlay(RoundedRectangle(cornerRadius: 14).stroke(AppColor.hairline, lineWidth: 1))
-                    .clipShape(RoundedRectangle(cornerRadius: 14))
-                    // Three VoiceOver stops per food — name, portion, and a
-                    // bare number with no unit ("142") that gave no clue it
-                    // was calories. One stop, one sentence.
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("\(entry.foodName), \(Int(entry.quantity))\(entry.unit)")
-                    .accessibilityValue("\(Int(entry.calories)) calories")
                 }
+                .background(AppColor.surface)
+                .overlay(RoundedRectangle(cornerRadius: AppRadius.md).stroke(AppColor.hairline, lineWidth: 1))
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
             }
         }
+        .padding(.top, 6)
+    }
+
+    /// "150g" but "1 serving" — a word unit glued to its number misreads.
+    private func portion(_ entry: FoodEntrySummary) -> String {
+        "\(Int(entry.quantity))\(entry.unit.count > 2 ? " " : "")\(entry.unit)"
+    }
+
+    private func foodRow(_ entry: FoodEntrySummary) -> some View {
+        HStack(spacing: 12) {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.foodName).appBody(16, weight: .semibold).foregroundStyle(AppColor.ink)
+                Text(portion(entry)).appBody(13).foregroundStyle(AppColor.secondaryText)
+            }
+            Spacer(minLength: 8)
+            Text("\(Int(entry.calories)) kcal").appBody(14, weight: .semibold).foregroundStyle(AppColor.secondaryText)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 13)
+        // Three VoiceOver stops per food — name, portion, and a bare
+        // number with no unit. One stop, one sentence.
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("\(entry.foodName), \(portion(entry))")
+        .accessibilityValue("\(Int(entry.calories)) calories")
     }
 
     /// Water, weight and exercise. Water and weight were read-only stubs

@@ -39,7 +39,11 @@ struct FoodSearchView: View {
     /// the keyboard already up rather than costing a tap to get there.
     @FocusState private var isSearchFocused: Bool
 
-    init(mealTypes: [MealType], initialMealType: MealType? = nil) {
+    /// The day a picked food is logged to — Today can be viewing a past day.
+    private let entryDate: Date
+
+    init(mealTypes: [MealType], initialMealType: MealType? = nil, entryDate: Date = Date()) {
+        self.entryDate = entryDate
         _viewModel = StateObject(wrappedValue: FoodSearchViewModel(mealTypes: mealTypes, initialMealType: initialMealType))
     }
 
@@ -71,7 +75,7 @@ struct FoodSearchView: View {
         .task { await viewModel.loadRecents() }
         .sheet(item: $pushedFood) { food in
             if let mealType = viewModel.selectedMealType {
-                FoodDetailView(food: food, mealTypes: viewModel.mealTypes, initialMealType: mealType) {
+                FoodDetailView(food: food, mealTypes: viewModel.mealTypes, initialMealType: mealType, entryDate: entryDate) {
                     dismiss()
                 }
                 .presentationDetents([.medium, .large])

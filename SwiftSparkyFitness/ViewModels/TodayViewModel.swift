@@ -57,7 +57,25 @@ final class TodayViewModel: ObservableObject {
     private let apiClient: APIClientProtocol
     private let health: HealthKitReading
     private var cancellables = Set<AnyCancellable>()
-    private var today = Date()
+    /// The day on screen. Named `today` from before the week strip existed;
+    /// it's only a past day when `selectedDay` says so.
+    private(set) var today = Date()
+    /// A past day picked from the week strip, or nil to follow the real
+    /// today (so a screen left open over midnight still rolls forward).
+    @Published private(set) var selectedDay: Date?
+
+    var isViewingToday: Bool { selectedDay == nil }
+
+    /// The day new entries are logged to. `today` is a load-time snapshot,
+    /// so after a background trip past midnight it can still be yesterday;
+    /// the live case reads the clock instead.
+    var entryDate: Date { selectedDay ?? Date() }
+
+    func select(day: Date) async {
+        let calendar = Calendar.current
+        selectedDay = calendar.isDateInToday(day) ? nil : calendar.startOfDay(for: day)
+        await load()
+    }
 
     init(
         apiClient: APIClientProtocol = AppServices.client,
@@ -157,7 +175,8 @@ final class TodayViewModel: ObservableObject {
     /// permission and a day with no movement are indistinguishable here, and
     /// none of them is something to interrupt the screen for.
     private func syncHealthActiveEnergy() async {
-        guard HealthSync.isEnabled else { return }
+        // Only the live day: browsing a past day shouldn't write to it.
+        guard HealthSync.isEnabled, isViewingToday else { return }
         guard case .kilocalories(let kilocalories)? = try? await health.activeEnergy(on: today) else { return }
         try? await apiClient.syncActiveEnergy(kilocalories: kilocalories, date: today)
     }
@@ -166,8 +185,9 @@ final class TodayViewModel: ObservableObject {
         isLoading = true
         errorMessage = nil
         defer { isLoading = false }
-        today = Date()
-        water.setDate(today)
+        let day = selectedDay ?? Date()
+        today = day
+        water.setDate(day)
         await syncHealthActiveEnergy()
         do {
             async let summaryTask = apiClient.dailySummary(date: today)
@@ -180,16 +200,23 @@ final class TodayViewModel: ObservableObject {
             async let preferencesTask = apiClient.userPreferences()
 
             let loadedSummary = try await summaryTask
+            let loadedMealTypes = try await mealTypesTask
+            let loadedBody = try await bodyTask
+            let loadedPreferences = try await preferencesTask
+            // Tapping through the week strip overlaps loads; a slower one for
+            // a day the user already left must not paint over the newer day.
+            guard day == today else { return }
             summary = loadedSummary
             water.adopt(summary: loadedSummary)
             // Quick-add has to name the primary container explicitly, so the
             // screen needs to know which one that is before the first tap.
             await water.loadPrimaryContainer()
-            mealTypes = try await mealTypesTask
-            bodyMeasurements = try await bodyTask
-            preferences = try await preferencesTask
+            mealTypes = loadedMealTypes
+            bodyMeasurements = loadedBody
+            preferences = loadedPreferences
             await loadLastLoggedWeightIfNeeded()
         } catch {
+            guard day == today else { return }
             errorMessage = error.localizedDescription
             Haptics.error()
         }

@@ -25,8 +25,11 @@ struct ExerciseSearchView: View {
     @State private var materializeError: String?
     @FocusState private var isSearchFocused: Bool
     var onLogged: () -> Void = {}
+    /// The day a picked exercise is logged to — Today can be viewing a past day.
+    private let entryDate: Date
 
-    init(onLogged: @escaping () -> Void = {}) {
+    init(entryDate: Date = Date(), onLogged: @escaping () -> Void = {}) {
+        self.entryDate = entryDate
         _viewModel = StateObject(wrappedValue: ExerciseSearchViewModel())
         self.onLogged = onLogged
     }
@@ -57,7 +60,7 @@ struct ExerciseSearchView: View {
         .scrollDismissesKeyboard(.interactively)
         .task { await viewModel.loadRecents() }
         .sheet(item: $pushedExercise) { exercise in
-            ExerciseEntryEditorView(exercise: exercise) {
+            ExerciseEntryEditorView(exercise: exercise, entryDate: entryDate) {
                 onLogged()
                 dismiss()
             }
