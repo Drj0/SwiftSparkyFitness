@@ -390,7 +390,10 @@ final class APIClient: APIClientProtocol {
 
     func currentSession() async throws -> SessionUser? {
         do {
-            return try await (send("api/auth/get-session") as AuthResponse).user
+            // No session is a 200 with the body `null` (verified live), so the
+            // response is optional: `null` is "signed out", while a body that
+            // isn't JSON at all (a Wi-Fi login page) still fails to decode.
+            return try await (send("api/auth/get-session") as AuthResponse?)?.user
         } catch let error as URLError {
             // Couldn't reach the server at all — the caller needs to know the
             // difference, so this is the one case that propagates.

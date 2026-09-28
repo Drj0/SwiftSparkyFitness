@@ -33,7 +33,11 @@ final class ServerIntegrationTests: XCTestCase {
             throw XCTSkip("No integration server configured")
         }
         server = APIClient()
-        _ = try await server.signIn(email: email, password: password)
+        // Reuse a live session: the server allows only a few sign-ins a
+        // minute, and every test here would otherwise spend one.
+        if try await server.currentSession()?.email.lowercased() != email.lowercased() {
+            _ = try await server.signIn(email: email, password: password)
+        }
         account = SyncAccount.key(serverURL: url, email: email)
         // A day of its own per run, somewhere in 2019.
         let offset = Int(Date().timeIntervalSince1970 / 60) % 360

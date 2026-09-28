@@ -231,6 +231,25 @@ final class SyncLedgerTests: XCTestCase {
 
     // MARK: - Server client
 
+    /// The server answers "no session" with a 200 and the body `null`: that
+    /// is signed out, not unreachable. A Wi-Fi login page answering instead
+    /// is neither, and must not read as a sign-out.
+    func testNoSessionIsSignedOutButALoginPageIsNot() async throws {
+        let client = APIClient(session: StubURLProtocol.session())
+
+        StubURLProtocol.respond(json: "null", status: 200)
+        let signedOut = try await client.currentSession()
+        XCTAssertNil(signedOut)
+
+        StubURLProtocol.respond(json: "<html><body>Sign in to Hotel Wi-Fi</body></html>", status: 200)
+        do {
+            _ = try await client.currentSession()
+            XCTFail("a page that isn't a session response must not look like one")
+        } catch {
+            XCTAssertTrue(error is DecodingError)
+        }
+    }
+
     func testCreateFoodEntryReturnsTheServerIdAndSendsSourceOnlyWhenSet() async throws {
         let client = APIClient(session: StubURLProtocol.session())
         let food = Food(id: "f", name: "Oats", brand: nil,
