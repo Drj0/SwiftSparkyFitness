@@ -54,6 +54,8 @@ final class FoodDetailViewModel: ObservableObject {
     var scaledCarbs: Double { (food.defaultVariant?.carbs ?? 0) * scale }
     var scaledFat: Double { (food.defaultVariant?.fat ?? 0) * scale }
     var servingUnit: String { food.defaultVariant?.servingUnit ?? "g" }
+    var stepAmount: Double { FoodVariant.stepAmount(for: servingUnit) }
+    var quantityText: String { FoodVariant.amountText(quantity, unit: servingUnit) }
 
     func step(by amount: Double) {
         quantity = max(0, quantity + amount)

@@ -30,6 +30,8 @@ enum FoodSource: String, Hashable {
     case local
     case openFoodFacts
     case usda
+    /// Indian Nutrient Databank, bundled with the app — see IndianFoodDB.
+    case indb
 
     /// Shown in the result row. Local foods aren't labelled — the absence of
     /// a source *is* the signal that it's the user's own.
@@ -38,7 +40,22 @@ enum FoodSource: String, Hashable {
         case .local: return nil
         case .openFoodFacts: return "Open Food Facts"
         case .usda: return "USDA"
+        case .indb: return "INDB"
         }
+    }
+}
+
+extension FoodVariant {
+    /// "100g", "250ml" — but "1 chapati", "2 bowl": a household unit needs
+    /// the space a metric symbol doesn't.
+    static func amountText(_ amount: Double, unit: String) -> String {
+        let metric: Set<String> = ["g", "kg", "mg", "ml", "l", "oz", "lb"]
+        return metric.contains(unit.lowercased()) ? "\(Int(amount))\(unit)" : "\(Int(amount)) \(unit)"
+    }
+
+    /// Weighed units step by 10; a chapati or a bowl steps by one.
+    static func stepAmount(for unit: String) -> Double {
+        ["g", "ml"].contains(unit.lowercased()) ? 10 : 1
     }
 }
 

@@ -331,7 +331,7 @@ struct FoodSearchView: View {
         var parts: [String] = []
         if let brand = food.brand { parts.append(brand) }
         if let size = variant?.servingSize, let unit = variant?.servingUnit {
-            parts.append("\(Int(size))\(unit)")
+            parts.append(FoodVariant.amountText(size, unit: unit))
         }
         if let calories = variant?.calories {
             parts.append("\(Int(calories)) kcal")

@@ -229,8 +229,10 @@ final class ServerModeClient: APIClientProtocol {
     func foodSuggestions() async throws -> FoodSuggestions {
         try await remoteFirst({ try await remote.foodSuggestions() }, fallback: { try await local.foodSuggestions() })
     }
+    /// Straight to Open Food Facts: the server isn't in this path, so a
+    /// remote-then-local fallback would only send the same request twice.
     func searchExternalFoods(query: String) async throws -> [Food] {
-        try await remoteFirst({ try await remote.searchExternalFoods(query: query) }, fallback: { try await local.searchExternalFoods(query: query) })
+        try await OpenFoodFactsSearch.search(query)
     }
     func searchUsdaFoods(query: String) async throws -> [Food] {
         try await remoteFirst({ try await remote.searchUsdaFoods(query: query) }, fallback: { [] })

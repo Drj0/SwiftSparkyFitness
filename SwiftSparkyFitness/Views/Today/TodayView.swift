@@ -327,7 +327,7 @@ struct TodayView: View {
 
     /// "150g" but "1 serving" — a word unit glued to its number misreads.
     private func portion(_ entry: FoodEntrySummary) -> String {
-        "\(Int(entry.quantity))\(entry.unit.count > 2 ? " " : "")\(entry.unit)"
+        FoodVariant.amountText(entry.quantity, unit: entry.unit)
     }
 
     private func foodRow(_ entry: FoodEntrySummary) -> some View {

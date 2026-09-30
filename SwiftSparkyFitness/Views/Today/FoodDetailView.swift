@@ -119,8 +119,8 @@ struct FoodDetailView: View {
 
     private var quantityStepper: some View {
         HStack {
-            stepButton(label: "–", amount: -10, color: AppColor.placeholder)
-                .accessibilityLabel("Decrease by 10 \(viewModel.servingUnit)")
+            stepButton(label: "–", amount: -viewModel.stepAmount, color: AppColor.placeholder)
+                .accessibilityLabel("Decrease by \(FoodVariant.amountText(viewModel.stepAmount, unit: viewModel.servingUnit))")
             Spacer()
             VStack {
                 Text("\(Int(viewModel.quantity))")
@@ -130,8 +130,8 @@ struct FoodDetailView: View {
                 Text(viewModel.servingUnit).appBody(12).foregroundStyle(AppColor.secondaryText)
             }
             Spacer()
-            stepButton(label: "+", amount: 10, color: AppColor.accent)
-                .accessibilityLabel("Increase by 10 \(viewModel.servingUnit)")
+            stepButton(label: "+", amount: viewModel.stepAmount, color: AppColor.accent)
+                .accessibilityLabel("Increase by \(FoodVariant.amountText(viewModel.stepAmount, unit: viewModel.servingUnit))")
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 6)
@@ -191,7 +191,7 @@ struct FoodDetailView: View {
                     .appDisplay(30)
                     .foregroundStyle(AppColor.ink)
                     .contentTransition(.numericText())
-                Text("kcal for \(Int(viewModel.quantity))\(viewModel.servingUnit)")
+                Text("kcal for \(viewModel.quantityText)")
                     .appBody(13)
                     .foregroundStyle(AppColor.secondaryText)
                     .contentTransition(.numericText())

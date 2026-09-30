@@ -6,10 +6,12 @@
 //  and "network error" states the design specifies as distinct outcomes
 //  (not just "results.isEmpty" collapsing both into one look).
 //
-//  Merges two sources: the local `foods` table (empty on a fresh install —
-//  it only ever holds what a user has logged before) and OpenFoodFacts
-//  (free, keyless, confirmed live) for real matches on first search. Local
-//  results lead since they're the user's own verified entries.
+//  Four sources, queried together: the user's own foods, INDB (bundled
+//  Indian dishes, answers in milliseconds), USDA (generic foods, server
+//  mode) and Open Food Facts (packaged products sold in India). The list is
+//  re-ranked by FoodSearchRanker as each source answers, so INDB and local
+//  matches show at once and slower network results slot in — the list stays
+//  dimmed until the last source is in.
 //
 //  The idle state (before anything is typed) shows the design's "RECENT"
 //  section. That needs its own request: `GET /api/foods` has two mutually
@@ -56,6 +58,12 @@ final class FoodSearchViewModel: ObservableObject {
 
     let mealTypes: [MealType]
     private let apiClient: APIClientProtocol
+    private let indianFoods: IndianFoodDB
+
+    /// Network answers for this sheet, by source and query: backspacing to
+    /// a query already asked shows it instantly, and doesn't spend Open Food
+    /// Facts' ~10 searches a minute twice. Failures aren't cached.
+    private var networkCache: [String: [Food]] = [:]
 
     /// A search running over a list that's already on screen is a
     /// refinement: the view dims that list rather than replacing it with a
@@ -69,10 +77,14 @@ final class FoodSearchViewModel: ObservableObject {
     /// section's "+"). An explicit choice always beats the time-of-day guess,
     /// which stays as the fallback for entry points that don't name a meal
     /// (the FAB, "Log your first food").
-    init(mealTypes: [MealType], initialMealType: MealType? = nil, apiClient: APIClientProtocol = AppServices.client) {
+    init(
+        mealTypes: [MealType], initialMealType: MealType? = nil,
+        apiClient: APIClientProtocol = AppServices.client, indianFoods: IndianFoodDB = .shared
+    ) {
         self.mealTypes = mealTypes.sorted { $0.sortOrder < $1.sortOrder }
         self.selectedMealType = initialMealType ?? Self.defaultMealType(from: mealTypes)
         self.apiClient = apiClient
+        self.indianFoods = indianFoods
     }
 
     /// Picks a sensible starting meal chip from the time of day, matching
@@ -90,6 +102,9 @@ final class FoodSearchViewModel: ObservableObject {
     }
 
     func loadRecents() async {
+        // The sheet just opened: decode INDB now, off the main actor, so the
+        // first keystroke doesn't pay for it.
+        Task { await indianFoods.prepare() }
         guard recentFoods.isEmpty else { return }
         isLoadingRecents = true
         defer { isLoadingRecents = false }
@@ -105,39 +120,53 @@ final class FoodSearchViewModel: ObservableObject {
         isSearching = true
         defer { isSearching = false }
 
-        async let local = fetch(trimmed, apiClient.searchFoods)
-        async let openFoodFacts = fetch(trimmed, apiClient.searchExternalFoods)
-        // USDA is what makes generic foods findable ("Apple, raw",
-        // "Cheeseburger, NFS"); OpenFoodFacts only has packaged products. It
-        // returns nothing when the server has no USDA provider configured,
-        // which is a deployment choice rather than a failure.
-        async let usda = fetch(trimmed, apiClient.searchUsdaFoods)
+        var lists: [FoodSource: [Food]] = [:]
+        var anyFailed = false
+        await withTaskGroup(of: (FoodSource, [Food], Bool).self) { group in
+            group.addTask { @MainActor in
+                let result = await self.fetch(trimmed, self.apiClient.searchFoods)
+                return (.local, result.foods, result.failed)
+            }
+            group.addTask { @MainActor in
+                (.indb, await self.indianFoods.search(trimmed).map(\.asFood), false)
+            }
+            // USDA is what makes generic foods findable ("Apple, raw"). It
+            // returns nothing when the server has no USDA provider configured,
+            // which is a deployment choice rather than a failure.
+            group.addTask { @MainActor in
+                await self.cachedFetch(.usda, trimmed, self.apiClient.searchUsdaFoods)
+            }
+            // Too short to be worth one of OFF's few searches a minute;
+            // INDB and the user's own foods cover one- and two-letter queries.
+            if trimmed.count >= OpenFoodFactsSearch.minimumQueryLength {
+                group.addTask { @MainActor in
+                    await self.cachedFetch(.openFoodFacts, trimmed, self.apiClient.searchExternalFoods)
+                }
+            }
 
-        let (localFoods, localFailed) = await local
-        let (brandedFoods, brandedFailed) = await openFoodFacts
-        let (genericFoods, usdaFailed) = await usda
+            for await (source, foods, failed) in group {
+                lists[source] = foods
+                anyFailed = anyFailed || failed
+                // A newer keystroke may have started (and awaited) another
+                // search while this one was in flight; don't let a slower,
+                // superseded response clobber whatever that search showed.
+                guard !Task.isCancelled, trimmed == query.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                    group.cancelAll()
+                    return
+                }
+                let ranked = await FoodSearchRanker.rankedOffMain(Array(lists.values), query: trimmed)
+                // Re-check: the ranking hop is a suspension point too.
+                guard !Task.isCancelled, trimmed == query.trimmingCharacters(in: .whitespacesAndNewlines) else {
+                    group.cancelAll()
+                    return
+                }
+                if !ranked.isEmpty { outcome = .results(ranked) }
+            }
+        }
 
-        // A newer keystroke may have started (and awaited) another search
-        // while this one was in flight; don't let a slower, superseded
-        // response clobber whatever that later search already showed.
         guard !Task.isCancelled, trimmed == query.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
-
-        // The user's own foods lead, then the two providers alternating.
-        //
-        // Concatenating them instead — all generics, then all branded —
-        // buried whichever source the query actually meant, because each
-        // returns up to 20 matches for anything. Measured: searching
-        // "cheerios" put five generic "Cereal, O's …" rows above the real
-        // Cheerios box. Alternating keeps both kinds within the first few
-        // rows, so the app doesn't have to guess whether "apple" means the
-        // fruit or a juice carton — it offers both immediately.
-        //
-        // USDA takes each pair's first slot, which is the one bias worth
-        // having: it's the source that knows what a plain apple is.
-        let combined = localFoods + interleaved(genericFoods, brandedFoods)
-        if !combined.isEmpty {
-            outcome = .results(combined)
-        } else if localFailed || brandedFailed || usdaFailed {
+        if case .results = outcome, lists.values.contains(where: { !$0.isEmpty }) { return }
+        if anyFailed {
             // Nothing found *and* a source didn't answer: "no results" would
             // be a guess, and a wrong one — OpenFoodFacts drops the odd
             // request, so a query that matched a minute ago read as having no
@@ -148,16 +177,14 @@ final class FoodSearchViewModel: ObservableObject {
         }
     }
 
-    /// Alternates two result lists, starting with `first`, and appends
-    /// whatever remains once the shorter one runs out.
-    private func interleaved(_ first: [Food], _ second: [Food]) -> [Food] {
-        var merged: [Food] = []
-        merged.reserveCapacity(first.count + second.count)
-        for index in 0..<Swift.max(first.count, second.count) {
-            if index < first.count { merged.append(first[index]) }
-            if index < second.count { merged.append(second[index]) }
-        }
-        return merged
+    /// `fetch`, answered from this sheet's cache when the same source was
+    /// already asked the same query.
+    private func cachedFetch(_ source: FoodSource, _ query: String, _ call: (String) async throws -> [Food]) async -> (FoodSource, [Food], Bool) {
+        let key = "\(source.rawValue)|\(query.lowercased())"
+        if let cached = networkCache[key] { return (source, cached, false) }
+        let result = await fetch(query, call)
+        if !result.failed, !Task.isCancelled { networkCache[key] = result.foods }
+        return (source, result.foods, result.failed)
     }
 
     /// Runs one source and reports whether it genuinely failed. Cancellation

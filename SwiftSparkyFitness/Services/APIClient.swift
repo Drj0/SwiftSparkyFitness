@@ -467,21 +467,10 @@ final class APIClient: APIClientProtocol {
         try await send("api/foods")
     }
 
-    /// OpenFoodFacts is free/keyless and confirmed live — unlike USDA,
-    /// Nutritionix, and Fatsecret, which this server also proxies but need
-    /// per-provider API credentials configured server-side first.
-    /// `verbatimKeys` is load-bearing: OpenFoodFacts' keys (`product_name`,
-    /// `energy-kcal_100g`) are matched literally by CodingKeys, and the shared
-    /// decoder's snake-to-camel conversion rewrites them first so nothing
-    /// matches — decoding 20 products with every field nil and no error. See
-    /// OpenFoodFactsProduct.
+    /// Not proxied through the server: its OpenFoodFacts route has no
+    /// country filter and costs a second round trip. See OpenFoodFactsSearch.
     func searchExternalFoods(query: String) async throws -> [Food] {
-        let response: OpenFoodFactsSearchResponse = try await send(
-            "api/foods/openfoodfacts/search",
-            query: [URLQueryItem(name: "query", value: query)],
-            verbatimKeys: true
-        )
-        return response.products.compactMap(\.asFood).prefix(20).map { $0 }
+        try await OpenFoodFactsSearch.search(query)
     }
 
     // MARK: - USDA FoodData Central
