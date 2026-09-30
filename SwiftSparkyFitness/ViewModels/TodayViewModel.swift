@@ -52,6 +52,14 @@ final class TodayViewModel: ObservableObject {
     /// today's own weight exists, so it's unambiguous which figure a
     /// non-nil `bodyMeasurements.weight` vs. this represents.
     @Published private(set) var lastLoggedWeight: (value: Double, date: Date)?
+    /// Whether this account has ever logged a food — nil until known. Only
+    /// someone who hasn't gets the "first bite" nudge; an empty day for
+    /// anyone else is just an empty day.
+    @Published private(set) var hasLoggedFoodBefore: Bool?
+
+    var showsFirstFoodNudge: Bool {
+        isViewingToday && hasLoggedFoodBefore == false && (summary?.foodEntries.isEmpty ?? false)
+    }
     /// Water is its own small view model so Today's card and Diary's water
     /// section share one set of rules.
     let water: WaterViewModel
@@ -227,6 +235,7 @@ final class TodayViewModel: ObservableObject {
             bodyMeasurements = loadedBody
             preferences = loadedPreferences
             await loadLastLoggedWeightIfNeeded()
+            await learnWhetherFoodWasLoggedBefore(dayHasFood: !loadedSummary.foodEntries.isEmpty)
         } catch {
             guard day == today else { return }
             errorMessage = error.localizedDescription
@@ -266,6 +275,20 @@ final class TodayViewModel: ObservableObject {
         formatter.calendar = Calendar(identifier: .gregorian)
         return formatter
     }()
+
+    /// The server's recent foods are empty until a first food is logged, on
+    /// any device — so no flag of this app's own is needed. Asked once, and
+    /// only while it could still be false; a failure counts as "has logged",
+    /// since a missing nudge costs nothing and a wrong one reads as a reset.
+    private func learnWhetherFoodWasLoggedBefore(dayHasFood: Bool) async {
+        if dayHasFood { hasLoggedFoodBefore = true }
+        guard hasLoggedFoodBefore == nil else { return }
+        guard let suggestions = try? await apiClient.foodSuggestions() else {
+            hasLoggedFoodBefore = true
+            return
+        }
+        hasLoggedFoodBefore = !suggestions.recentFoods.isEmpty
+    }
 
     /// Only fetched when today has nothing logged — a day that already has
     /// its own weight never needs a fallback. A year is generous for "most

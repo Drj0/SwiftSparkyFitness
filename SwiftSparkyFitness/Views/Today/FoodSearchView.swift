@@ -58,6 +58,10 @@ struct FoodSearchView: View {
     // already carries its own "‹ Back"), rather than stacking a second sheet
     // on top. Two stacked sheets close one after the other, so logging
     // flashed Log Food back up for a beat before the whole thing went away.
+    private var showsOwnManualEntry: Bool {
+        ["noResults", "networkError"].contains(viewModel.outcome.kindID)
+    }
+
     var body: some View {
         NavigationStack {
             searchContent
@@ -84,18 +88,22 @@ struct FoodSearchView: View {
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.isSearching)
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: resultsStateKey)
 
-            Button {
-                isPresentingCustomFood = true
-            } label: {
-                Text("+ Enter food manually")
-                    .appBody(13, weight: .semibold)
-                    .foregroundStyle(AppColor.accent)
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .padding(.vertical, 12)
-                    .contentShape(Rectangle())
+            // The empty and error states carry this same action as their
+            // main button; a second copy under them read as noise.
+            if !showsOwnManualEntry {
+                Button {
+                    isPresentingCustomFood = true
+                } label: {
+                    Text("+ Enter food manually")
+                        .appBody(13, weight: .semibold)
+                        .foregroundStyle(AppColor.accent)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .padding(.vertical, 12)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+                .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .top)
             }
-            .buttonStyle(.pressable)
-            .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .top)
         }
         .background(AppColor.surface)
         .scrollDismissesKeyboard(.interactively)
@@ -228,10 +236,21 @@ struct FoodSearchView: View {
     /// ContentUnavailableView rather than a hand-built stack: it groups as a
     /// single VoiceOver element and handles Dynamic Type layout for free.
     private var searchPrompt: some View {
+        // In the app's type, like the "No results" state beside it; the
+        // system default read as a different app on a new user's first sheet.
         ContentUnavailableView {
-            Label("Search for a food", systemImage: "magnifyingglass")
+            Label {
+                Text("Search for a food")
+                    .appDisplay(18)
+                    .foregroundStyle(AppColor.ink)
+            } icon: {
+                Image(systemName: "magnifyingglass")
+                    .foregroundStyle(AppColor.placeholder)
+            }
         } description: {
             Text("Type a name or a brand. Nothing matching? Add it yourself below.")
+                .appBody(13)
+                .foregroundStyle(AppColor.secondaryText)
         }
         .padding(.top, 40)
     }

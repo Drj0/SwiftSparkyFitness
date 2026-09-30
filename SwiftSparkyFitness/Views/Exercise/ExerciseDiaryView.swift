@@ -73,6 +73,8 @@ struct ExerciseDiaryView: View {
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
+                                // The TabView tints everything pink; delete keeps iOS red.
+                                .tint(AppColor.destructive)
                             }
                     }
                 }
@@ -218,7 +220,15 @@ struct ExerciseDiaryView: View {
     private func subtitle(_ session: ExerciseSessionSummary) -> String {
         switch session.effectiveModality {
         case .weightReps, .repsOnly:
-            let setCount = session.setsList.count
+            // Identical sets say the numbers that matter — "3 × 8 · 60 kg" —
+            // rather than a count and a duration that is usually estimated.
+            let sets = session.setsList
+            if let first = sets.first, let reps = first.reps,
+               sets.allSatisfy({ $0.reps == first.reps && $0.weight == first.weight }) {
+                let weightPart = first.weight.map { " · \($0.formatted(.number.precision(.fractionLength(0...1)))) kg" } ?? ""
+                return "\(sets.count) × \(reps)\(weightPart)"
+            }
+            let setCount = sets.count
             let durationPart = session.durationMinutes.map { "\(Int($0)) min" }
             return [setCount > 0 ? "\(setCount) set\(setCount == 1 ? "" : "s")" : nil, durationPart]
                 .compactMap { $0 }.joined(separator: " · ")

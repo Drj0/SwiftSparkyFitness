@@ -24,6 +24,9 @@ struct ExerciseEntryEditorView: View {
     @FocusState private var distanceFocused: Bool
     @FocusState private var heartRateFocused: Bool
     @FocusState private var caloriesFocused: Bool
+    /// Set-based exercises open on the first set's reps, not the optional
+    /// duration above it.
+    @FocusState private var firstRepsFocused: Bool
 
     /// False when the caller closes the whole sheet itself on save (Log
     /// Exercise): stepping back here first slid the search list in under a
@@ -114,7 +117,7 @@ struct ExerciseEntryEditorView: View {
         }
         .background(AppColor.surface)
         .task {
-            durationFocused = true
+            if viewModel.modality.usesSets { firstRepsFocused = true } else { durationFocused = true }
             await viewModel.loadDistanceUnit()
         }
     }
@@ -191,7 +194,7 @@ struct ExerciseEntryEditorView: View {
 
             AppTextField(
                 placeholder: "Reps", text: binding(for: row, \.repsText), style: .filled,
-                keyboardType: .numberPad
+                keyboardType: .numberPad, focus: index == 0 ? $firstRepsFocused : nil
             )
 
             if viewModel.modality == .weightReps {
@@ -201,17 +204,23 @@ struct ExerciseEntryEditorView: View {
                 )
             }
 
-            Button {
-                Haptics.warning()
-                viewModel.removeSet(row)
-            } label: {
-                Image(systemName: "minus.circle.fill")
-                    .foregroundStyle(AppColor.destructive)
-                    .frame(width: 44, height: 44)
-                    .contentShape(Rectangle())
+            // The last set can't be removed (see removeSet), so its button
+            // would only buzz; keep the column so the fields stay aligned.
+            if viewModel.setRows.count > 1 {
+                Button {
+                    Haptics.warning()
+                    viewModel.removeSet(row)
+                } label: {
+                    Image(systemName: "minus.circle.fill")
+                        .foregroundStyle(AppColor.destructive)
+                        .frame(width: 44, height: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressableCompact)
+                .accessibilityLabel("Remove set \(index + 1)")
+            } else {
+                Color.clear.frame(width: 44, height: 44).accessibilityHidden(true)
             }
-            .buttonStyle(.pressableCompact)
-            .accessibilityLabel("Remove set \(index + 1)")
         }
     }
 

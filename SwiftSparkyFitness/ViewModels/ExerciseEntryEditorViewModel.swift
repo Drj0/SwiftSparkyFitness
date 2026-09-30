@@ -181,8 +181,15 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
         lastEstimateText = caloriesText
     }
 
+    /// Starts from the last set's reps and weight: most sets repeat the one
+    /// before, so the common case is one tap and the rest is an edit.
     func addSet() {
-        setRows.append(ExerciseSetRow())
+        var next = ExerciseSetRow()
+        if let last = setRows.last {
+            next.repsText = last.repsText
+            next.weightText = last.weightText
+        }
+        setRows.append(next)
     }
 
     func removeSet(_ row: ExerciseSetRow) {

@@ -96,21 +96,21 @@ struct TodayView: View {
                         ProgressView().frame(maxWidth: .infinity).padding(.top, 40)
                     } else if let summary = viewModel.summary {
                         Group {
+                        // One layout whether or not anything is logged yet: the
+                        // first entry used to rebuild the whole screen (macros,
+                        // meals and water all appearing at once), and an empty
+                        // day hid the meals you'd log into.
                         if !viewModel.hasGoalSet {
                             GoalNotSetCard { viewModel.isPresentingSetGoals = true }
-                        } else if viewModel.hasLoggedAnything {
-                            populated(summary)
                         } else {
-                            firstRun(summary)
+                            populated(summary)
                         }
                         // Water and weight are day-level widgets, not
                         // decoration under the food list: they render in
                         // every state, otherwise there'd be no way to log
                         // water on a day with nothing else on it — and, with
                         // no goal set, no way to log anything at all.
-                        // Populated days show water up with the day's
-                        // numbers instead (see populated()).
-                        statRow(includingWater: !viewModel.hasGoalSet || !viewModel.hasLoggedAnything)
+                        statRow()
                         }
                         // A newly picked day is still loading: dim the old
                         // one and block taps, since water and the sheets
@@ -247,11 +247,10 @@ struct TodayView: View {
     @ViewBuilder
     private func populated(_ summary: DailySummary) -> some View {
         CalorieRingCard(summary: summary)
+        if viewModel.showsFirstFoodNudge {
+            FirstFoodNudge { viewModel.isPresentingFoodSearch = true }
+        }
         MacroGoalsCard(totals: viewModel.macroTotals, goals: summary.goals)
-        // Water is the most-tapped control of the day; under a long meal
-        // list it sat below the fold, behind the FAB.
-        WaterCard(viewModel: viewModel.water)
-
         ForEach(viewModel.entriesByMeal, id: \.mealType.id) { group in
             mealSection(group.mealType, group.entries)
         }
@@ -265,28 +264,6 @@ struct TodayView: View {
             }
         }
         .padding(.top, 40)
-    }
-
-    @ViewBuilder
-    private func firstRun(_ summary: DailySummary) -> some View {
-        CalorieRingCard(summary: summary)
-
-        VStack(alignment: .leading, spacing: 4) {
-            Text("\u{201C}Let's get your first bite on the board.\u{201D}")
-                .appDisplay(16).italic()
-                .foregroundStyle(AppColor.sparkyQuote)
-            Text("Sparky")
-                .appBody(12)
-                .foregroundStyle(AppColor.sparkyQuote.opacity(0.75))
-        }
-        .padding(18)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppColor.accentSoft)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg))
-
-        PrimaryButton(title: "Log your first food") {
-            viewModel.isPresentingFoodSearch = true
-        }
     }
 
     private func mealSection(_ mealType: MealType, _ entries: [FoodEntrySummary]) -> some View {
@@ -403,10 +380,10 @@ struct TodayView: View {
     /// half-width cards reading the same way water's one full-width card
     /// does (a label row, then the day's number).
     @ViewBuilder
-    private func statRow(includingWater: Bool) -> some View {
-        if includingWater {
-            WaterCard(viewModel: viewModel.water)
-        }
+    private func statRow() -> some View {
+        // After the meals, deliberately: food is what the day is logged
+        // around, and water is a single tap wherever it sits.
+        WaterCard(viewModel: viewModel.water)
 
         // `.top`, not the default `.center`: BodyCard grows taller than
         // ExerciseTodayCard the moment a measurement chip wraps onto a
@@ -435,6 +412,40 @@ struct TodayView: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
+    }
+}
+
+/// Sparky's welcome, for someone who has never logged a food: the quote,
+/// and the one thing to do next as a link — the same "Log weight →" action
+/// caption the stat tiles use, rather than a second full-width pink button
+/// beside the FAB. The whole card is the tap target.
+private struct FirstFoodNudge: View {
+    let onLogFood: () -> Void
+
+    var body: some View {
+        Button(action: onLogFood) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("\u{201C}Let's get your first bite on the board.\u{201D}")
+                    .appDisplay(16).italic()
+                    .foregroundStyle(AppColor.sparkyQuote)
+                Text("Sparky")
+                    .appBody(12)
+                    .foregroundStyle(AppColor.sparkyQuote.opacity(0.75))
+                Text("Log your first food →")
+                    .appBody(13, weight: .semibold)
+                    .foregroundStyle(AppColor.accent)
+                    .padding(.top, 8)
+            }
+            .padding(18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(AppColor.accentSoft)
+            .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg))
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Log your first food")
+        .accessibilityHint("Let's get your first bite on the board.")
     }
 }
 

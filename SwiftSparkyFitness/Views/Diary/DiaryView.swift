@@ -316,6 +316,8 @@ struct DiaryView: View {
                                 } label: {
                                     Label("Delete", systemImage: "trash")
                                 }
+                                // The TabView tints everything pink; delete keeps iOS red.
+                                .tint(AppColor.destructive)
                             }
                     }
                 }
@@ -387,6 +389,8 @@ struct DiaryView: View {
                                     } label: {
                                         Label("Delete", systemImage: "trash")
                                     }
+                                    // The TabView tints everything pink; delete keeps iOS red.
+                                    .tint(AppColor.destructive)
                                 }
                             }
                     }
@@ -469,6 +473,8 @@ struct DiaryView: View {
                             } label: {
                                 Label("Delete", systemImage: "trash")
                             }
+                            // The TabView tints everything pink; delete keeps iOS red.
+                            .tint(AppColor.destructive)
                         }
                 }
             }

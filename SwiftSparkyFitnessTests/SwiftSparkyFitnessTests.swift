@@ -1432,6 +1432,31 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertFalse(viewModel.hasLoggedAnything)
     }
 
+    /// Only an account that has never logged a food gets "log your first
+    /// food"; an empty day for anyone else is just an empty day.
+    @MainActor
+    func testFirstFoodNudgeIsOnlyForAccountsThatNeverLoggedFood() async {
+        let newcomer = StubAPIClient()
+        newcomer.suggestionsToReturn = .none
+        let fresh = TodayViewModel(apiClient: newcomer, health: StubHealthKit())
+        await fresh.load()
+        XCTAssertEqual(fresh.summary?.foodEntries.isEmpty, true)
+        XCTAssertTrue(fresh.showsFirstFoodNudge)
+
+        let regular = StubAPIClient()
+        regular.suggestionsToReturn = FoodSuggestions(recentFoods: [makeFood("r1", "Oats")], topFoods: [])
+        let returning = TodayViewModel(apiClient: regular, health: StubHealthKit())
+        await returning.load()
+        XCTAssertFalse(returning.showsFirstFoodNudge)
+
+        // Unknown (request failed) never nudges: a wrong one reads as a reset.
+        let failing = StubAPIClient()
+        failing.suggestionsError = APIError.server(message: "down", code: nil)
+        let offline = TodayViewModel(apiClient: failing, health: StubHealthKit())
+        await offline.load()
+        XCTAssertFalse(offline.showsFirstFoodNudge)
+    }
+
     @MainActor
     func testHealthIsNotQueriedUnlessTheUserTurnedItOn() async {
         let health = StubHealthKit()
@@ -3252,6 +3277,20 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertEqual(exercise?.id, "mine")
         XCTAssertEqual(exercise?.caloriesPerHour, 8.0 * ExerciseCatalog.fallbackWeightKg)
         XCTAssertTrue(stub.createdCustomExercises.isEmpty)
+    }
+
+    /// A new set starts from the one before it — most sets repeat it.
+    @MainActor
+    func testAddSetCarriesThePreviousSetForward() {
+        let exercise = Exercise(id: "bp", name: "Bench Press", category: "strength", modality: .weightReps, caloriesPerHour: 300)
+        let viewModel = ExerciseEntryEditorViewModel(exercise: exercise, apiClient: StubAPIClient())
+        viewModel.setRows[0].repsText = "8"
+        viewModel.setRows[0].weightText = "60"
+        viewModel.addSet()
+        XCTAssertEqual(viewModel.setRows.count, 2)
+        XCTAssertEqual(viewModel.setRows[1].repsText, "8")
+        XCTAssertEqual(viewModel.setRows[1].weightText, "60")
+        XCTAssertNotEqual(viewModel.setRows[1].id, viewModel.setRows[0].id)
     }
 
     /// A set-based exercise with no duration typed still gets a calorie

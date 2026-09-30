@@ -12,6 +12,9 @@ struct CustomExerciseView: View {
     @StateObject private var viewModel = CustomExerciseViewModel()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// What was typed into search before "Create custom exercise" — it's
+    /// almost always the name.
+    var initialName = ""
     let onSaved: (Exercise) -> Void
 
     @FocusState private var nameFocused: Bool
@@ -54,7 +57,10 @@ struct CustomExerciseView: View {
             }
         }
         .background(AppColor.surface)
-        .task { nameFocused = true }
+        .task {
+            if viewModel.name.isEmpty { viewModel.name = initialName.capitalized }
+            nameFocused = true
+        }
     }
 
     private var header: some View {

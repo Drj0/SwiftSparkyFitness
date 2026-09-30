@@ -41,6 +41,10 @@ struct ExerciseSearchView: View {
     // The editor slides in inside this sheet rather than stacking a second
     // sheet: two stacked sheets close one after the other, which flashed Log
     // Exercise back up for a beat after saving.
+    private var showsOwnManualEntry: Bool {
+        ["noResults", "networkError"].contains(viewModel.outcome.kindID)
+    }
+
     var body: some View {
         NavigationStack {
             searchContent
@@ -63,18 +67,22 @@ struct ExerciseSearchView: View {
             }
             .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.isSearching)
 
-            Button {
-                isPresentingCustomExercise = true
-            } label: {
-                Text("+ Create custom exercise")
-                    .appBody(13, weight: .semibold)
-                    .foregroundStyle(AppColor.accent)
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .padding(.vertical, 12)
-                    .contentShape(Rectangle())
+            // The empty and error states carry this same action as their
+            // main button; a second copy under them read as noise.
+            if !showsOwnManualEntry {
+                Button {
+                    isPresentingCustomExercise = true
+                } label: {
+                    Text("+ Create custom exercise")
+                        .appBody(13, weight: .semibold)
+                        .foregroundStyle(AppColor.accent)
+                        .frame(maxWidth: .infinity, minHeight: 44)
+                        .padding(.vertical, 12)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+                .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .top)
             }
-            .buttonStyle(.pressable)
-            .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .top)
         }
         .background(AppColor.surface)
         .scrollDismissesKeyboard(.interactively)
@@ -84,7 +92,7 @@ struct ExerciseSearchView: View {
         // now, so the editor opens with them already there.
         .task(id: prefetchNames) { ExercisePhotoStore.prefetch(prefetchNames) }
         .sheet(isPresented: $isPresentingCustomExercise) {
-            CustomExerciseView { exercise in
+            CustomExerciseView(initialName: viewModel.query.trimmingCharacters(in: .whitespaces)) { exercise in
                 pushedExercise = exercise
             }
             .presentationDetents([.medium, .large])
