@@ -223,7 +223,7 @@ struct ExerciseDiaryView: View {
             return [setCount > 0 ? "\(setCount) set\(setCount == 1 ? "" : "s")" : nil, durationPart]
                 .compactMap { $0 }.joined(separator: " · ")
         case .durationDistance:
-            let distancePart = session.distance.map { String(format: "%.1f", $0) }
+            let distancePart = session.distance.map { String(format: "%.1f %@", $0, viewModel.preferences.distanceUnitLabel) }
             let durationPart = session.durationMinutes.map { "\(Int($0)) min" }
             return [distancePart, durationPart].compactMap { $0 }.joined(separator: " · ")
         case .duration:

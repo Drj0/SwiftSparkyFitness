@@ -63,11 +63,19 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
     @Published private(set) var setsError: String?
     @Published private(set) var isSaving = false
     @Published var bannerMessage: String?
+    /// Distance is stored in the user's preferred unit (see
+    /// HealthWorkoutImporter), so the field has to say which one it is.
+    @Published private(set) var distanceUnit = UserPreferences.serverDefaults.distanceUnitLabel
 
     private let apiClient: APIClientProtocol
     private let existingEntryId: String?
     private let entryDate: Date
     var isEditing: Bool { existingEntryId != nil }
+
+    func loadDistanceUnit() async {
+        guard modality == .durationDistance, let preferences = try? await apiClient.userPreferences() else { return }
+        distanceUnit = preferences.distanceUnitLabel
+    }
 
     /// Create mode: a freshly-materialized or already-owned exercise, no
     /// prior entry.

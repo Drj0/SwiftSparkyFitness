@@ -77,7 +77,7 @@ struct ExerciseEntryEditorView: View {
                             AppTextField(
                                 placeholder: "Required", text: $viewModel.distanceText, style: .filled,
                                 isInvalid: viewModel.distanceError != nil, keyboardType: .decimalPad,
-                                focus: $distanceFocused
+                                suffix: viewModel.distanceUnit, focus: $distanceFocused
                             )
                         }
                         labeledField("AVG HEART RATE (OPTIONAL)", error: nil) {
@@ -108,9 +108,15 @@ struct ExerciseEntryEditorView: View {
                 .padding(18)
                 .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.bannerMessage)
             }
+            // Number pads have no return key; the search sheets dismiss the
+            // same way.
+            .scrollDismissesKeyboard(.interactively)
         }
         .background(AppColor.surface)
-        .task { durationFocused = true }
+        .task {
+            durationFocused = true
+            await viewModel.loadDistanceUnit()
+        }
     }
 
     private var header: some View {
@@ -236,6 +242,8 @@ struct ExerciseEntryEditorView: View {
     }
 }
 
+#if DEBUG
 #Preview {
     ExerciseEntryEditorView(exercise: Exercise.previewSquat)
 }
+#endif
