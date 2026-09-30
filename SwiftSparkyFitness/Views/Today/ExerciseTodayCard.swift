@@ -21,7 +21,7 @@ struct ExerciseTodayCard: View {
     var body: some View {
         Button(action: onTap) {
             TodayStatTile(
-                title: "🏃 Exercise",
+                title: "Exercise", symbol: "figure.run", tint: AppColor.energy,
                 // A real zero, not a dash: "0 min" is a true fact about the
                 // day, and the prompt under it says what to do about it.
                 value: hasLogged ? "\(Int(durationMinutes))" : "0",
@@ -57,6 +57,8 @@ struct ExerciseTodayCard: View {
 /// which is what keeps the pair level at large text sizes.
 struct TodayStatTile: View {
     let title: String
+    let symbol: String
+    let tint: Color
     let value: String
     /// Greys the value out ("0 min", "Not set") while keeping its size, so
     /// an empty card is the same height as a filled one.
@@ -68,12 +70,7 @@ struct TodayStatTile: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            // Capped: half-width beside a sibling, the title wraps mid-word
-            // ("Weig" / "ht") at accessibility sizes otherwise.
-            Text(title)
-                .appBody(13, weight: .semibold)
-                .foregroundStyle(AppColor.ink)
-                .dynamicTypeSize(...DynamicTypeSize.xLarge)
+            CardTitle(title, symbol: symbol, tint: tint)
                 .padding(.bottom, 6)
 
             HStack(alignment: .firstTextBaseline, spacing: 3) {
@@ -101,5 +98,44 @@ struct TodayStatTile: View {
         .overlay(RoundedRectangle(cornerRadius: AppRadius.md).stroke(AppColor.hairline, lineWidth: 1))
         .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
         .contentShape(Rectangle())
+    }
+}
+
+/// A Today card's label: an SF Symbol in the card's colour beside the title
+/// in ink. The symbol follows the title's size and weight, so the two stay
+/// one line at every text size; only the icon carries colour, so the title
+/// never competes with the number under it.
+struct CardTitle: View {
+    let title: String
+    let symbol: String
+    let tint: Color
+
+    init(_ title: String, symbol: String, tint: Color) {
+        self.title = title
+        self.symbol = symbol
+        self.tint = tint
+    }
+
+    var body: some View {
+        // Capped: half-width beside a sibling, the title wraps mid-word
+        // ("Weig" / "ht") at accessibility sizes otherwise.
+        Label {
+            Text(title).foregroundStyle(AppColor.ink)
+        } icon: {
+            Image(systemName: symbol).foregroundStyle(tint)
+        }
+        .labelStyle(CardTitleLabelStyle())
+        .appBody(13, weight: .semibold)
+        .dynamicTypeSize(...DynamicTypeSize.xLarge)
+    }
+}
+
+/// Tighter than the default label spacing, which reads as two items at 13pt.
+private struct CardTitleLabelStyle: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 5) {
+            configuration.icon
+            configuration.title
+        }
     }
 }

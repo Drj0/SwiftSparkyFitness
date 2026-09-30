@@ -69,7 +69,7 @@ struct BodyCard: View {
     var body: some View {
         Button(action: onLogWeight) {
             TodayStatTile(
-                title: "⚖️ Weight",
+                title: "Weight", symbol: "scalemass.fill", tint: AppColor.accent,
                 value: displayWeight.map(preferences.formatted) ?? "Not set",
                 valueIsEmpty: displayWeight == nil,
                 unit: displayWeight == nil ? "" : preferences.weightUnitLabel,

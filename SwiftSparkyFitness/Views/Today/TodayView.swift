@@ -108,7 +108,9 @@ struct TodayView: View {
                         // every state, otherwise there'd be no way to log
                         // water on a day with nothing else on it — and, with
                         // no goal set, no way to log anything at all.
-                        statRow()
+                        // Populated days show water up with the day's
+                        // numbers instead (see populated()).
+                        statRow(includingWater: !viewModel.hasGoalSet || !viewModel.hasLoggedAnything)
                         }
                         // A newly picked day is still loading: dim the old
                         // one and block taps, since water and the sheets
@@ -246,6 +248,9 @@ struct TodayView: View {
     private func populated(_ summary: DailySummary) -> some View {
         CalorieRingCard(summary: summary)
         MacroGoalsCard(totals: viewModel.macroTotals, goals: summary.goals)
+        // Water is the most-tapped control of the day; under a long meal
+        // list it sat below the fold, behind the FAB.
+        WaterCard(viewModel: viewModel.water)
 
         ForEach(viewModel.entriesByMeal, id: \.mealType.id) { group in
             mealSection(group.mealType, group.entries)
@@ -398,8 +403,10 @@ struct TodayView: View {
     /// half-width cards reading the same way water's one full-width card
     /// does (a label row, then the day's number).
     @ViewBuilder
-    private func statRow() -> some View {
-        WaterCard(viewModel: viewModel.water)
+    private func statRow(includingWater: Bool) -> some View {
+        if includingWater {
+            WaterCard(viewModel: viewModel.water)
+        }
 
         // `.top`, not the default `.center`: BodyCard grows taller than
         // ExerciseTodayCard the moment a measurement chip wraps onto a

@@ -19,18 +19,113 @@ struct WaterCard: View {
     @ObservedObject var viewModel: WaterViewModel
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    /// The custom-amount sheet, reached by holding "+".
+    @State private var isLoggingAmount = false
 
-    private var totalLabel: String {
-        // Litres, matching the design — "1.75 / 2.5 L" rather than the raw
-        // millilitre figure, which is what the number actually is server-side.
-        "\(Self.liters(viewModel.totalMl)) / \(Self.liters(viewModel.goalMl)) L"
+    /// Same shell as Today's Weight and Exercise tiles (TodayStatTile) so
+    /// the three read as one family; blue is only water's accent — the bar
+    /// and the "+" glyph — the way the macro card colours only its bars. A
+    /// whole blue card was the one tinted card on the screen.
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                CardTitle("Water", symbol: "drop.fill", tint: AppColor.water)
+                Spacer()
+                if viewModel.foodMl > 0 {
+                    Text("incl. \(Int(viewModel.foodMl.rounded())) ml from food")
+                        .appBody(11)
+                        .foregroundStyle(AppColor.secondaryText)
+                }
+            }
+            .padding(.bottom, 6)
+
+            HStack(alignment: .center, spacing: 12) {
+                // The total, the goal and what's left are one fact: read
+                // separately, VoiceOver announced an unlabelled "750 ml"
+                // and then restated it.
+                VStack(alignment: .leading, spacing: 2) {
+                    HStack(alignment: .firstTextBaseline, spacing: 3) {
+                        Text(Self.amount(viewModel.totalMl).value)
+                            .appBody(22, weight: .bold)
+                            .foregroundStyle(viewModel.totalMl > 0 ? AppColor.ink : AppColor.placeholder)
+                            .contentTransition(.numericText())
+                            .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: viewModel.totalMl)
+                        Text("\(Self.amount(viewModel.totalMl).unit) of \(Self.liters(viewModel.goalMl))")
+                            .appBody(13)
+                            .foregroundStyle(AppColor.secondaryText)
+                    }
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.7)
+
+                    caption
+                }
+                .accessibilityElement(children: .ignore)
+                .accessibilityLabel("Water")
+                .accessibilityValue(totalAccessibilityValue)
+
+                Spacer(minLength: 0)
+
+                HStack(spacing: 8) {
+                    removeButton
+                    addButton
+                }
+            }
+
+            progressBar
+                .padding(.top, 12)
+                .accessibilityHidden(true)
+
+            if let errorMessage = viewModel.errorMessage {
+                Text(errorMessage)
+                    .appBody(12)
+                    .foregroundStyle(AppColor.destructive)
+                    .padding(.top, 8)
+            }
+        }
+        .padding(14)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppColor.surface)
+        .overlay(RoundedRectangle(cornerRadius: AppRadius.md).stroke(AppColor.hairline, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
+        // A quiet moment for the goal, felt once on the way over it.
+        .sensoryFeedback(trigger: reachedGoal) { old, new in !old && new ? .success : nil }
+        .sheet(isPresented: $isLoggingAmount) {
+            LogWaterAmountView(viewModel: viewModel)
+                .presentationDetents([.height(300)])
+                .presentationDragIndicator(.visible)
+        }
+    }
+
+    private var reachedGoal: Bool { viewModel.goalMl > 0 && viewModel.totalMl >= viewModel.goalMl }
+
+    /// What's left leads — it's what prompts the next glass — followed by
+    /// what one tap adds, which the "+" itself can't say.
+    private var caption: some View {
+        // One Text, so large sizes wrap onto a second line (as the Weight and
+        // Exercise tiles' captions do) instead of truncating the tap size.
+        let lead: Text = reachedGoal
+            ? Text(Image(systemName: "checkmark.circle.fill")).foregroundStyle(AppColor.water)
+                + Text(" Goal reached").foregroundStyle(AppColor.ink)
+            : Text("\(Self.liters(viewModel.goalMl - viewModel.totalMl)) to go")
+        return (lead + Text(" · \(Int(viewModel.mlPerDrink.rounded()))\u{00A0}ml a\u{00A0}tap"))
+            .appBody(12)
+            .foregroundStyle(AppColor.secondaryText)
+            .lineLimit(2)
+    }
+
+    /// "750 ml" under a litre, "1.25 L" from there: small amounts read
+    /// naturally in millilitres, and "0.50 L" mixed precision with the goal.
+    private static func amount(_ ml: Double) -> (value: String, unit: String) {
+        ml < 1000 ? ("\(Int(ml.rounded()))", "ml") : (number(ml / 1000), "L")
     }
 
     private static func liters(_ ml: Double) -> String {
-        let value = ml / 1000
-        // "2" not "2.0": a round number shouldn't carry a decimal the design
-        // doesn't show.
-        return value == value.rounded() ? String(Int(value)) : String(format: "%.2f", value)
+        ml < 1000 ? "\(Int(max(0, ml).rounded()))\u{00A0}ml" : "\(number(ml / 1000))\u{00A0}L"
+    }
+
+    /// "2" not "2.0", "1.25" not "1.250".
+    private static func number(_ value: Double) -> String {
+        value.formatted(.number.precision(.fractionLength(0...2)))
     }
 
     /// "ml" is read out as a letter pair; the numbers are the whole point of
@@ -41,100 +136,13 @@ struct WaterCard: View {
         return "\(Int(viewModel.totalMl.rounded())) of \(Int(viewModel.goalMl.rounded())) millilitres, \(percent) percent"
     }
 
-    /// No longer shown as a caption (the design keeps this card to the
-    /// number, the bar and the two stepper buttons) — folded into the "+"
-    /// button's own accessibility label instead, so the container/drink-size
-    /// information isn't lost, only the visible line. `drinkLabel` already
-    /// carries the ml figure ("250 ml each" / "Probe Bottle · 750 ml"), so
-    /// it's the whole suffix — prefixing a second, separately-computed "X
-    /// millilitre drink" here read as "Add a 250 millilitre drink · 250 ml
-    /// each", the same number said twice.
-    private var addLabel: String {
-        "Add a drink — \(viewModel.drinkLabel)"
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 14) {
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text("💧 Water")
-                            .appBody(13, weight: .semibold)
-                            .foregroundStyle(AppColor.water)
-                        Spacer()
-                        if viewModel.foodMl > 0 {
-                            Text("incl. \(Int(viewModel.foodMl.rounded())) ml from food")
-                                .appBody(11)
-                                .foregroundStyle(AppColor.secondaryText)
-                        }
-                    }
-
-                    // The total and the bar are one fact, not two: read
-                    // separately, VoiceOver announced an unlabelled "1.75 / 2.5
-                    // L" and then a progress indicator restating it with no
-                    // words at all.
-                    VStack(alignment: .leading, spacing: 10) {
-                        Text(totalLabel)
-                            .appBody(24, weight: .bold)
-                            .foregroundStyle(AppColor.ink)
-                            .contentTransition(.numericText())
-                            .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: viewModel.totalMl)
-
-                        progressBar
-                    }
-                    .accessibilityElement(children: .ignore)
-                    .accessibilityLabel("Water")
-                    .accessibilityValue(totalAccessibilityValue)
-                }
-
-                // Side by side, not stacked — a vertical column read as
-                // "on top of and below each other" rather than the paired
-                // stepper this is; a horizontal pair also reads as one
-                // control at a glance, the way "-" and "+" normally do next
-                // to each other. Centred on the card's full height by the
-                // HStack above, same as before.
-                HStack(spacing: 8) {
-                    stepperButton(
-                        systemName: "minus", label: "Remove the last drink",
-                        isEnabled: viewModel.canUndo
-                    ) {
-                        Haptics.light()
-                        Task { await viewModel.adjust(drinks: -1) }
-                    }
-                    stepperButton(
-                        systemName: "plus", label: addLabel,
-                        isEnabled: true
-                    ) {
-                        // Fired here rather than after the write lands: a tap
-                        // has to be felt in the same frame it happens, and the
-                        // round trip is 200–400 ms away.
-                        Haptics.light()
-                        Task { await viewModel.adjust(drinks: 1) }
-                    }
-                }
-            }
-
-            if let errorMessage = viewModel.errorMessage {
-                Text(errorMessage)
-                    .appBody(12)
-                    .foregroundStyle(AppColor.destructive)
-            }
-        }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(AppColor.waterSoft)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
-    }
-
     /// Hand-rolled rather than a `ProgressView`: the system bar ignored
-    /// `.tint(AppColor.water)` and drew itself in the app's accent colour
-    /// instead (caught in a render — it was yellow inside a blue card), and
-    /// the `scaleEffect` needed to thicken it left a visible artifact at the
-    /// midpoint. RingChart is drawn by hand for the same reason.
+    /// `.tint(AppColor.water)` and drew itself in the app's accent colour.
+    /// Track and height match the macro card's bars.
     private var progressBar: some View {
         GeometryReader { geometry in
             ZStack(alignment: .leading) {
-                Capsule().fill(AppColor.surface.opacity(0.6))
+                Capsule().fill(AppColor.ringTrack)
                 Capsule()
                     .fill(AppColor.water)
                     .frame(width: max(0, geometry.size.width * viewModel.progress))
@@ -149,43 +157,59 @@ struct WaterCard: View {
             }
         }
         .frame(height: 6)
-        // The fill used to snap to its new width the instant the server
-        // answered; it now travels with the optimistic total.
         .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.85), value: viewModel.progress)
         .animation(reduceMotion ? nil : .spring(response: 0.45, dampingFraction: 0.85), value: viewModel.overshoot)
     }
 
-    /// Both buttons share one look now — matched size, filled blue circle,
-    /// white icon — rather than "+" being prominent and "-" a quieter
-    /// outline; the two are equally common taps (undo a drink, add one), so
-    /// nothing here should read as more or less important than the other.
-    private func stepperButton(
-        systemName: String, label: String, isEnabled: Bool, action: @escaping () -> Void
-    ) -> some View {
-        // Smaller than the old "+" (36pt), which was the larger of the two.
-        let diameter: CGFloat = 32
-        // Under the 44pt minimum touch target, so pad a tappable area back
-        // out to it — horizontally, since side by side it's the row's
-        // *width* that would otherwise overshoot the declared 8pt spacing,
-        // not its height. Same trick this app uses everywhere a visual size
-        // and a touch target differ (see the meal-row "+" in TodayView).
-        let growth = (44 - diameter) / 2
-        return Button(action: action) {
-            Image(systemName: systemName)
-                .font(.system(size: 13, weight: .bold))
-                .foregroundStyle(.white)
-                .frame(width: diameter, height: diameter)
-                .background(AppColor.water, in: Circle())
-                .opacity(isEnabled ? 1 : 0.5)
-                // The visual circle is the design's size; the tappable area
-                // is padded out to the 44pt minimum a thumb needs.
-                .frame(minWidth: 44, minHeight: 44)
-                .contentShape(Rectangle())
-                .padding(.horizontal, -growth)
+    /// Undo is the rare tap, so it's the quiet one: grey on the input
+    /// tone, where "+" wears water's tint like a meal row's "+" wears pink.
+    private var removeButton: some View {
+        Button {
+            Haptics.light()
+            Task { await viewModel.adjust(drinks: -1) }
+        } label: {
+            circle("minus", diameter: 32, fill: AppColor.inputBackground, glyph: AppColor.secondaryText)
+                .opacity(viewModel.canUndo ? 1 : 0.5)
         }
         .buttonStyle(.pressableCompact)
-        .disabled(!isEnabled)
-        .accessibilityLabel(label)
+        .disabled(!viewModel.canUndo)
+        .accessibilityLabel("Remove the last drink")
+    }
+
+    /// Tap adds one drink; hold for other amounts. The menu keeps the
+    /// one-tap path untouched while making a bottle or a can loggable.
+    private var addButton: some View {
+        Menu {
+            Button("\(Int((viewModel.mlPerDrink * 2).rounded())) ml · 2 drinks", systemImage: "drop.fill") {
+                Haptics.light()
+                Task { await viewModel.adjust(drinks: 2) }
+            }
+            Button("Custom amount…", systemImage: "pencil") { isLoggingAmount = true }
+        } label: {
+            circle("plus", diameter: 36, fill: AppColor.waterSoft, glyph: AppColor.water)
+        } primaryAction: {
+            // Fired here rather than after the write lands: a tap has to be
+            // felt in the same frame it happens.
+            Haptics.light()
+            Task { await viewModel.adjust(drinks: 1) }
+        }
+        .menuIndicator(.hidden)
+        .accessibilityLabel("Add a drink — \(viewModel.drinkLabel)")
+        .accessibilityHint("Hold for other amounts")
+    }
+
+    /// The visual circle is the design's size; the tappable area is padded
+    /// out to the 44pt minimum a thumb needs, horizontally trimmed back so
+    /// the pair keeps its 8pt spacing.
+    private func circle(_ systemName: String, diameter: CGFloat, fill: Color, glyph: Color) -> some View {
+        Image(systemName: systemName)
+            .font(.system(size: 14, weight: .bold))
+            .foregroundStyle(glyph)
+            .frame(width: diameter, height: diameter)
+            .background(fill, in: Circle())
+            .frame(minWidth: 44, minHeight: 44)
+            .contentShape(Rectangle())
+            .padding(.horizontal, -(44 - diameter) / 2)
     }
 }
 
@@ -198,6 +222,7 @@ struct LogWaterAmountView: View {
 
     @State private var amountText = ""
     @State private var validationError: String?
+    @FocusState private var amountFocused: Bool
 
     private var parsedAmount: Double? {
         Double(amountText.trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "."))
@@ -228,6 +253,7 @@ struct LogWaterAmountView: View {
                                 .appBody(15)
                                 .foregroundStyle(AppColor.ink)
                                 .keyboardType(.numberPad)
+                                .focused($amountFocused)
                             Text("ml")
                                 .appBody(13)
                                 .foregroundStyle(AppColor.secondaryText)
@@ -254,6 +280,9 @@ struct LogWaterAmountView: View {
         }
         .background(AppColor.surface)
         .onAppear { viewModel.clearError() }
+        // Opened from "Custom amount…" to type a number; no reason to make
+        // that a second tap.
+        .task { amountFocused = true }
     }
 
     private func add() async {
