@@ -29,11 +29,17 @@ xcuserdata/
 .swiftpm/
 .build/
 Packages/
-Package.resolved
 
 # CocoaPods / Carthage (unused today, harmless to pre-empt)
 Pods/
 Carthage/Build/
+
+# Signing material
+*.p12
+*.p8
+*.cer
+*.mobileprovision
+*.xcarchive
 
 # ---- macOS -------------------------------------------------------------
 .DS_Store
