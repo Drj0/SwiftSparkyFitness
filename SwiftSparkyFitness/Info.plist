@@ -2,50 +2,25 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- The server is self-hosted on the user's own LAN over plain HTTP, so
-	     ATS needs the local-networking exception. -->
 	<key>NSAppTransportSecurity</key>
 	<dict>
 		<key>NSAllowsLocalNetworking</key>
 		<true/>
 	</dict>
-
-	<!-- Required to resolve a Bonjour (.local) hostname via mDNS on a physical
-	     device. Without it the name never resolves on-device, even with local
-	     network permission granted — the request just fails. The simulator
-	     resolves .local without it, which is why this never surfaced there.
-	     NSLocalNetworkUsageDescription (the iOS 14+ privacy prompt) is set via
-	     the INFOPLIST_KEY_NSLocalNetworkUsageDescription build setting, not
-	     here, so it stays in one place. -->
 	<key>NSBonjourServices</key>
 	<array>
 		<string>_http._tcp</string>
 	</array>
-
-	<!-- CloudKit mirroring (Module 11) is pushed changes from other devices;
-	     without the remote-notification background mode the system receives
-	     the push but never hands it to the app, so an import only happens on
-	     the next launch or activation. Apple's TN3163 names this as the
-	     cause when a peer's change takes minutes to appear. No push
-	     entitlement or registration is needed — CloudKit's own subscription
-	     delivers it. -->
-	<key>UIBackgroundModes</key>
-	<array>
-		<string>remote-notification</string>
-	</array>
-
-	<!-- The design's two typefaces, as static instances cut from the upstream
-	     variable fonts (SIL Open Font License; see Resources/Fonts/OFL-*.txt).
-	     Only the three weights the app actually uses are bundled. Resources in
-	     a synchronized folder land flat in the bundle, so these are bare
-	     filenames, not paths. Reference them by PostScript name, which is NOT
-	     the filename — see AppFont.swift. -->
 	<key>UIAppFonts</key>
 	<array>
 		<string>WorkSans-Regular.ttf</string>
 		<string>WorkSans-SemiBold.ttf</string>
 		<string>WorkSans-Bold.ttf</string>
 		<string>Newsreader-SemiBold.ttf</string>
+	</array>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
 	</array>
 </dict>
 </plist>
