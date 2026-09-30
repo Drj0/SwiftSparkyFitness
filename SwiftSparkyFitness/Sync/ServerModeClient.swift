@@ -51,10 +51,13 @@ final class ServerModeClient: APIClientProtocol {
     }
 
     /// The server when it answers, this device's own copy when it can't.
+    /// Known to be out of range, it doesn't wait for the server to time out
+    /// again; the sync's own retries notice when it's back.
     private func remoteFirst<T>(_ call: () async throws -> T, fallback: () async throws -> T) async throws -> T {
+        guard sync.isReachable else { return try await fallback() }
         do {
             return try await call()
-        } catch where error.isTransientFailure {
+        } catch where error.isTransientFailure || ServerSync.isNotTheServer(error) {
             return try await fallback()
         }
     }
@@ -120,8 +123,9 @@ final class ServerModeClient: APIClientProtocol {
             SessionCache.clear()
             sync.deactivate(removingCopy: false)
             return nil
-        case .failure(let error):
-            guard error.isTransientFailure || error is DecodingError else { throw error }
+        case .failure:
+            // APIClient turns a definite "signed out" into nil; any error
+            // left is the server not answering properly, not a sign-out.
             sync.activate(user: cached, serverURL: serverURL)
             return cached
         }

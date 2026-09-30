@@ -74,6 +74,60 @@ final class ServerSyncTests: XCTestCase {
         XCTAssertEqual(afterSync.foodEntries.count, 1, "nothing came back twice")
     }
 
+    /// A weigh-in logged offline for a day the device never pulled mustn't
+    /// clear that day's other measurements on the server.
+    func testACheckInLoggedOfflineKeepsTheServersOtherMeasurements() async throws {
+        let server = FakeSyncServer()
+        _ = try await server.backing.upsertBodyMeasurements(BodyMeasurementsInput(date: today, values: [.waist: 80]))
+        server.isOffline = true
+        let (sync, device) = makeSync(server)
+        _ = try await device.upsertBodyMeasurements(BodyMeasurementsInput(date: today, values: [.weight: 70]))
+        await sync.syncNow()
+        XCTAssertEqual(sync.status, .offline)
+
+        server.isOffline = false
+        await sync.syncNow()
+
+        let onServer = try await server.backing.bodyMeasurements(date: today)
+        XCTAssertEqual(onServer.value(for: .weight), 70)
+        XCTAssertEqual(onServer.value(for: .waist), 80, "the server's own measurement survives")
+    }
+
+    /// A change the server refuses stays waiting and shows as a problem —
+    /// not as "up to date", and not as "offline" either: the server answered.
+    func testARefusedChangeIsAProblemNotUpToDateOrOffline() async throws {
+        let server = FakeSyncServer()
+        let (sync, device) = makeSync(server)
+        await sync.syncNow()
+        let food = try await oats(device)
+        server.failNext["createFoodEntry"] = FakeSyncServer.refused
+        try await device.createFoodEntry(FoodEntryInput(food: food, mealTypeId: "lunch", quantity: 100, entryDate: today))
+
+        await sync.syncNow()
+
+        guard case .failed = sync.status else { return XCTFail("expected .failed, got \(sync.status)") }
+        XCTAssertTrue(sync.isReachable)
+        XCTAssertGreaterThan(sync.pendingCount, 0)
+
+        await sync.syncNow()
+        XCTAssertEqual(sync.status, .idle, "sent on the next try")
+        XCTAssertEqual(sync.pendingCount, 0)
+    }
+
+    /// A reverse proxy whose route went with the stopped server answers 404
+    /// for everything: that's out of range, not a sync problem.
+    func testAProxy404ReadsAsOffline() async throws {
+        let server = FakeSyncServer()
+        let (sync, _) = makeSync(server)
+        await sync.syncNow()
+        for read in ["serverVersion", "mealTypes", "dailySummary", "waterLog", "userPreferences", "goalsRange", "bodyMeasurementsRange"] {
+            server.failNext[read] = FakeSyncServer.notFound
+        }
+        await sync.syncNow()
+        XCTAssertEqual(sync.status, .offline)
+        XCTAssertFalse(sync.isReachable)
+    }
+
     func testAChangeMadeOnTheServerArrivesHere() async throws {
         let server = FakeSyncServer()
         let (sync, device) = makeSync(server)

@@ -402,15 +402,15 @@ final class APIClient: APIClientProtocol {
             // A 200 that isn't a session response at all — typically a Wi-Fi
             // login page answering for every address — isn't a sign-out.
             throw error
-        } catch let error as APIError where error.isTransientFailure {
-            // A server error (a proxy's 502 while it restarts) isn't a
-            // sign-out either: treated like being unreachable, so server
-            // mode opens on this device's copy instead of the login screen.
-            throw error
-        } catch {
-            // The server answered (a 401, or a body that isn't a session):
-            // genuinely signed out.
+        } catch let error as APIError where error.isUnauthorized {
+            // The server itself said no: genuinely signed out.
             return nil
+        } catch {
+            // Anything else — a proxy's 502 while the server restarts, or its
+            // 404 while the server behind it is stopped — isn't a sign-out:
+            // treated like being unreachable, so server mode opens on this
+            // device's copy instead of the login screen.
+            throw error
         }
     }
 

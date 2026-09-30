@@ -68,7 +68,12 @@ final class AuthViewModel: ObservableObject {
     private func handleSessionExpired() {
         guard session != nil else { return }
         session = nil
-        bannerMessage = "Your session expired — please sign in again."
+        // Server mode's copy stays on this device through sign-in; saying so
+        // stops "session expired" reading as "what I logged offline is gone".
+        let pending = AppMode.isLocal ? 0 : ServerSync.shared.pendingCount
+        bannerMessage = pending > 0
+            ? "Your session expired — sign in again to sync \(pending) change\(pending == 1 ? "" : "s") saved on this iPhone."
+            : "Your session expired — please sign in again."
     }
 
     var canSubmit: Bool {

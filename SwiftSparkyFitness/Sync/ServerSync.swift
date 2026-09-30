@@ -58,6 +58,9 @@ final class ServerSync: ObservableObject {
     /// How long a day just refreshed is trusted before opening it re-reads.
     static let dayFreshness: TimeInterval = 60
     static let periodicInterval: Duration = .seconds(300)
+    /// Out of range, the server is tried this often instead — a stopped
+    /// server coming back changes nothing the network monitor can see.
+    static let offlineRetryInterval: Duration = .seconds(60)
 
     private var queue: Task<Void, Never>?
     private var scheduled: Task<Void, Never>?
@@ -161,8 +164,11 @@ final class ServerSync: ObservableObject {
         startPeriodic()
     }
 
+    /// Leaving the app: an edit still in its debounce is sent now, inside
+    /// the background time `sync()` asks for, not left for the next launch.
     func resignedActive() {
         periodic?.cancel()
+        if pendingCount > 0 { schedule(after: .zero) }
     }
 
     /// Sync now and wait for it — Settings' "Sync now", leaving server mode.
@@ -180,9 +186,10 @@ final class ServerSync: ObservableObject {
     /// refresh then changes anything the screens are told to reload.
     func refresh(day: Date, timeout: Duration = .seconds(4)) async {
         guard isActive else { return }
-        // Known to be out of range: show this device's copy at once and try
-        // in the background, rather than making every day wait to time out.
-        let timeout = isReachable ? timeout : .zero
+        // Known to be out of range: show this device's copy at once. Queuing
+        // a sync per day opened would only pile up behind a server that
+        // times out; the offline retries bring every recent day back anyway.
+        guard isReachable else { return }
         let key = LocalDay.key(day)
         if let at = refreshedAt[key], Date().timeIntervalSince(at) < Self.dayFreshness { return }
         refreshedAt[key] = Date()
@@ -277,13 +284,11 @@ final class ServerSync: ObservableObject {
         // A sync started as the user leaves the app gets to finish: iOS
         // suspending it between the server accepting a row and the link
         // being saved is exactly the case that costs a duplicate later.
-        let background = UIApplication.shared.beginBackgroundTask(withName: "Sync diary")
-        defer {
-            if background != .invalid { UIApplication.shared.endBackgroundTask(background) }
-        }
+        beginBackgroundTime()
+        defer { endBackgroundTime() }
 
         do {
-            _ = try await ServerPush(store: store, server: server, account: account).run()
+            let pushed = try await ServerPush(store: store, server: server, account: account).run()
 
             let today = Date()
             let range: (Date, Date)
@@ -302,8 +307,15 @@ final class ServerSync: ObservableObject {
             guard generation == startedIn else { return false }
             if isFull { InitialPull.markDone(account: account) }
             lastSyncedAt = Date()
-            status = .idle
             isReachable = true
+            // Rows the server refused stay waiting; saying "up to date" over
+            // them would hide changes that never arrive.
+            if let refused = pushed.failures.first {
+                let count = pushed.failures.count
+                status = .failed("\(count) change\(count == 1 ? "" : "s") couldn't be sent: \(refused.message)")
+            } else {
+                status = .idle
+            }
             updatePending()
             let changed = report.added + report.updated + report.deleted > 0
             // Whole-history and routine pulls land after the screens have
@@ -314,20 +326,51 @@ final class ServerSync: ObservableObject {
             return changed
         } catch {
             guard generation == startedIn else { return false }
-            if error.isTransientFailure {
+            if error.isTransientFailure || Self.isNotTheServer(error) {
                 status = .offline
                 isReachable = false
             } else if error.isUnauthorized {
                 // APIClient has already posted .sessionExpired; sign-in
                 // brings the user back to this same copy, changes intact.
                 status = .idle
+                isReachable = true
             } else {
+                // The server answered, just not well: it's reachable, and
+                // the problem is shown as one rather than as "offline".
                 Self.logger.error("Sync failed: \(error.localizedDescription, privacy: .public)")
                 status = .failed(error.localizedDescription)
+                isReachable = true
             }
             updatePending()
             return false
         }
+    }
+
+    /// A 404 from endpoints every SparkyFitness server has, or a body that
+    /// isn't JSON (a Wi-Fi login page), means something else answered in the
+    /// server's place — a reverse proxy whose route went with the stopped
+    /// server, say. That's out of range, not a sync problem. (A 404 about one
+    /// row is handled inside the push and never reaches here.)
+    static func isNotTheServer(_ error: Error) -> Bool {
+        error.isNotFound || error is DecodingError
+    }
+
+    private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+
+    private func beginBackgroundTime() {
+        endBackgroundTime()
+        // Out of time, iOS kills an app still holding the task. Ending it
+        // lets the app be suspended instead; the sync resumes with it, and
+        // links saved so far keep a re-send from duplicating anything.
+        backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "Sync diary") { [weak self] in
+            MainActor.assumeIsolated { self?.endBackgroundTime() }
+        }
+    }
+
+    private func endBackgroundTime() {
+        guard backgroundTask != .invalid else { return }
+        UIApplication.shared.endBackgroundTask(backgroundTask)
+        backgroundTask = .invalid
     }
 
     private func updatePending() {
@@ -349,9 +392,11 @@ final class ServerSync: ObservableObject {
         startPeriodic()
     }
 
-    /// Back on a network: the likeliest moment the server is reachable again.
+    /// Back on a network, or onto a different one (cellular to home Wi-Fi,
+    /// where a server on the LAN lives): the likeliest moments the server is
+    /// reachable again.
     private func pathChanged(satisfied: Bool) {
-        let cameBack = satisfied && !lastPathSatisfied
+        let cameBack = satisfied && (!lastPathSatisfied || !isReachable)
         lastPathSatisfied = satisfied
         if !satisfied, isActive {
             status = .offline
@@ -363,10 +408,17 @@ final class ServerSync: ObservableObject {
     private func startPeriodic() {
         periodic?.cancel()
         periodic = Task { [weak self] in
+            // Short ticks, deciding after each: a sleep chosen up front while
+            // reachable ran the full five minutes after the server went away.
+            var sinceLast: Duration = .zero
             while !Task.isCancelled {
-                try? await Task.sleep(for: Self.periodicInterval)
-                guard !Task.isCancelled else { return }
-                self?.schedule(after: .zero)
+                try? await Task.sleep(for: Self.offlineRetryInterval)
+                guard !Task.isCancelled, let self else { return }
+                sinceLast += Self.offlineRetryInterval
+                if !self.isReachable || sinceLast >= Self.periodicInterval {
+                    sinceLast = .zero
+                    self.schedule(after: .zero)
+                }
             }
         }
     }

@@ -186,45 +186,85 @@ extension MainTabView {
 
 private extension View {
     /// Server mode works from this device's copy; this says so while the
-    /// server is out of reach, rather than blocking anything. Applied to each
-    /// tab's own content, not the TabView: an inset on the TabView isn't
-    /// passed down, and the banner sat on top of each screen's title.
+    /// server is out of reach, or a sync has failed, rather than blocking
+    /// anything. Applied to each tab's own content, not the TabView: an inset
+    /// on the TabView isn't passed down, and the banner sat on top of each
+    /// screen's title.
     func offlineBanner(_ sync: ServerSync) -> some View {
         safeAreaInset(edge: .top, spacing: 0) {
-            if !AppMode.isLocal, sync.isActive, !sync.isReachable {
-                OfflineBanner(pending: sync.pendingCount)
+            if !AppMode.isLocal, sync.isActive, SyncBanner.shows(sync) {
+                SyncBanner(sync: sync)
                     .transition(.move(edge: .top).combined(with: .opacity))
             }
         }
-        .animation(.snappy(duration: 0.25), value: sync.isReachable)
+        .animation(.snappy(duration: 0.25), value: SyncBanner.shows(sync))
     }
 }
 
 /// "You're offline" without being in the way: one line under the status bar,
-/// no button, nothing to dismiss. Everything still works; this only says
-/// where changes are waiting.
-private struct OfflineBanner: View {
-    let pending: Int
+/// nothing to dismiss. Everything still works; this only says where changes
+/// are waiting. Tapping it tries the server now instead of waiting for the
+/// next automatic attempt.
+private struct SyncBanner: View {
+    @ObservedObject var sync: ServerSync
+
+    static func shows(_ sync: ServerSync) -> Bool {
+        if case .failed = sync.status { return true }
+        return !sync.isReachable
+    }
+
+    /// Only a retry the user asked for shows as one: automatic attempts
+    /// pass through `.syncing` too, and the banner shouldn't blink for them.
+    @State private var isRetrying = false
+
+    private var text: String {
+        let pending = sync.pendingCount
+        let waiting = "\(pending) change\(pending == 1 ? "" : "s") waiting to sync"
+        if isRetrying { return "Trying your server…" }
+        if case .failed = sync.status {
+            return pending > 0 ? "Couldn't sync · \(waiting)" : "Couldn't sync · tap to retry"
+        }
+        return pending > 0 ? "Server offline · \(waiting)" : "Server offline · showing this iPhone's copy"
+    }
 
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "icloud.slash")
-                .font(.system(size: 12, weight: .semibold))
-                .accessibilityHidden(true)
-            Text(pending > 0
-                 ? "Server offline · \(pending) change\(pending == 1 ? "" : "s") will sync when it's back"
-                 : "Server offline · showing this iPhone's copy")
-                .appBody(12, weight: .semibold)
-                .lineLimit(1)
-                .minimumScaleFactor(0.8)
+        Button {
+            isRetrying = true
+            Task {
+                await sync.syncNow(timeout: .seconds(15))
+                isRetrying = false
+            }
+        } label: {
+            HStack(spacing: 6) {
+                if isRetrying {
+                    ProgressView().controlSize(.mini)
+                } else {
+                    Image(systemName: "icloud.slash")
+                        .font(.system(size: 12, weight: .semibold))
+                        .accessibilityHidden(true)
+                }
+                Text(text)
+                    .appBody(12, weight: .semibold)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                if !isRetrying {
+                    Image(systemName: "arrow.clockwise")
+                        .font(.system(size: 11, weight: .semibold))
+                        .accessibilityHidden(true)
+                }
+            }
+            .foregroundStyle(AppColor.secondaryText)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(minHeight: 28)
+            .background(AppColor.surface, in: Capsule())
+            .overlay(Capsule().stroke(AppColor.hairline, lineWidth: 1))
+            .contentShape(Capsule())
         }
-        .foregroundStyle(AppColor.secondaryText)
-        .padding(.horizontal, 12)
-        .padding(.vertical, 6)
-        .background(AppColor.surface, in: Capsule())
-        .overlay(Capsule().stroke(AppColor.hairline, lineWidth: 1))
+        .buttonStyle(.plain)
+        .disabled(isRetrying)
         .frame(maxWidth: .infinity)
         .padding(.bottom, 4)
-        .accessibilityElement(children: .combine)
+        .accessibilityHint("Tries your server again")
     }
 }

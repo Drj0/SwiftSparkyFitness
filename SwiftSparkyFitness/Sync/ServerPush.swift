@@ -498,10 +498,17 @@ final class ServerPush {
             .filter { Self.shouldPush($0) && store.needsPush($0, account: account) }
             .map { row -> Snapshot in
                 let measurements = LocalAPIClient.measurements(row)
+                // Once linked, every field, nil included: the upsert clears
+                // what's absent here, so an edit's cleared field clears there
+                // too. Never sent before (logged offline, say), only what was
+                // entered: the server may hold that day's other measurements
+                // from elsewhere, and a missing key leaves them alone.
+                let linked = store.link(for: row, account: account) != nil
                 var values: [BodyField: Double?] = [:]
-                // Every field, nil included: the upsert clears what's absent
-                // here, so the server's day ends up identical to this one.
-                for field in BodyField.allCases { values[field] = .some(measurements.value(for: field)) }
+                for field in BodyField.allCases {
+                    let value = measurements.value(for: field)
+                    if linked || value != nil { values[field] = .some(value) }
+                }
                 return Snapshot(id: row.id, dayKey: row.dayKey, values: values, version: row.updatedAt)
             }
         for checkIn in checkIns {
