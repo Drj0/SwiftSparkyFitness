@@ -340,7 +340,7 @@ struct DiaryView: View {
             HStack {
                 VStack(alignment: .leading, spacing: 2) {
                     Text(entry.foodName).appBody(15, weight: .semibold).foregroundStyle(AppColor.ink)
-                    Text("\(Int(entry.quantity))\(entry.unit)").appBody(12).foregroundStyle(AppColor.secondaryText)
+                    Text(FoodVariant.amountText(entry.quantity, unit: entry.unit)).appBody(12).foregroundStyle(AppColor.secondaryText)
                 }
                 Spacer()
                 Text("\(Int(entry.calories))").appBody(14, weight: .semibold).foregroundStyle(AppColor.ink)
@@ -354,7 +354,7 @@ struct DiaryView: View {
         }
         .buttonStyle(.pressable)
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(entry.foodName), \(Int(entry.quantity))\(entry.unit)")
+        .accessibilityLabel("\(entry.foodName), \(FoodVariant.amountText(entry.quantity, unit: entry.unit))")
         .accessibilityValue("\(Int(entry.calories)) calories")
         .accessibilityHint("Opens for editing")
     }

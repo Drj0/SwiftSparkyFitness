@@ -332,3 +332,31 @@ final class LocalStore {
         seedIfNeeded()
     }
 }
+
+#if DEBUG
+extension LocalStore {
+    /// SwiftData has no `initializeCloudKitSchema()`; CloudKit only learns a
+    /// record type from the first record written. Launch once from Xcode with
+    /// env `CLOUDKIT_SCHEMA_SEED=1` (iCloud mode, signed in) to write one
+    /// throwaway row of each sync-only model, wait for the Development schema
+    /// to show all 13 types, then launch with `=clean` to remove them.
+    func runCloudKitSchemaSeedIfRequested() {
+        let mode = ProcessInfo.processInfo.environment["CLOUDKIT_SCHEMA_SEED"]
+        let marker = "cloudkit-schema-seed"
+        switch mode {
+        case "1":
+            insert(LocalWaterContainer(id: -1, name: marker, volume: 1))
+            insert(LocalSyncLink(kind: marker, localKey: marker, serverId: marker, serverAccount: marker))
+            insert(LocalTombstone(kind: marker, localKey: marker))
+            insert(LocalHandoff(fromMode: marker, toMode: marker))
+        case "clean":
+            all(LocalWaterContainer.self).filter { $0.name == marker }.forEach(delete)
+            all(LocalSyncLink.self).filter { $0.kind == marker }.forEach(delete)
+            all(LocalTombstone.self).filter { $0.kind == marker }.forEach(delete)
+            all(LocalHandoff.self).filter { $0.fromMode == marker }.forEach(delete)
+        default:
+            break
+        }
+    }
+}
+#endif

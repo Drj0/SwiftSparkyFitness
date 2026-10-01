@@ -68,66 +68,28 @@ extension LocalAPIClient {
         return FoodSuggestions(recentFoods: Array(recents), topFoods: Array(top))
     }
 
-    /// OpenFoodFacts, called straight from the device. There is no server to
-    /// proxy it in this mode, and unlike USDA it needs no API key.
-    ///
-    /// Two things verified against the live API rather than assumed:
-    ///
-    /// - The response is the same `products` shape the backend proxies, so
-    ///   `OpenFoodFactsSearchResponse` decodes it unchanged — including its
-    ///   per-product leniency, without which one malformed entry discards the
-    ///   whole batch.
-    /// - A **plain** decoder is mandatory. The shared one converts from
-    ///   snake_case, which rewrites `product_name` to `productName` *before*
-    ///   matching, so every field decodes as nil and search silently returns
-    ///   nothing. That exact bug shipped once already; see
-    ///   OpenFoodFactsProduct's header.
-    ///
-    /// The host answers an intermittent 503 (measured: roughly one request in
-    /// four) with an HTML error page. That throws, which is correct — the food
-    /// search UI already treats one source failing as a degrade rather than an
-    /// error, as long as the other source still has results.
+    func foodLogStats(since start: Date) async -> [String: FoodLogStat] {
+        let startKey = LocalDay.key(start)
+        let weekKey = LocalDay.key(Calendar.current.date(byAdding: .day, value: -6, to: Date()) ?? Date())
+        var stats: [String: FoodLogStat] = [:]
+        var lastLogged: [String: Date] = [:]
+        for entry in store.fetch(LocalFoodEntry.self, where: #Predicate { $0.dayKey >= startKey }, sortBy: [SortDescriptor(\.dayKey)]) {
+            let key = FoodLogStat.key(name: entry.foodName, brand: entry.brandName)
+            var stat = stats[key] ?? FoodLogStat(timesThisWeek: 0, lastQuantity: entry.quantity)
+            if entry.dayKey >= weekKey { stat.timesThisWeek += 1 }
+            if entry.entryDate >= lastLogged[key, default: .distantPast] {
+                stat.lastQuantity = entry.quantity
+                lastLogged[key] = entry.entryDate
+            }
+            stats[key] = stat
+        }
+        return stats
+    }
+
+    /// Called straight from the device — same as server mode; see
+    /// OpenFoodFactsSearch.
     func searchExternalFoods(query: String) async throws -> [Food] {
-        let trimmed = query.trimmingCharacters(in: .whitespaces)
-        guard !trimmed.isEmpty else { return [] }
-
-        var components = URLComponents(string: "https://world.openfoodfacts.org/cgi/search.pl")!
-        components.queryItems = [
-            URLQueryItem(name: "search_terms", value: trimmed),
-            URLQueryItem(name: "search_simple", value: "1"),
-            URLQueryItem(name: "action", value: "process"),
-            URLQueryItem(name: "json", value: "1"),
-            URLQueryItem(name: "page_size", value: "20"),
-            // Asking for only the fields that are mapped keeps a search
-            // response to a few KB instead of a few hundred.
-            URLQueryItem(name: "fields", value: "code,brands,product_name,product_name_en,nutriments")
-        ]
-        guard let url = components.url else { throw APIError.invalidResponse }
-
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 12
-        // OpenFoodFacts asks identifying clients to name themselves, and
-        // answers anonymous default-agent traffic less reliably.
-        request.setValue("SwiftSparkyFitness/1.0 (iOS; local mode)", forHTTPHeaderField: "User-Agent")
-
-        var (data, response) = try await URLSession.shared.data(for: request)
-        // OpenFoodFacts answers 503 to roughly one search in six (measured:
-        // 2 of 12 back-to-back), and a query that worked a minute ago then
-        // came back empty. One short retry absorbs almost all of those.
-        if let http = response as? HTTPURLResponse, [429, 502, 503].contains(http.statusCode) {
-            try await Task.sleep(nanoseconds: 700_000_000)
-            (data, response) = try await URLSession.shared.data(for: request)
-        }
-        guard let http = response as? HTTPURLResponse else { throw APIError.invalidResponse }
-        guard (200..<300).contains(http.statusCode) else {
-            throw APIError.server(
-                message: "OpenFoodFacts is busy right now. Try again in a moment.",
-                code: "OFF_\(http.statusCode)"
-            )
-        }
-
-        let decoded = try JSONDecoder().decode(OpenFoodFactsSearchResponse.self, from: data)
-        return decoded.products.compactMap(\.asFood)
+        try await OpenFoodFactsSearch.search(query)
     }
 
     /// Always empty: FoodData Central needs a per-account key that in server

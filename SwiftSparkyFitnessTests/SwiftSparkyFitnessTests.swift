@@ -175,8 +175,10 @@ final class SwiftSparkyFitnessTests: XCTestCase {
             if let localSearchError { throw localSearchError }
             return localFoodsToReturn
         }
+        var externalSearchDelay: UInt64 = 0
         func searchExternalFoods(query: String) async throws -> [Food] {
             externalSearchQueries.append(query)
+            if externalSearchDelay > 0 { try await Task.sleep(nanoseconds: externalSearchDelay) }
             if let externalSearchError { throw externalSearchError }
             return externalFoodsToReturn
         }
@@ -196,7 +198,15 @@ final class SwiftSparkyFitnessTests: XCTestCase {
             return Food(id: "created-food", name: input.name, brand: input.brand, defaultVariant: nil)
         }
         func materializeExternalFood(_ food: Food) async throws -> Food { fatalError("unused") }
-        func createFoodEntry(_ input: FoodEntryInput) async throws -> String { "created-entry" }
+        var createdFoodEntries: [FoodEntryInput] = []
+        var createFoodEntryError: Error?
+        func createFoodEntry(_ input: FoodEntryInput) async throws -> String {
+            if let createFoodEntryError { throw createFoodEntryError }
+            createdFoodEntries.append(input)
+            return "created-entry"
+        }
+        var logStatsToReturn: [String: FoodLogStat] = [:]
+        func foodLogStats(since start: Date) async -> [String: FoodLogStat] { logStatsToReturn }
         func updateFoodEntry(id: String, _ input: FoodEntryInput) async throws {}
         func deleteFoodEntry(id: String) async throws {}
         var ownedExercisesToReturn: [Exercise] = []
@@ -1519,14 +1529,18 @@ final class SwiftSparkyFitnessTests: XCTestCase {
 
     // MARK: - Food search
 
+    /// Tagged with the source the real client would give it: results are
+    /// ranked by source, so an OFF fixture posing as the user's own food
+    /// would be scored as one.
     private func makeFood(_ id: String, _ name: String) -> Food {
-        Food(id: id, name: name, brand: nil, defaultVariant: nil)
+        let source: FoodSource = id.hasPrefix("off-") ? .openFoodFacts : id.hasPrefix("usda-") || id.hasPrefix("generic-") ? .usda : .local
+        return Food(id: id, name: name, brand: nil, defaultVariant: nil, source: source)
     }
 
     @MainActor
     func testBlankQueryStaysIdleAndAsksTheNetworkNothing() async {
         let stub = StubAPIClient()
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
 
         viewModel.query = "   "
         await viewModel.search()
@@ -1543,7 +1557,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         let stub = StubAPIClient()
         stub.localFoodsToReturn = [makeFood("local-1", "My Porridge")]
         stub.externalFoodsToReturn = [makeFood("off-1", "Porridge Oats")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
 
         viewModel.query = "porridge"
         await viewModel.search()
@@ -1566,7 +1580,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         stub.localSearchError = down
         stub.externalSearchError = down
         stub.usdaSearchError = down
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
         viewModel.query = "porridge"
         await viewModel.search()
         XCTAssertEqual(viewModel.outcome.kindID, "networkError")
@@ -1576,13 +1590,13 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         // be a false answer. Retry is what the user can actually act on.
         let partial = StubAPIClient()
         partial.externalSearchError = APIError.server(message: "down", code: nil)
-        let partialViewModel = FoodSearchViewModel(mealTypes: [], apiClient: partial)
+        let partialViewModel = FoodSearchViewModel(mealTypes: [], apiClient: partial, indianFoods: .none)
         partialViewModel.query = "porridge"
         await partialViewModel.search()
         XCTAssertEqual(partialViewModel.outcome.kindID, "networkError")
 
         // Every source answering with nothing is a genuine "no results".
-        let empty = FoodSearchViewModel(mealTypes: [], apiClient: StubAPIClient())
+        let empty = FoodSearchViewModel(mealTypes: [], apiClient: StubAPIClient(), indianFoods: .none)
         empty.query = "porridge"
         await empty.search()
         XCTAssertEqual(empty.outcome.kindID, "noResults")
@@ -1594,7 +1608,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         let stub = StubAPIClient()
         stub.externalSearchError = APIError.server(message: "off is down", code: nil)
         stub.localFoodsToReturn = [makeFood("local-1", "My Porridge")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
 
         viewModel.query = "porridge"
         await viewModel.search()
@@ -1634,7 +1648,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
             recentFoods: [makeFood("r1", "Greek Yoghurt")],
             topFoods: [makeFood("t1", "Porridge Oats")]
         )
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
 
         await viewModel.loadRecents()
         XCTAssertEqual(viewModel.recentFoods.map(\.id), ["r1"])
@@ -1652,7 +1666,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
     func testFailingToLoadRecentsIsSilent() async {
         let stub = StubAPIClient()
         stub.suggestionsError = APIError.server(message: "down", code: nil)
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
 
         await viewModel.loadRecents()
 
@@ -1666,7 +1680,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
     func testSearchingDoesNotRefetchSuggestions() async {
         let stub = StubAPIClient()
         stub.localFoodsToReturn = [makeFood("local-1", "Porridge")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
 
         viewModel.query = "porridge"
         await viewModel.search()
@@ -1818,7 +1832,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         stub.localFoodsToReturn = [makeFood("local-1", "My Apple")]
         stub.externalFoodsToReturn = [makeFood("off-1", "Apple Juice Carton")]
         stub.usdaFoodsToReturn = [makeFood("usda-1", "Apple, raw")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
 
         viewModel.query = "apple"
         await viewModel.search()
@@ -1841,7 +1855,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         let stub = StubAPIClient()
         stub.usdaFoodsToReturn = (1...8).map { makeFood("generic-\($0)", "Cereal, O's variant \($0)") }
         stub.externalFoodsToReturn = [makeFood("off-cheerios", "Cheerios")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
 
         viewModel.query = "cheerios"
         await viewModel.search()
@@ -1849,8 +1863,9 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         guard case .results(let foods) = viewModel.outcome else {
             return XCTFail("expected results, got \(viewModel.outcome)")
         }
+        // The only result whose name matches the query at all leads outright.
         let brandedRank = try? XCTUnwrap(foods.firstIndex { $0.id == "off-cheerios" })
-        XCTAssertEqual(brandedRank, 1, "the branded match must not be pushed below the generics")
+        XCTAssertEqual(brandedRank, 0, "the branded match must not be pushed below the generics")
     }
 
     /// A server with no USDA provider configured returns nothing from it, and
@@ -1860,7 +1875,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         let stub = StubAPIClient()
         stub.usdaSearchError = APIError.server(message: "no provider", code: nil)
         stub.externalFoodsToReturn = [makeFood("off-1", "Cheerios")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
 
         viewModel.query = "cheerios"
         await viewModel.search()
@@ -3316,5 +3331,677 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         let saved = await viewModel.save()
         XCTAssertTrue(saved)
         XCTAssertEqual(stub.createdExerciseEntries.first?.durationMinutes, 6)
+    }
+}
+
+// MARK: - Indian food search (INDB, Open Food Facts India, ranking)
+
+extension IndianFoodDB {
+    /// An empty databank, for tests that assert exact result lists.
+    static var none: IndianFoodDB { IndianFoodDB(source: { [] }) }
+
+    static func with(_ rows: [IndianFoodDB.Row]) -> IndianFoodDB { IndianFoodDB(source: { rows }) }
+}
+
+extension SwiftSparkyFitnessTests {
+
+    private func indbRow(_ id: String, _ name: String, unit: String = "bowl", kcal: Double = 150) -> IndianFoodDB.Row {
+        IndianFoodDB.Row(id: id, name: name, unit: unit, kcal: kcal, protein: 4, carbs: 20, fat: 5)
+    }
+
+    private func food(_ id: String, _ name: String, _ source: FoodSource, brand: String? = nil, complete: Bool = true) -> Food {
+        let variant = FoodVariant(id: "\(id)-v", servingSize: 100, servingUnit: "g", calories: 100,
+                                  protein: complete ? 1 : nil, carbs: complete ? 1 : nil, fat: complete ? 1 : nil)
+        return Food(id: id, name: name, brand: brand, defaultVariant: variant, source: source)
+    }
+
+    // MARK: INDB
+
+    /// INDB's per-100g values are on raw-ingredient weight, so a result must
+    /// log in its household unit — "1 chapati" — never in grams.
+    func testIndbRowMapsToOneHouseholdUnit() {
+        let food = indbRow("ASC096", "Chapati/Roti", unit: "chapati", kcal: 73).asFood
+        XCTAssertEqual(food.id, "indb-ASC096")
+        XCTAssertEqual(food.source, .indb)
+        XCTAssertTrue(food.isExternal, "logging it must materialise it first, like any provider result")
+        XCTAssertEqual(food.defaultVariant?.servingSize, 1)
+        XCTAssertEqual(food.defaultVariant?.servingUnit, "chapati")
+        XCTAssertEqual(food.defaultVariant?.calories, 73)
+    }
+
+    func testBundledIndbLoadsWithUsableRows() throws {
+        let rows = try IndianFoodDB.bundled()
+        XCTAssertGreaterThan(rows.count, 700)
+        XCTAssertTrue(rows.allSatisfy { $0.kcal > 0 && !$0.unit.isEmpty && !$0.name.isEmpty })
+        // Whole-recipe totals posing as one unit ("1 poori 921 kcal") are
+        // filtered out by tools/indb_to_json.py.
+        XCTAssertTrue(rows.allSatisfy { $0.kcal <= 900 }, "no single unit is a whole recipe")
+        XCTAssertEqual(Set(rows.map(\.id)).count, rows.count, "ids must be unique — they become food ids")
+        let roti = try XCTUnwrap(rows.first { $0.name == "Chapati/Roti" })
+        XCTAssertEqual(roti.unit, "chapati")
+        XCTAssertEqual(roti.kcal, 73, accuracy: 5)
+    }
+
+    /// Word-prefix matching, not substring: "lassi" must not find "Classic
+    /// club sandwich", but "dal" finds "Moong dal" and "rajma" finds "Rajmah".
+    func testIndbMatchesWordStartsAndSpellingVariants() async {
+        let db = IndianFoodDB.with([
+            indbRow("1", "Sweet Lassi (Meethi lassi)"),
+            indbRow("2", "Classic club sandwich"),
+            indbRow("3", "Moong dal"),
+            indbRow("4", "Kidney bean curry (Rajmah curry)"),
+            indbRow("5", "Chickpeas curry (Safed channa curry)"),
+        ])
+        let lassi = await db.search("lassi").map(\.id)
+        XCTAssertEqual(lassi, ["1"])
+        let dal = await db.search("dal").map(\.id)
+        XCTAssertEqual(dal, ["3"])
+        let rajma = await db.search("rajma").map(\.id)
+        XCTAssertEqual(rajma, ["4"])
+        let chana = await db.search("chana").map(\.id)
+        XCTAssertEqual(chana, ["5"], "chana and channa are the same dish")
+        let dhal = await db.search("dhal").map(\.id)
+        XCTAssertEqual(dhal, ["3"])
+        let blank = await db.search("  ").map(\.id)
+        XCTAssertEqual(blank, [])
+    }
+
+    // MARK: Open Food Facts (Search-a-licious)
+
+    func testOffRequestTargetsSearchALiciousFilteredToIndia() throws {
+        let request = try XCTUnwrap(OpenFoodFactsSearch.request(for: "maggi"))
+        let components = try XCTUnwrap(URLComponents(url: try XCTUnwrap(request.url), resolvingAgainstBaseURL: false))
+        XCTAssertEqual(components.host, "search.openfoodfacts.org")
+        let q = components.queryItems?.first { $0.name == "q" }?.value
+        XCTAssertEqual(q, "maggi countries_tags:\"en:india\"")
+        XCTAssertNotNil(request.value(forHTTPHeaderField: "User-Agent"))
+    }
+
+    /// The query is Lucene on the service side: a stray quote or colon would
+    /// be a 400, or worse, silently widen the filter.
+    func testOffRequestStripsQuerySyntax() throws {
+        let request = try XCTUnwrap(OpenFoodFactsSearch.request(for: "amul \"butter\" countries_tags:*"))
+        let q = URLComponents(url: request.url!, resolvingAgainstBaseURL: false)?.queryItems?.first { $0.name == "q" }?.value
+        XCTAssertEqual(q, "amul butter countries tags countries_tags:\"en:india\"")
+        XCTAssertNil(OpenFoodFactsSearch.request(for: "\"::\""))
+    }
+
+    /// Search-a-licious answers `hits` with `brands` as an array; the legacy
+    /// search answered `products` with a string. Both must decode.
+    func testOffDecodesSearchALiciousHits() throws {
+        let json = """
+        {"hits":[
+          {"code":"8901262180016","product_name":"Malai Paneer","brands":["Amul"],"nutriments":{"energy-kcal_100g":314,"proteins_100g":20,"carbohydrates_100g":3,"fat_100g":24.5}},
+          {"code":"1","product_name":"No calories","brands":[],"nutriments":{}},
+          {"code":"2","product_name":"Maggi Masala","brands":"Maggi, Nestle","nutriments":{"energy-kcal_100g":427}}
+        ],"count":3}
+        """
+        let foods = try OpenFoodFactsSearch.foods(from: Data(json.utf8))
+        XCTAssertEqual(foods.map(\.name), ["Malai Paneer", "Maggi Masala"])
+        XCTAssertEqual(foods.map(\.brand), ["Amul", "Maggi, Nestle"])
+        XCTAssertEqual(foods.first?.id, "off-8901262180016")
+        XCTAssertEqual(foods.first?.source, .openFoodFacts)
+    }
+
+    // MARK: Ranking
+
+    private func ranked(_ query: String, _ lists: [Food]...) -> [String] {
+        FoodSearchRanker.rank(lists, query: query).map(\.id)
+    }
+
+    func testExactAndPlainNamesBeatLongerMatches() {
+        let ids = ranked("rice",
+            [food("indb-flakes", "Rice flakes (Chiwda/Aval)", .indb), food("indb-boiled", "Boiled rice (Uble chawal)", .indb)],
+            [food("usda-rice", "Rice, white, cooked", .usda)],
+            [food("off-mix", "Rice Mix Masala", .openFoodFacts, brand: "MTR")])
+        XCTAssertEqual(ids.first, "indb-boiled", "\"Boiled rice\" is rice; \"Rice flakes\" is poha")
+        XCTAssertLessThan(ids.firstIndex(of: "usda-rice")!, ids.firstIndex(of: "indb-flakes")!)
+        XCTAssertEqual(ids.last, "off-mix")
+    }
+
+    /// The query as the dish's head noun beats the query as a modifier:
+    /// "Moong dal" is dal, "Dal parantha" is a parantha.
+    func testTheDishsHeadNounOutranksAModifier() {
+        let ids = ranked("dal",
+            [food("indb-parantha", "Dal parantha/paratha", .indb), food("indb-moong", "Moong dal", .indb)])
+        XCTAssertEqual(ids, ["indb-moong", "indb-parantha"])
+        let rice = ranked("rice",
+            [food("indb-flakes", "Rice flakes (Chiwda/Aval)", .indb), food("indb-curd", "Curd rice (Dahi bhaat)", .indb)],
+            [food("usda-wild", "Rice, brown, long-grain, cooked", .usda)])
+        XCTAssertEqual(rice.last, "indb-flakes")
+    }
+
+    /// INDB's alternatives are names too: "Chapati/Roti" *is* a roti.
+    func testAnAlternativeNameCountsAsAnExactMatch() {
+        let ids = ranked("roti",
+            [food("off-roti", "Roti Mix", .openFoodFacts, brand: "Aashirvaad")],
+            [food("indb-roti", "Chapati/Roti", .indb), food("indb-makki", "Makki ki roti", .indb)])
+        XCTAssertEqual(ids, ["indb-roti", "indb-makki", "off-roti"])
+    }
+
+    /// Not "INDB above everything": a user's own food leads, and a packaged
+    /// product whose name *is* the query beats a dish that merely mentions it.
+    func testPersonalFoodsLeadAndExactProductsBeatLooseDishes() {
+        let ids = ranked("paneer",
+            [food("indb-sandwich", "Paneer pea sandwich (toasted)", .indb)],
+            [food("off-paneer", "Paneer", .openFoodFacts, brand: "Milky Mist")],
+            [food("mine", "My paneer bhurji", .local)])
+        XCTAssertEqual(ids, ["mine", "off-paneer", "indb-sandwich"])
+    }
+
+    func testCompleteMacrosBreakAnOtherwiseEvenTie() {
+        let ids = ranked("paneer",
+            [food("off-sparse", "Paneer", .openFoodFacts, brand: "A", complete: false),
+             food("off-full", "Paneer", .openFoodFacts, brand: "B")])
+        XCTAssertEqual(ids.first, "off-full")
+    }
+
+    /// OFF lists one product under several barcodes; a food the user logged
+    /// from INDB comes back from the server under a new id. One row each, and
+    /// the user's own copy is the one kept.
+    func testDuplicatesCollapseKeepingTheBestScored() {
+        let ids = ranked("paneer",
+            [food("off-1", "Paneer", .openFoodFacts, brand: "Milky Mist"),
+             food("off-2", "paneer", .openFoodFacts, brand: "Milky  Mist"),
+             food("off-3", "Paneer", .openFoodFacts, brand: "Amul")],
+            [food("indb-poha", "Poha", .indb)],
+            [food("server-uuid", "Poha", .local)])
+        XCTAssertEqual(Set(ids.filter { $0.hasPrefix("off-") }), ["off-1", "off-3"], "off-2 is off-1 under another barcode")
+        XCTAssertEqual(ids.filter { $0 == "indb-poha" || $0 == "server-uuid" }, ["server-uuid"])
+
+        // Local mode keeps a materialised provider food under the provider's
+        // own id: same id, the user's copy wins.
+        let sameId = FoodSearchRanker.rank([[food("indb-poha", "Poha", .indb)], [food("indb-poha", "Poha", .local)]], query: "poha")
+        XCTAssertEqual(sameId.map(\.source), [.local])
+    }
+
+    /// The same inputs give the same list whichever source answered first —
+    /// results arrive in any order and are re-ranked as they do.
+    func testRankingIsIndependentOfSourceArrivalOrder() {
+        let a = [food("indb-1", "Masala dosa", .indb), food("indb-2", "Plain dosa", .indb)]
+        let b = [food("off-1", "Dosa Batter", .openFoodFacts, brand: "iD")]
+        let c = [food("usda-1", "Dosa", .usda)]
+        let orders = [[a, b, c], [c, b, a], [b, a, c]].map { FoodSearchRanker.rank($0, query: "dosa").map(\.id) }
+        XCTAssertEqual(Set(orders.map { $0.joined(separator: ",") }).count, 1)
+        // "Plain dosa" is a plain-name match from the curated Indian set, so
+        // it edges out USDA's exact "Dosa"; both lead the loose matches.
+        XCTAssertEqual(orders[0].prefix(2), ["indb-2", "usda-1"])
+    }
+
+    func testEachProviderIsCappedButPersonalFoodsAreNot() {
+        let offs = (0..<30).map { food("off-\($0)", "Biscuit \($0)", .openFoodFacts, brand: "B\($0)") }
+        let mine = (0..<25).map { food("mine-\($0)", "Biscuit mine \($0)", .local) }
+        let ids = FoodSearchRanker.rank([offs, mine], query: "biscuit", perSourceLimit: 20).map(\.id)
+        XCTAssertEqual(ids.filter { $0.hasPrefix("off-") }.count, 20)
+        XCTAssertEqual(ids.filter { $0.hasPrefix("mine-") }.count, 25)
+    }
+
+    /// The real bundled INDB, for the searches Indian users actually type:
+    /// the everyday dish must be the top INDB answer, not a dish that only
+    /// contains the word.
+    func testEverydayIndianSearchesPutTheEverydayDishFirst() async {
+        let db = IndianFoodDB()
+        let expected: [String: String] = [
+            "roti": "Roti",
+            "chapati": "Chapati",
+            "poha": "Poha",
+            "idli": "Idli",
+            "dosa": "Plain dosa",
+            "rajma": "Rajmah curry",
+            "rice": "Boiled rice",
+            "paratha": "Plain paratha",
+        ]
+        for (query, top) in expected {
+            let foods = await db.search(query).map(\.asFood)
+            let first = FoodSearchRanker.rank([foods], query: query).first?.name
+            XCTAssertEqual(first, top, "top INDB result for \"\(query)\"")
+        }
+        for query in ["dal", "paneer", "biryani", "curd"] {
+            let count = await db.search(query).count
+            XCTAssertGreaterThan(count, 0, "INDB has \(query) dishes")
+        }
+    }
+
+    // MARK: Short names
+
+    func testIndbNamesSplitIntoTheNamesADishGoesBy() {
+        let cases: [String: [String]] = [
+            "Pea paneer curry (Matar paneer)": ["Pea paneer curry", "Matar paneer"],
+            "Lassi (salted)": ["Lassi (salted)"],
+            "Potato parantha/paratha (Aloo ka parantha/paratha)":
+                ["Potato parantha", "Potato paratha", "Aloo ka parantha", "Aloo ka paratha"],
+            "Curd rice (Dahi bhaat/Dahi chawal/ Perugu annam)": ["Curd rice", "Dahi bhaat", "Dahi chawal", "Perugu annam"],
+            "Cheese and tomato sandwich (toasted) (Cheese aur tamatar ke sandwich (toasted))":
+                ["Cheese and tomato sandwich (toasted)", "Cheese aur tamatar ke sandwich (toasted)"],
+            "Idli": ["Idli"],
+            "Semolina idli (Suji/Rava idli)": ["Semolina idli", "Suji idli", "Rava idli"],
+            "Chapati/Roti": ["Chapati", "Roti"],
+            "Cabbage rolls (dry) ((Pattagobhi rolls) (dry))": ["Cabbage rolls (dry)", "Pattagobhi rolls (dry)"],
+        ]
+        for (name, expected) in cases {
+            XCTAssertEqual(FoodSearchText.nameAlternatives(name), expected, name)
+        }
+    }
+
+    /// A result shows the name the user searched by, not INDB's whole string.
+    func testAnIndbDishIsListedUnderTheNameThatMatched() {
+        let matar = food("indb-matar", "Pea paneer curry (Matar paneer)", .indb)
+        let roti = food("indb-roti", "Chapati/Roti", .indb)
+        XCTAssertEqual(FoodSearchRanker.rank([[matar]], query: "paneer").map(\.name), ["Matar paneer"])
+        XCTAssertEqual(FoodSearchRanker.rank([[matar]], query: "pea curry").map(\.name), ["Pea paneer curry"])
+        XCTAssertEqual(FoodSearchRanker.rank([[roti]], query: "roti").map(\.name), ["Roti"])
+        let palak = food("indb-palak", "Spinach paneer (Palak paneer)", .indb)
+        XCTAssertEqual(FoodSearchRanker.rank([[palak]], query: "paneer").map(\.name), ["Palak paneer"], "a tie goes to the Indian name")
+        XCTAssertEqual(FoodSearchRanker.rank([[palak]], query: "spinach").map(\.name), ["Spinach paneer"])
+        XCTAssertTrue(FoodSearchRanker.rank([[roti]], query: "flatbread").isEmpty, "no name matches: dropped, not shown under a guess")
+        let shown = FoodSearchRanker.rank([[matar]], query: "paneer")[0]
+        XCTAssertEqual(shown.id, matar.id)
+        XCTAssertEqual(shown.defaultVariant, matar.defaultVariant)
+    }
+
+    /// Other sources' brackets are part of a product's name.
+    func testProviderNamesAreNeverShortened() {
+        let off = food("off-1", "Paneer (Malai)", .openFoodFacts, brand: "Amul")
+        XCTAssertEqual(FoodSearchRanker.rank([[off]], query: "malai").map(\.name), ["Paneer (Malai)"])
+    }
+
+    /// "parantha/paratha" is one word spelt two ways, not a dish called
+    /// "paratha": the plain one leads, not every stuffed one tied.
+    func testASpellingVariantIsNotAWholeName() {
+        let ids = ranked("paratha",
+            [food("indb-potato", "Potato parantha/paratha (Aloo ka parantha/paratha)", .indb),
+             food("indb-plain", "Plain parantha/paratha", .indb)])
+        XCTAssertEqual(ids, ["indb-plain", "indb-potato"])
+    }
+
+    /// Logged from a "matar paneer" search, the user's food is called
+    /// "Matar paneer" and comes back from the server under a new id: still
+    /// the same dish as INDB's "Pea paneer curry (Matar paneer)".
+    func testAFoodLoggedUnderAShortNameStillDedupsAgainstIndb() {
+        let ids = ranked("paneer",
+            [food("indb-matar", "Pea paneer curry (Matar paneer)", .indb)],
+            [food("server-uuid", "Matar paneer", .local)])
+        XCTAssertEqual(ids, ["server-uuid"])
+    }
+
+    /// Two INDB dishes that share a Hindi name are still two dishes.
+    func testIndbDishesSharingANameAreBothListed() {
+        let ids = ranked("fruit salad",
+            [food("indb-fruit", "Fruit salad (Phalon ka salaad)", .indb),
+             food("indb-frozen", "Frozen frosty fruit salad (Phalon ka salaad)", .indb)])
+        XCTAssertEqual(Set(ids), ["indb-fruit", "indb-frozen"])
+    }
+
+    // MARK: Search flow (progressive, cached, rate-limit friendly)
+
+    /// INDB answers in milliseconds; it must not wait for Open Food Facts.
+    @MainActor
+    func testIndbResultsShowBeforeASlowNetworkSourceAnswers() async throws {
+        let stub = StubAPIClient()
+        stub.externalSearchDelay = 1_500_000_000
+        stub.externalFoodsToReturn = [makeFood("off-1", "Poha Mix")]
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("P", "Poha")]))
+        viewModel.query = "poha"
+
+        let search = Task { await viewModel.search() }
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline, !viewModel.hasResults { try await Task.sleep(nanoseconds: 10_000_000) }
+
+        guard case .results(let early) = viewModel.outcome else { return XCTFail("INDB should show while OFF is pending") }
+        XCTAssertEqual(early.map(\.id), ["indb-P"])
+        XCTAssertTrue(viewModel.isSearching, "the list stays in its dimmed refining state")
+
+        await search.value
+        guard case .results(let final) = viewModel.outcome else { return XCTFail("expected results") }
+        XCTAssertEqual(final.map(\.id), ["indb-P", "off-1"])
+        XCTAssertFalse(viewModel.isSearching)
+    }
+
+    /// Backspacing to a query already asked shouldn't spend another of OFF's
+    /// ~10 searches a minute.
+    @MainActor
+    func testRepeatQueriesAreAnsweredFromTheSheetCache() async {
+        let stub = StubAPIClient()
+        stub.externalFoodsToReturn = [makeFood("off-1", "Idli Rava")]
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+
+        for query in ["idli", "idli r", "idli"] {
+            viewModel.query = query
+            await viewModel.search()
+        }
+        XCTAssertEqual(stub.externalSearchQueries, ["idli", "idli r"])
+        XCTAssertEqual(stub.usdaSearchQueries, ["idli", "idli r"])
+        XCTAssertEqual(stub.localSearchQueries.count, 3, "the user's own foods are always fresh")
+    }
+
+    @MainActor
+    func testAFailedAnswerIsNotCached() async {
+        let stub = StubAPIClient()
+        stub.externalSearchError = APIError.server(message: "busy", code: nil)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        viewModel.query = "dosa"
+        await viewModel.search()
+        stub.externalSearchError = nil
+        stub.externalFoodsToReturn = [makeFood("off-1", "Dosa Batter")]
+        await viewModel.search()
+        XCTAssertEqual(stub.externalSearchQueries, ["dosa", "dosa"])
+        XCTAssertEqual(viewModel.outcome.kindID, "results")
+    }
+
+    @MainActor
+    func testShortQueriesDoNotSpendAnOpenFoodFactsSearch() async {
+        let stub = StubAPIClient()
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("I", "Idli")]))
+        viewModel.query = "id"
+        await viewModel.search()
+        XCTAssertTrue(stub.externalSearchQueries.isEmpty)
+        guard case .results(let foods) = viewModel.outcome else { return XCTFail("INDB still answers") }
+        XCTAssertEqual(foods.map(\.id), ["indb-I"])
+    }
+
+    // MARK: What people actually type
+
+    func testPluralsMeetTheirSingular() {
+        let pairs = [("rotis", "roti"), ("idlis", "idli"), ("eggs", "egg"), ("bananas", "banana"),
+                     ("tomatoes", "tomato"), ("curries", "curry"), ("peaches", "peach"), ("chapatis", "chapati")]
+        for (plural, one) in pairs {
+            XCTAssertEqual(FoodSearchText.words(plural), [one], plural)
+        }
+        for word in ["hummus", "glass", "dal"] {
+            XCTAssertEqual(FoodSearchText.words(word), [word], "\(word) is left alone")
+        }
+        XCTAssertEqual(ranked("rotis", [food("indb-roti", "Chapati/Roti", .indb)]), ["indb-roti"])
+    }
+
+    /// "ch" isn't "c": INDB has no chole, and Coleslaw must not stand in.
+    func testSpellingSquashKeepsChAndReadsAFinalYAsI() {
+        XCTAssertEqual(FoodSearchText.squash("chhole"), FoodSearchText.squash("chole"))
+        XCTAssertNotEqual(FoodSearchText.squash("chole"), FoodSearchText.squash("cole"))
+        XCTAssertEqual(FoodSearchText.squash("idly"), FoodSearchText.squash("idli"))
+        XCTAssertEqual(FoodSearchText.squash("dhal"), FoodSearchText.squash("dal"))
+        XCTAssertEqual(FoodSearchText.squash("chapathi"), FoodSearchText.squash("chapati"))
+    }
+
+    func testTheAmountTypedWithAFoodIsNotSearchedFor() {
+        let cases = ["2 roti": "roti", "100g rice": "rice", "rice 100g": "rice", "100 g rice": "rice",
+                     "1 cup of dal": "dal", "2 x idli": "idli", "½ bowl poha": "poha",
+                     "7 up": "7 up", "123": "123", "parle g": "parle g", "roti": "roti"]
+        for (typed, searched) in cases {
+            XCTAssertEqual(FoodSearchText.searchText(typed), searched, typed)
+        }
+    }
+
+    @MainActor
+    func testSearchingWithAnAmountFindsTheFood() async {
+        let stub = StubAPIClient()
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("R", "Chapati/Roti", unit: "chapati", kcal: 73)]))
+        viewModel.query = "2 roti"
+        await viewModel.search()
+        XCTAssertEqual(stub.localSearchQueries, ["roti"])
+        XCTAssertEqual(stub.externalSearchQueries, ["roti"])
+        guard case .results(let foods) = viewModel.outcome else { return XCTFail("roti is found") }
+        XCTAssertEqual(foods.map(\.name), ["Roti"])
+    }
+
+    // MARK: Found in the live scenario run
+
+    /// "dhal" is dal spelt another way: dal dishes lead, "daliya" (a
+    /// porridge that merely starts with the same letters) follows.
+    func testASpellingVariantStillFindsTheHeadNoun() {
+        let ids = ranked("dhal",
+            [food("indb-daliya", "Meetha daliya", .indb), food("indb-mixed", "Mixed dal", .indb)])
+        XCTAssertEqual(ids, ["indb-mixed", "indb-daliya"])
+    }
+
+    /// "milk" put Saffron milk, a fish curry and a chocolate bar above milk.
+    func testMilkFindsMilk() {
+        let ids = ranked("milk",
+            [food("indb-saffron", "Saffron milk", .indb), food("indb-fish", "Fish in coconut milk", .indb)],
+            [food("off-choc", "Dairy milk", .openFoodFacts, brand: "Cadbury"),
+             food("off-toned", "Toned Milk", .openFoodFacts, brand: "Amul")])
+        XCTAssertEqual(ids.first, "off-toned")
+        XCTAssertEqual(ids.last, "indb-fish", "fish in coconut milk is fish")
+    }
+
+    /// INDB's commas aren't USDA's "Name, qualifier": that's a salad.
+    func testAnIndbCommaIsNotAQualifier() {
+        let ids = ranked("paneer",
+            [food("indb-salad", "Paneer, apple and pineapple salad", .indb), food("indb-matar", "Pea paneer curry (Matar paneer)", .indb)])
+        XCTAssertEqual(ids, ["indb-matar", "indb-salad"])
+    }
+
+    /// Indians search by brand: "amul" lists Amul's products, and "amul
+    /// butter" is Butter, Amul — not Amul Taaza.
+    func testTheBrandCountsAsPartOfTheName() {
+        let butter = food("off-butter", "Pasteurised Butter", .openFoodFacts, brand: "Amul")
+        let taaza = food("off-taaza", "Taaza", .openFoodFacts, brand: "Amul")
+        XCTAssertEqual(Set(ranked("amul", [butter, taaza])), ["off-butter", "off-taaza"])
+        XCTAssertEqual(ranked("amul butter", [taaza, butter]), ["off-butter"])
+    }
+
+    /// A provider's result with no word of the query in its name or brand
+    /// is noise ("7 up" brought back baby formula); the user's own foods are
+    /// kept — the server matched them for a reason.
+    func testResultsThatMatchNothingAreDropped() {
+        let ids = ranked("7 up",
+            [food("off-nan", "NAN Excellapro", .openFoodFacts, brand: "Nestle"), food("off-7up", "7 Up", .openFoodFacts, brand: "PepsiCo")],
+            [food("mine-soda", "Lemon soda", .local)])
+        XCTAssertEqual(ids, ["off-7up", "mine-soda"])
+    }
+
+    /// When every result is dropped the screen says so — and never keeps
+    /// showing the previous query's list.
+    @MainActor
+    func testANewQueryWhoseResultsAllDropDoesNotKeepTheOldList() async {
+        let stub = StubAPIClient()
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("P", "Poha")]))
+        viewModel.query = "poha"
+        await viewModel.search()
+        XCTAssertEqual(viewModel.outcome.kindID, "results")
+        stub.externalFoodsToReturn = [food("off-nan", "NAN Excellapro", .openFoodFacts, brand: "Nestle")]
+        viewModel.query = "xyzzy"
+        await viewModel.search()
+        XCTAssertEqual(viewModel.outcome.kindID, "noResults")
+    }
+
+    /// A query can span a dish's names: "roti chapati" is Chapati/Roti, and
+    /// "paneer malai" is Paneer (Malai).
+    func testAQuerySpanningANamesPartsStillMatches() {
+        XCTAssertEqual(ranked("roti chapati", [food("indb-roti", "Chapati/Roti", .indb)]), ["indb-roti"])
+        XCTAssertEqual(ranked("paneer malai", [food("off-malai", "Paneer (Malai)", .openFoodFacts, brand: "Amul")]), ["off-malai"])
+    }
+
+    /// Nothing holds "paneer butter masala"; the dish holding most of it is
+    /// offered — labelled as closest — and plain paneer (one word of three)
+    /// is not.
+    func testWithNoFullMatchTheClosestAreOfferedAsSuch() {
+        let ranking = FoodSearchRanker.ranking(
+            [[food("indb-butter", "Paneer in butter sauce", .indb)],
+             [food("off-paneer", "Paneer", .openFoodFacts, brand: "Amul")]],
+            query: "paneer butter masala")
+        XCTAssertTrue(ranking.closestOnly)
+        XCTAssertEqual(ranking.foods.map(\.id), ["indb-butter"])
+
+        let full = FoodSearchRanker.ranking(
+            [[food("indb-butter", "Paneer in butter sauce", .indb), food("indb-pbm", "Paneer butter masala", .indb)]],
+            query: "paneer butter masala")
+        XCTAssertFalse(full.closestOnly)
+        XCTAssertEqual(full.foods.map(\.id), ["indb-pbm"], "closest matches never pad a list that has real ones")
+    }
+
+    /// Two words: the dish word (the last) must be there — "chicken
+    /// biryani" offers other biryanis, not a chicken sandwich — and the
+    /// dish shows under its Indian name.
+    func testClosestMatchesFollowTheDishWord() {
+        let biryani = FoodSearchRanker.ranking(
+            [[food("indb-mutton", "Mutton biryani/biriyani", .indb), food("indb-sandwich", "Chicken sandwich", .indb)]],
+            query: "chicken biryani")
+        XCTAssertTrue(biryani.closestOnly)
+        XCTAssertEqual(biryani.foods.map(\.id), ["indb-mutton"])
+
+        let paneer = FoodSearchRanker.rank(
+            [[food("indb-matar", "Pea paneer curry (Matar paneer)", .indb), food("indb-dosa", "Masala dosa", .indb)]],
+            query: "masala paneer")
+        XCTAssertEqual(paneer.map(\.name), ["Matar paneer"])
+    }
+
+    func testIndbOffersAllButOneWordWhenNothingHoldsEvery() async {
+        let db = IndianFoodDB.with([indbRow("B", "Paneer in butter sauce"), indbRow("P", "Poha")])
+        let names = await db.search("paneer butter masala").map(\.name)
+        XCTAssertEqual(names, ["Paneer in butter sauce"])
+        let exact = await db.search("poha").map(\.name)
+        XCTAssertEqual(exact, ["Poha"])
+    }
+
+    @MainActor
+    func testTheSheetSaysWhenResultsAreOnlyClose() async {
+        let stub = StubAPIClient()
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("B", "Paneer in butter sauce")]))
+        viewModel.query = "paneer butter masala"
+        await viewModel.search()
+        XCTAssertTrue(viewModel.resultsAreClosestMatches)
+        viewModel.query = "paneer"
+        await viewModel.search()
+        XCTAssertFalse(viewModel.resultsAreClosestMatches)
+    }
+
+    // MARK: Brands and the user's own history
+
+    /// Open Food Facts listed Akshayakalpa's "Curd" above Amul's: equal names,
+    /// so only OFF's order told them apart. The brand most households buy
+    /// leads, and an unknown brand OFF put first falls behind both.
+    func testTheCommonerBrandLeadsAmongEqualMatches() {
+        let ids = ranked("curd",
+            [food("off-unknown", "Curd", .openFoodFacts, brand: "Some Dairy"),
+             food("off-aks", "Curd", .openFoodFacts, brand: "Akshaykalpa"),
+             food("off-amul", "Curd", .openFoodFacts, brand: "AMUL, GCMMF")])
+        XCTAssertEqual(ids, ["off-amul", "off-aks", "off-unknown"])
+    }
+
+    /// A brand is a tie-breaker, not a trump card.
+    func testABrandNeverBeatsABetterNameMatch() {
+        let ids = ranked("curd",
+            [food("off-md", "Classic Curd", .openFoodFacts, brand: "Mother Dairy"),
+             food("off-plain", "Curd", .openFoodFacts, brand: "Some Dairy")])
+        XCTAssertEqual(ids, ["off-plain", "off-md"])
+    }
+
+    func testBrandSpellingsMeet() {
+        XCTAssertEqual(PopularBrands.keys("Haldiram's"), PopularBrands.keys("HALDIRAMS"))
+        XCTAssertEqual(PopularBrands.keys("Amul, GCMMF"), ["amul", "gcmmf"])
+        XCTAssertNotNil(PopularBrands.bonus[PopularBrands.key("Mother Dairy")])
+        XCTAssertTrue(PopularBrands.keys(nil).isEmpty)
+    }
+
+    /// Of two of the user's own curds, the one they log most leads.
+    func testTheFoodTheUserLogsMostLeads() {
+        let homemade = food("mine-home", "Curd", .local)
+        let amul = food("mine-amul", "Curd", .local, brand: "Amul")
+        let history = FoodSearchRanker.History(topFoods: [amul, homemade], recentFoods: [])
+        XCTAssertEqual(FoodSearchRanker.rank([[homemade, amul]], query: "curd", history: history).map(\.id), ["mine-amul", "mine-home"])
+        let flipped = FoodSearchRanker.History(topFoods: [homemade, amul], recentFoods: [])
+        XCTAssertEqual(FoodSearchRanker.rank([[amul, homemade]], query: "curd", history: flipped).map(\.id), ["mine-home", "mine-amul"])
+    }
+
+    /// Someone who buys Milky Mist sees Milky Mist paneer above Amul's, even
+    /// though Amul is the commoner brand: their diary beats the curated guess.
+    func testABrandTheUserLogsOftenBeatsTheCuratedGuess() {
+        let offs = [food("off-amul", "Paneer", .openFoodFacts, brand: "Amul"),
+                    food("off-mm", "Paneer", .openFoodFacts, brand: "Milky Mist")]
+        XCTAssertEqual(ranked("paneer", offs), ["off-amul", "off-mm"])
+        let history = FoodSearchRanker.History(
+            topFoods: [food("mine-curd", "Curd", .local, brand: "Milky Mist")], recentFoods: [])
+        XCTAssertEqual(FoodSearchRanker.rank([offs], query: "paneer", history: history).map(\.id), ["off-mm", "off-amul"])
+    }
+
+    /// The sheet's suggestions (already fetched for the idle screen) feed
+    /// the ranking: same data in iCloud and server mode.
+    @MainActor
+    func testSearchLearnsFromTheDiarysTopFoods() async {
+        let stub = StubAPIClient()
+        stub.suggestionsToReturn = FoodSuggestions(
+            recentFoods: [], topFoods: [food("mine-curd", "Curd", .local, brand: "Milky Mist")])
+        stub.externalFoodsToReturn = [food("off-amul", "Paneer", .openFoodFacts, brand: "Amul"),
+                                      food("off-mm", "Paneer", .openFoodFacts, brand: "Milky Mist")]
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        await viewModel.loadRecents()
+        viewModel.query = "paneer"
+        await viewModel.search()
+        guard case .results(let foods) = viewModel.outcome else { return XCTFail("results") }
+        XCTAssertEqual(foods.map(\.id), ["off-mm", "off-amul"])
+    }
+
+    // MARK: Logging a regular again
+
+    @MainActor
+    func testARecentFoodIsQuickLoggedAtItsLastAmountAndCounted() async {
+        let stub = StubAPIClient()
+        let roti = food("mine-roti", "Roti", .local)
+        let key = FoodLogStat.key(for: roti)
+        stub.suggestionsToReturn = FoodSuggestions(recentFoods: [roti], topFoods: [roti])
+        stub.logStatsToReturn = [key: FoodLogStat(timesThisWeek: 4, lastQuantity: 2)]
+        let lunch = MealType(id: "lunch", name: "lunch", sortOrder: 20)
+        let viewModel = FoodSearchViewModel(mealTypes: [lunch], initialMealType: lunch, apiClient: stub, indianFoods: .none)
+        await viewModel.loadRecents()
+        XCTAssertEqual(viewModel.logStat(for: roti)?.timesThisWeek, 4)
+        XCTAssertEqual(viewModel.quickLogQuantity(for: roti), 2)
+
+        await viewModel.quickLog(roti)
+        XCTAssertEqual(stub.createdFoodEntries.map(\.quantity), [2])
+        XCTAssertEqual(stub.createdFoodEntries.first?.mealTypeId, "lunch")
+        XCTAssertEqual(viewModel.logStat(for: roti)?.timesThisWeek, 5, "the cue counts the log just made")
+        XCTAssertNil(viewModel.quickLogError)
+    }
+
+    /// A food never logged in the window falls back to one default serving.
+    @MainActor
+    func testAQuickLogWithNoHistoryUsesOneServing() async {
+        let stub = StubAPIClient()
+        let lunch = MealType(id: "lunch", name: "lunch", sortOrder: 20)
+        let viewModel = FoodSearchViewModel(mealTypes: [lunch], initialMealType: lunch, apiClient: stub, indianFoods: .none)
+        let dal = food("mine-dal", "Dal", .local)
+        XCTAssertEqual(viewModel.quickLogQuantity(for: dal), 100)
+        await viewModel.quickLog(dal)
+        XCTAssertEqual(stub.createdFoodEntries.map(\.quantity), [100])
+    }
+
+    /// A failed quick log says so and doesn't count.
+    @MainActor
+    func testAFailedQuickLogIsReportedAndNotCounted() async {
+        let stub = StubAPIClient()
+        stub.createFoodEntryError = APIError.invalidResponse
+        let lunch = MealType(id: "lunch", name: "lunch", sortOrder: 20)
+        let viewModel = FoodSearchViewModel(mealTypes: [lunch], initialMealType: lunch, apiClient: stub, indianFoods: .none)
+        let dal = food("mine-dal", "Dal", .local)
+        await viewModel.quickLog(dal)
+        XCTAssertNotNil(viewModel.quickLogError)
+        XCTAssertNil(viewModel.logStat(for: dal))
+    }
+
+    // MARK: Performance
+
+    /// Ranking runs on every partial update (off the main actor, but it still
+    /// gates how soon each update shows). Measured for 160 foods: ~0.6 ms
+    /// optimised, ~3.5 ms in this debug build — the bound is for debug.
+    func testRankingAFullResultSetIsCheap() {
+        let sources: [FoodSource] = [.local, .indb, .usda, .openFoodFacts]
+        let lists = sources.map { source in
+            (0..<40).map { food("\(source)-\($0)", "Paneer butter masala variant \($0) (Shahi paneer)", source, brand: "Brand \($0 % 7)") }
+        }
+        let start = Date()
+        for _ in 0..<100 { _ = FoodSearchRanker.rank(lists, query: "paneer masala") }
+        let perRank = Date().timeIntervalSince(start) / 100
+        XCTAssertLessThan(perRank, 0.008, "one rank of 160 foods took \(Int(perRank * 1_000_000))µs")
+    }
+
+    func testSearchingTheWholeBundledIndbIsCheap() async {
+        let db = IndianFoodDB()
+        await db.prepare()
+        let start = Date()
+        for query in ["roti", "dal", "paneer", "poha", "idli", "dosa", "biryani", "rajma", "curd", "rice"] {
+            _ = await db.search(query)
+        }
+        let perSearch = Date().timeIntervalSince(start) / 10
+        XCTAssertLessThan(perSearch, 0.01, "one INDB search took \(Int(perSearch * 1_000_000))µs")
     }
 }

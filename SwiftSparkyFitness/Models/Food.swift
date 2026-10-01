@@ -30,15 +30,32 @@ enum FoodSource: String, Hashable {
     case local
     case openFoodFacts
     case usda
+    /// Indian Nutrient Databank, bundled with the app — see IndianFoodDB.
+    case indb
 
     /// Shown in the result row. Local foods aren't labelled — the absence of
     /// a source *is* the signal that it's the user's own.
     var label: String? {
         switch self {
         case .local: return nil
-        case .openFoodFacts: return "Open Food Facts"
+        case .openFoodFacts: return "Open Food"
         case .usda: return "USDA"
+        case .indb: return "INDB"
         }
+    }
+}
+
+extension FoodVariant {
+    /// "100g", "250ml" — but "1 chapati", "2 bowl": a household unit needs
+    /// the space a metric symbol doesn't.
+    static func amountText(_ amount: Double, unit: String) -> String {
+        let metric: Set<String> = ["g", "kg", "mg", "ml", "l", "oz", "lb"]
+        return metric.contains(unit.lowercased()) ? "\(Int(amount))\(unit)" : "\(Int(amount)) \(unit)"
+    }
+
+    /// Weighed units step by 10; a chapati or a bowl steps by one.
+    static func stepAmount(for unit: String) -> Double {
+        ["g", "ml"].contains(unit.lowercased()) ? 10 : 1
     }
 }
 
@@ -80,6 +97,23 @@ struct FoodSearchResponse: Decodable {
 /// How many come back is governed by the account's `item_display_limit`
 /// preference (10 by default), not by a request parameter — passing `limit`
 /// is ignored when that preference is set.
+/// How a food has been logged lately, for the Log Food sheet: the
+/// "5× this week" cue and one-tap re-logging at the last amount.
+struct FoodLogStat: Equatable {
+    var timesThisWeek: Int
+    /// The amount last logged, in the food's serving unit ("2" chapati).
+    var lastQuantity: Double
+
+    /// By name and brand, not id: server mode's suggestions carry server
+    /// ids while its on-device diary may hold the same food under a local
+    /// one, and both describe the same thing the user logs.
+    static func key(name: String, brand: String?) -> String {
+        FoodSearchText.words(name).joined(separator: " ") + "|" + FoodSearchText.words(brand ?? "").joined(separator: " ")
+    }
+
+    static func key(for food: Food) -> String { key(name: food.name, brand: food.brand) }
+}
+
 struct FoodSuggestions: Decodable {
     let recentFoods: [Food]
     let topFoods: [Food]

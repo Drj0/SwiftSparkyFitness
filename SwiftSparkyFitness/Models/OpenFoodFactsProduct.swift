@@ -40,8 +40,11 @@ import Foundation
 struct OpenFoodFactsSearchResponse: Decodable {
     let products: [OpenFoodFactsProduct]
 
+    /// `products` from the server proxy and the legacy search; `hits` from
+    /// Search-a-licious (search.openfoodfacts.org), which the app now calls
+    /// directly. Same product objects in both.
     private enum CodingKeys: String, CodingKey {
-        case products
+        case products, hits
     }
 
     /// Decodes each product independently so one malformed entry can't take
@@ -55,7 +58,8 @@ struct OpenFoodFactsSearchResponse: Decodable {
 
     init(from decoder: Decoder) throws {
         let container = try decoder.container(keyedBy: CodingKeys.self)
-        let lenient = try container.decode([LenientProduct].self, forKey: .products)
+        let lenient = try container.decodeIfPresent([LenientProduct].self, forKey: .products)
+            ?? container.decode([LenientProduct].self, forKey: .hits)
         products = lenient.compactMap(\.value)
     }
 }
@@ -72,6 +76,21 @@ struct OpenFoodFactsProduct: Decodable {
         case productName = "product_name"
         case productNameEn = "product_name_en"
         case nutriments
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        code = try container.decodeIfPresent(String.self, forKey: .code)
+        productName = try container.decodeIfPresent(String.self, forKey: .productName)
+        productNameEn = try container.decodeIfPresent(String.self, forKey: .productNameEn)
+        nutriments = try container.decodeIfPresent(Nutriments.self, forKey: .nutriments)
+        // A comma-joined string from the legacy search, an array from
+        // Search-a-licious.
+        if let list = try? container.decodeIfPresent([String].self, forKey: .brands) {
+            brands = list.isEmpty ? nil : list.joined(separator: ", ")
+        } else {
+            brands = try container.decodeIfPresent(String.self, forKey: .brands)
+        }
     }
 
     struct Nutriments: Decodable {
