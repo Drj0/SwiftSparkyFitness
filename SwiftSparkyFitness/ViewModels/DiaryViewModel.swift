@@ -247,6 +247,27 @@ final class DiaryViewModel: ObservableObject {
         }
     }
 
+    /// The day list's "Log again": the same session copied to `date` —
+    /// usually today, from a past day's row. One tap for "I did this again".
+    @discardableResult
+    func logAgain(_ entry: ExerciseSessionSummary, on date: Date) async -> Bool {
+        guard entry.exerciseId != nil else { return false }
+        do {
+            _ = try await apiClient.createExerciseEntry(ExerciseEntryInput(repeating: entry, on: date))
+            Haptics.success()
+            await load()
+            return true
+        } catch {
+            errorMessage = error.localizedDescription
+            Haptics.error()
+            return false
+        }
+    }
+
+    var isViewingToday: Bool {
+        Calendar.current.isDate(selectedDate, inSameDayAs: maxDate)
+    }
+
     func deleteExerciseEntry(_ entry: ExerciseSessionSummary) async {
         do {
             try await apiClient.deleteExerciseEntry(id: entry.id)

@@ -48,9 +48,14 @@ enum ExerciseSearchResult: Identifiable {
 
     /// The catalog's own glyph where it knows the exercise, otherwise a
     /// generic one by kind.
-    var symbol: String {
-        if let entry = ExerciseCatalog.entry(named: name) { return entry.symbol }
-        return category == "cardio" ? "figure.mixed.cardio" : "figure.strengthtraining.traditional"
+    var symbol: String { ExerciseCatalog.symbol(name: name, category: category) }
+
+    var modality: ExerciseModality? {
+        switch self {
+        case .catalog(let entry): return entry.modality
+        case .owned(let exercise): return exercise.modality
+        case .external(let result): return result.modality
+        }
     }
 
     /// Only external results need a subtitle naming where they came from —
@@ -91,17 +96,95 @@ final class ExerciseSearchViewModel: ObservableObject {
     /// Latest logged weight in kg, for MET → kcal. nil until one is logged.
     @Published private(set) var weightKg: Double?
 
-    /// Tap-to-log suggestions for before anything is typed, minus whatever
-    /// Recent already shows.
+    /// Which kind of exercise the idle lists show.
+    @Published var category: ExerciseCategoryFilter = .all
+
+    /// The last session of everything logged lately, by
+    /// `ExerciseLastSession.key` — what recents describe, what one-tap
+    /// "log again" repeats, and what the editor starts from. Read from the
+    /// on-device diary once per sheet.
+    @Published private(set) var history: [String: ExerciseLastSession] = [:]
+    /// Units the history is labelled in.
+    @Published private(set) var preferences: UserPreferences = .serverDefaults
+    /// Recents logged again from this sheet a moment ago, showing a check.
+    @Published private(set) var justLogged: Set<String> = []
+    @Published private(set) var quickLoggingId: String?
+    @Published var quickLogError: String?
+
+    /// Recents in the selected category.
+    var visibleRecents: [Exercise] {
+        recentExercises.filter { category.matches($0.category ?? ExerciseCatalog.entry(named: $0.name)?.category) }
+    }
+
+    /// Catalog suggestions for the selected category, minus whatever Recent
+    /// already shows.
+    var browseExercises: [CatalogExercise] {
+        let recent = Set(recentExercises.map { ExerciseCatalog.normalized($0.name) })
+        return ExerciseCatalog.browse(category).filter { !recent.contains(ExerciseCatalog.normalized($0.name)) }
+    }
+
+    /// The old name for All's suggestions, kept for callers that predate
+    /// the category filter.
     var popularExercises: [CatalogExercise] {
         let recent = Set(recentExercises.map { ExerciseCatalog.normalized($0.name) })
         return ExerciseCatalog.popular.filter { !recent.contains(ExerciseCatalog.normalized($0.name)) }
     }
 
     let apiClient: APIClientProtocol
+    private let entryDate: Date
 
-    init(apiClient: APIClientProtocol = AppServices.client) {
+    init(entryDate: Date = Date(), apiClient: APIClientProtocol = AppServices.client) {
+        self.entryDate = entryDate
         self.apiClient = apiClient
+    }
+
+    func lastSession(for name: String) -> ExerciseLastSession? {
+        history[ExerciseLastSession.key(name)]
+    }
+
+    /// A long enough window that a weekly or monthly exercise still has a
+    /// last time; one fetch, once per sheet.
+    func loadHistory() async {
+        guard history.isEmpty else { return }
+        let start = Calendar.current.date(byAdding: .day, value: -180, to: Date()) ?? Date()
+        async let sessions = apiClient.exerciseHistory(since: start)
+        async let prefs = try? apiClient.userPreferences()
+        let (loaded, loadedPreferences) = await (sessions, prefs)
+        history = loaded
+        if let loadedPreferences { preferences = loadedPreferences }
+    }
+
+    /// "3 × 8 · 60 kg · 2 days ago", for a row that has been logged before.
+    func lastSessionSummary(for name: String, modality: ExerciseModality?) -> String? {
+        guard let last = lastSession(for: name) else { return nil }
+        let detail = ExerciseFormatting.detail(
+            last, fallbackModality: modality,
+            weightUnit: preferences.weightUnitLabel, distanceUnit: preferences.distanceUnitLabel
+        )
+        let when = ExerciseFormatting.relativeDay(last.date)
+        let often = last.timesThisWeek >= 2 ? " · \(last.timesThisWeek)× this week" : ""
+        return [detail.isEmpty ? nil : detail, when].compactMap { $0 }.joined(separator: " · ") + often
+    }
+
+    /// One tap to repeat a recent exercise exactly as it was last logged —
+    /// the same "+" Recent foods have. The sheet stays open, so a whole
+    /// routine of repeats is a tap each.
+    func quickLog(_ exercise: Exercise) async {
+        guard let last = lastSession(for: exercise.name), quickLoggingId == nil else { return }
+        quickLoggingId = exercise.id
+        quickLogError = nil
+        defer { quickLoggingId = nil }
+        do {
+            _ = try await apiClient.createExerciseEntry(ExerciseEntryInput(repeating: last, exercise: exercise, on: entryDate))
+            justLogged.insert(exercise.id)
+            var updated = last
+            updated.timesThisWeek += 1
+            history[ExerciseLastSession.key(exercise.name)] = updated
+            Haptics.success()
+        } catch {
+            quickLogError = "Couldn't log \(exercise.name). Check your connection and try again."
+            Haptics.error()
+        }
     }
 
     var hasResults: Bool {
@@ -150,12 +233,18 @@ final class ExerciseSearchViewModel: ObservableObject {
         return withBestRate(owned)
     }
 
-    private func withBestRate(_ exercise: Exercise) -> Exercise {
-        let rate: Double?
+    /// Catalog MET beats a provider's figure; with neither (a custom
+    /// exercise), a typical rate for its kind still gives Save a labelled
+    /// estimate rather than a required blank.
+    func withBestRate(_ exercise: Exercise) -> Exercise {
+        let weight = weightKg ?? ExerciseCatalog.fallbackWeightKg
+        let rate: Double
         if let entry = ExerciseCatalog.entry(named: exercise.name) {
-            rate = entry.caloriesPerHour(weightKg: weightKg ?? ExerciseCatalog.fallbackWeightKg)
+            rate = entry.caloriesPerHour(weightKg: weight)
+        } else if let known = exercise.caloriesPerHour, known > 0 {
+            rate = known
         } else {
-            rate = exercise.caloriesPerHour.flatMap { $0 > 0 ? $0 : nil }
+            rate = ExerciseCatalog.fallbackMET(category: exercise.category, modality: exercise.modality) * weight
         }
         return Exercise(
             id: exercise.id, name: exercise.name, category: exercise.category, modality: exercise.modality,

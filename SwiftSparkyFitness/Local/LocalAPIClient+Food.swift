@@ -269,6 +269,37 @@ extension LocalAPIClient {
         return orderedIds.compactMap { exercisesById[$0] }.map(LocalAPIClient.exercise)
     }
 
+    /// One pass over the window, oldest first, so each exercise ends on its
+    /// newest session. The Health sentinel isn't an exercise anyone repeats.
+    func exerciseHistory(since start: Date) async -> [String: ExerciseLastSession] {
+        let startKey = LocalDay.key(start)
+        let weekKey = LocalDay.key(Calendar.current.date(byAdding: .day, value: -6, to: Date()) ?? Date())
+        let sentinel = ExerciseSessionSummary.healthActiveEnergyName
+        var history: [String: ExerciseLastSession] = [:]
+        let rows = store.fetch(
+            LocalExerciseEntry.self,
+            where: #Predicate { $0.dayKey >= startKey },
+            sortBy: [SortDescriptor(\.dayKey), SortDescriptor(\.entryDate)]
+        )
+        for row in rows where row.name != sentinel {
+            let key = ExerciseLastSession.key(row.name)
+            let thisWeek = (history[key]?.timesThisWeek ?? 0) + (row.dayKey >= weekKey ? 1 : 0)
+            let sets = row.setsJSON
+                .flatMap { $0.data(using: .utf8) }
+                .flatMap { try? JSONDecoder().decode([ExerciseSetInput].self, from: $0) } ?? []
+            history[key] = ExerciseLastSession(
+                date: row.entryDate,
+                modality: row.modality.flatMap(ExerciseModality.init(rawValue:)),
+                durationMinutes: row.durationMinutes,
+                caloriesBurned: row.caloriesBurned,
+                distance: row.distance,
+                sets: sets,
+                timesThisWeek: thisWeek
+            )
+        }
+        return history
+    }
+
     /// No server to proxy Free Exercise DB/Wger, so local mode searches Free
     /// Exercise DB's public dataset directly (Wger needs the server).
     func searchExternalExercises(query: String) async throws -> [ExternalExerciseResult] {

@@ -147,6 +147,26 @@ struct ExerciseSetInput: Codable, Equatable {
     var notes: String?
 }
 
+/// What the diary remembers about one exercise: the session logged most
+/// recently, so the next one can start from it instead of from blank —
+/// most sessions repeat the last one, give or take a rep or a kilo.
+///
+/// Keyed by name (`key`), not exercise id: server mode copies library
+/// exercises under local keys, and one exercise can reach the library from
+/// the catalog, a provider or the user under three different ids.
+struct ExerciseLastSession: Equatable {
+    let date: Date
+    let modality: ExerciseModality?
+    let durationMinutes: Double
+    let caloriesBurned: Double
+    let distance: Double?
+    let sets: [ExerciseSetInput]
+    /// Sessions of this exercise in the last 7 days, this one included.
+    var timesThisWeek: Int
+
+    static func key(_ name: String) -> String { ExerciseCatalog.normalized(name) }
+}
+
 /// A search-external hit (Free Exercise DB / Wger) — not yet in the user's
 /// own library. `id` is the *provider's* id (e.g. a Free Exercise DB slug),
 /// not a local exercise id, and cannot be logged against directly:

@@ -24,7 +24,6 @@ import SwiftUI
 /// already says which half of the day this is.
 struct DiaryView: View {
     @ObservedObject private var viewModel: DiaryViewModel
-    @State private var isPresentingDatePicker = false
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// Standalone use (previews, tests) builds its own view model; the
@@ -38,11 +37,6 @@ struct DiaryView: View {
         _viewModel = ObservedObject(wrappedValue: viewModel)
     }
 
-    private var dateLabel: String {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "EEE, MMM d"
-        return formatter.string(from: viewModel.selectedDate)
-    }
 
     var body: some View {
         List {
@@ -65,9 +59,7 @@ struct DiaryView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(AppColor.background)
-        // Simultaneous, not `.gesture`: the List owns vertical scrolling and
-        // the rows own `.swipeActions`, and neither may lose to day paging.
-        .simultaneousGesture(dayPagingGesture)
+        .diaryDayPaging(viewModel)
         .safeAreaInset(edge: .top) { errorInset }
         .onChange(of: viewModel.errorMessage) { _, message in
             // The banner appears without moving focus, so VoiceOver would
@@ -79,12 +71,6 @@ struct DiaryView: View {
         .refreshable { await viewModel.load() }
         .sheet(item: $viewModel.editingFoodEntry, onDismiss: { Task { await viewModel.load() } }) { entry in
             editFoodSheet(entry)
-        }
-        .sheet(isPresented: $isPresentingDatePicker) {
-            DiaryDatePickerSheet(initialDate: viewModel.selectedDate, minDate: viewModel.minDate, maxDate: viewModel.maxDate) { picked in
-                viewModel.jumpToDate(picked)
-            }
-            .presentationDetents([.medium])
         }
         .sheet(item: $viewModel.isPresentingBodySheet) { kind in
             LogBodyView(
@@ -176,20 +162,6 @@ struct DiaryView: View {
     /// a swipe that can't go anywhere still answers, instead of reading as a
     /// dropped gesture. Deliberately long and strongly horizontal so an
     /// ordinary scroll or a row's swipe-to-delete doesn't page the day too.
-    private var dayPagingGesture: some Gesture {
-        DragGesture(minimumDistance: 24)
-            .onEnded { value in
-                let dx = value.translation.width
-                let dy = value.translation.height
-                guard abs(dx) > 90, abs(dx) > abs(dy) * 2.5 else { return }
-                let wantsNextDay = dx < 0
-                let canPage = wantsNextDay ? viewModel.canGoToNextDay : viewModel.canGoToPreviousDay
-                guard canPage else { return Haptics.light() }
-                Haptics.selection()
-                if wantsNextDay { viewModel.goToNextDay() } else { viewModel.goToPreviousDay() }
-            }
-    }
-
     @ViewBuilder
     private func editFoodSheet(_ entry: FoodEntrySummary) -> some View {
         // A food entry the app itself logged always has these ids — nil
@@ -209,67 +181,15 @@ struct DiaryView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            // No big title here any more — the segmented control above this
-            // (ExerciseTabView) already says "Food & Water", and repeating
-            // it as a second, page-style title read as two headers stacked
-            // for one screen.
-            // The chevron glyphs were their own 6.7 x 11.7pt tap targets —
-            // ~4% of the 44x44 minimum, and sitting a few points from the
-            // date button, so a near-miss silently opened the date picker.
-            // The glyphs keep their size; the *targets* are padded to 44 and
-            // the row's spacing pulled to 0 so the row doesn't visibly spread.
-            HStack(spacing: 0) {
-                Button { Haptics.selection(); viewModel.goToPreviousDay() } label: {
-                    Image(systemName: "chevron.left")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(viewModel.canGoToPreviousDay ? AppColor.accent : AppColor.placeholder)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .disabled(!viewModel.canGoToPreviousDay)
-                .buttonStyle(.pressableCompact)
-                // Defaults to "Back" — a chevron.left reads as navigation
-                // history to VoiceOver, which is not what this does.
-                .accessibilityLabel("Previous day")
-
-                Button { isPresentingDatePicker = true } label: {
-                    Text(dateLabel)
-                        .appBody(13, weight: .semibold)
-                        .foregroundStyle(AppColor.secondaryText)
-                        .padding(.horizontal, 6)
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.pressable)
-                .accessibilityHint("Opens a date picker")
-
-                Button { Haptics.selection(); viewModel.goToNextDay() } label: {
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(viewModel.canGoToNextDay ? AppColor.accent : AppColor.placeholder)
-                        .frame(width: 44, height: 44)
-                        .contentShape(Rectangle())
-                }
-                .disabled(!viewModel.canGoToNextDay)
-                .buttonStyle(.pressableCompact)
-                // Defaults to "Forward", same problem as "Back" above.
-                .accessibilityLabel("Next day")
-            }
-            // The 44pt targets are mostly empty space around a 7pt glyph, so
-            // the left chevron is pulled back into the screen margin to stay
-            // optically aligned under the "Diary" title.
-            .padding(.leading, -14)
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, AppSpacing.screenPad)
-        .padding(.top, 8)
+        // No big title here — the segmented control above this
+        // (ExerciseTabView) already says "Food & Water".
+        DiaryDayHeader(viewModel: viewModel)
     }
 
     private var emptyState: some View {
         VStack(spacing: 10) {
             Text("📭").font(.system(size: 36))
-            Text("Nothing logged on \(dateLabel)")
+            Text("Nothing logged \(DiaryDayHeader.phrase(for: viewModel.selectedDate))")
                 .appDisplay(18)
                 .foregroundStyle(AppColor.ink)
                 .multilineTextAlignment(.center)
@@ -576,37 +496,6 @@ extension View {
         listRowInsets(EdgeInsets())
             .listRowSeparator(.hidden)
             .listRowBackground(Color.clear)
-    }
-}
-
-private struct DiaryDatePickerSheet: View {
-    @State private var date: Date
-    let minDate: Date
-    let maxDate: Date
-    let onPick: (Date) -> Void
-    @Environment(\.dismiss) private var dismiss
-
-    init(initialDate: Date, minDate: Date, maxDate: Date, onPick: @escaping (Date) -> Void) {
-        _date = State(initialValue: initialDate)
-        self.minDate = minDate
-        self.maxDate = maxDate
-        self.onPick = onPick
-    }
-
-    var body: some View {
-        VStack(spacing: 16) {
-            Capsule().fill(AppColor.hairline).frame(width: 44, height: 5).padding(.top, 10)
-            DatePicker("", selection: $date, in: minDate...maxDate, displayedComponents: .date)
-                .datePickerStyle(.graphical)
-                .labelsHidden()
-                .tint(AppColor.accent)
-            PrimaryButton(title: "Go to date") {
-                onPick(date)
-                dismiss()
-            }
-        }
-        .padding(20)
-        .background(AppColor.surface)
     }
 }
 

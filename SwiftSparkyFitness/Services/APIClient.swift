@@ -66,6 +66,10 @@ protocol APIClientProtocol {
     /// external picks) — the only ones an entry can log against.
     func searchExercises(query: String) async throws -> [Exercise]
     func recentExercises() async throws -> [Exercise]
+    /// The latest session of each exercise logged since `start` — the
+    /// diary on this device, in both modes — keyed by
+    /// `ExerciseLastSession.key`. What the next session starts from.
+    func exerciseHistory(since start: Date) async -> [String: ExerciseLastSession]
     /// Free Exercise DB + Wger — both keyless and pre-configured on this
     /// server, confirmed live. Not yet in the user's own library; see
     /// `materializeExternalExercise`.
@@ -126,6 +130,10 @@ extension APIClientProtocol {
     /// Nothing known: the plain server client has no such endpoint, and in
     /// server mode ServerModeClient answers from the on-device diary.
     func foodLogStats(since start: Date) async -> [String: FoodLogStat] { [:] }
+
+    /// Same as `foodLogStats`: nothing from the plain server client; server
+    /// mode answers from the on-device diary.
+    func exerciseHistory(since start: Date) async -> [String: ExerciseLastSession] { [:] }
 }
 
 struct FoodEntryInput {

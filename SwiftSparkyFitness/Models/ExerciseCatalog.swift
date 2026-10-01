@@ -255,3 +255,79 @@ extension APIClientProtocol {
         )
     }
 }
+
+// MARK: - Browsing
+
+/// The filter row above Log Exercise's lists — the catalog's own four
+/// kinds, so 150-odd exercises can be browsed without knowing a name to
+/// type.
+enum ExerciseCategoryFilter: String, CaseIterable, Identifiable {
+    case all, strength, cardio, flexibility, sports
+
+    var id: String { rawValue }
+
+    var label: String {
+        switch self {
+        case .all: return "All"
+        case .strength: return "Strength"
+        case .cardio: return "Cardio"
+        case .flexibility: return "Flexibility"
+        case .sports: return "Sports"
+        }
+    }
+
+    /// Library and provider categories are free text ("Strength",
+    /// "strength", "Other"), so this compares loosely; anything that isn't
+    /// one of the four only shows under All.
+    func matches(_ category: String?) -> Bool {
+        self == .all || category?.lowercased() == rawValue
+    }
+}
+
+extension ExerciseCatalog {
+    /// What to browse for a filter: Popular for All, otherwise the whole
+    /// category with its popular entries first. Built once per filter.
+    static func browse(_ filter: ExerciseCategoryFilter) -> [CatalogExercise] {
+        browseLists[filter] ?? []
+    }
+
+    private static let browseLists: [ExerciseCategoryFilter: [CatalogExercise]] = {
+        var lists: [ExerciseCategoryFilter: [CatalogExercise]] = [.all: popular]
+        for filter in ExerciseCategoryFilter.allCases where filter != .all {
+            let entries = all.filter { $0.category == filter.rawValue }
+            lists[filter] = entries.filter(\.popular) + entries.filter { !$0.popular }
+        }
+        return lists
+    }()
+
+    /// A middle-of-the-range MET for an exercise the catalog doesn't know —
+    /// a custom one, or a provider's — so its calories start from a
+    /// labelled estimate the user can correct, instead of a required blank
+    /// that blocked Save. Compendium "general" codes for each kind.
+    static func fallbackMET(category: String?, modality: ExerciseModality?) -> Double {
+        switch category?.lowercased() {
+        case "strength": return 5.0
+        case "cardio": return 7.0
+        case "flexibility": return 2.5
+        case "sports": return 6.0
+        default: break
+        }
+        switch modality {
+        case .durationDistance: return 7.0
+        case .duration: return 4.0
+        case .weightReps, .repsOnly, nil: return 5.0
+        }
+    }
+
+    /// The glyph for any exercise: the catalog's own where it knows the
+    /// name, otherwise a generic one for its kind.
+    static func symbol(name: String, category: String?) -> String {
+        if let entry = entry(named: name) { return entry.symbol }
+        switch category?.lowercased() {
+        case "cardio": return "figure.mixed.cardio"
+        case "flexibility": return "figure.flexibility"
+        case "sports": return "sportscourt"
+        default: return "figure.strengthtraining.traditional"
+        }
+    }
+}

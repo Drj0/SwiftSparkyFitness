@@ -305,6 +305,10 @@ final class ServerModeClient: APIClientProtocol {
     func recentExercises() async throws -> [Exercise] {
         remember(try await remoteFirst({ try await remote.recentExercises() }, fallback: { try await local.recentExercises() }))
     }
+    /// The on-device diary, which mirrors the server's — no round trip.
+    func exerciseHistory(since start: Date) async -> [String: ExerciseLastSession] {
+        await local.exerciseHistory(since: start)
+    }
     func searchExternalExercises(query: String) async throws -> [ExternalExerciseResult] {
         try await remoteFirst({ try await remote.searchExternalExercises(query: query) }, fallback: { try await local.searchExternalExercises(query: query) })
     }

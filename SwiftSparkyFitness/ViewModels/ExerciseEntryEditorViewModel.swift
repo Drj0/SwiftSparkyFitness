@@ -62,30 +62,67 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
     @Published private(set) var distanceError: String?
     @Published private(set) var setsError: String?
     @Published private(set) var isSaving = false
+    @Published private(set) var isDeleting = false
     @Published var bannerMessage: String?
     /// Distance is stored in the user's preferred unit (see
     /// HealthWorkoutImporter), so the field has to say which one it is.
     @Published private(set) var distanceUnit = UserPreferences.serverDefaults.distanceUnitLabel
+    /// Same rule for set weights: labelled from the preference, never
+    /// converted. The field used to say "kg" whatever the preference was.
+    @Published private(set) var weightUnit = UserPreferences.serverDefaults.weightUnitLabel
+
+    /// The session this one started from — the last time this exercise was
+    /// logged — when there is one. Nil in edit mode.
+    let lastSession: ExerciseLastSession?
 
     private let apiClient: APIClientProtocol
     private let existingEntryId: String?
     private let entryDate: Date
     var isEditing: Bool { existingEntryId != nil }
 
-    func loadDistanceUnit() async {
-        guard modality == .durationDistance, let preferences = try? await apiClient.userPreferences() else { return }
+    /// True when the form opened pre-filled from `lastSession`: the common
+    /// case is then just Save, so nothing grabs focus and raises a keyboard
+    /// over it.
+    var startsFromLastSession: Bool { lastSession != nil && !isEditing }
+
+    func loadUnits() async {
+        guard let preferences = try? await apiClient.userPreferences() else { return }
         distanceUnit = preferences.distanceUnitLabel
+        weightUnit = preferences.weightUnitLabel
     }
 
     /// Create mode: a freshly-materialized or already-owned exercise, no
-    /// prior entry.
-    init(exercise: Exercise, entryDate: Date = Date(), apiClient: APIClientProtocol = AppServices.client) {
+    /// prior entry — started from `lastSession` when there is one.
+    init(
+        exercise: Exercise,
+        entryDate: Date = Date(),
+        lastSession: ExerciseLastSession? = nil,
+        apiClient: APIClientProtocol = AppServices.client
+    ) {
+        let modality = exercise.modality ?? .duration
         self.exercise = exercise
-        self.modality = exercise.modality ?? .duration
+        self.modality = modality
         self.entryDate = entryDate
         self.existingEntryId = nil
         self.apiClient = apiClient
-        self.setRows = modality.usesSets ? [ExerciseSetRow()] : []
+        // A last session logged under another modality (the exercise was
+        // since edited) doesn't describe this form's fields.
+        let usable = lastSession.flatMap { last in (last.modality ?? modality) == modality ? last : nil }
+        self.lastSession = usable
+        let previousSets = (usable?.sets ?? []).map { set -> ExerciseSetRow in
+            var row = ExerciseSetRow()
+            row.repsText = set.reps.map { String($0) } ?? ""
+            row.weightText = set.weight.map(Self.trimmedNumber) ?? ""
+            return row
+        }
+        self.setRows = modality.usesSets ? (previousSets.isEmpty ? [ExerciseSetRow()] : previousSets) : []
+        if let usable, !modality.usesSets {
+            // Set-based sessions' minutes were usually the 2-a-set estimate,
+            // so only timed modalities carry their duration over.
+            durationMinutesText = usable.durationMinutes > 0 ? Self.trimmedNumber(usable.durationMinutes) : ""
+            distanceText = usable.distance.map(Self.trimmedNumber) ?? ""
+        }
+        applyEstimateIfNeeded()
     }
 
     /// Edit mode: reopens an already-logged session, prefilled from it
@@ -98,6 +135,7 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
         self.entryDate = ExerciseEntryEditorViewModel.parseEntryDate(entry.entryDate) ?? Date()
         self.existingEntryId = entry.id
         self.apiClient = apiClient
+        self.lastSession = nil
         self.durationMinutesText = entry.durationMinutes.map { $0 > 0 ? String(Int($0)) : "" } ?? ""
         self.caloriesText = entry.caloriesBurned.map { $0 > 0 ? String(Int($0)) : "" } ?? ""
         self.distanceText = entry.distance.map(Self.trimmedNumber) ?? ""
@@ -190,11 +228,78 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
             next.weightText = last.weightText
         }
         setRows.append(next)
+        applyEstimateIfNeeded()
     }
 
     func removeSet(_ row: ExerciseSetRow) {
         guard setRows.count > 1 else { return }
         setRows.removeAll { $0.id == row.id }
+        applyEstimateIfNeeded()
+    }
+
+    // MARK: - Steppers
+
+    enum SetField { case reps, weight }
+
+    /// A plate's worth either side: 2.5 kg, or 5 lb.
+    var weightStep: Double { weightUnit == "lb" ? 5 : 2.5 }
+
+    /// −/+ on a set's reps or weight. A blank field starts from the set
+    /// above — the next set is usually the same — or from zero.
+    func step(_ row: ExerciseSetRow, _ field: SetField, by direction: Double) {
+        guard let index = setRows.firstIndex(where: { $0.id == row.id }) else { return }
+        let keyPath: WritableKeyPath<ExerciseSetRow, String> = field == .reps ? \.repsText : \.weightText
+        let increment = field == .reps ? 1 : weightStep
+        let above = index > 0 ? Double(setRows[index - 1][keyPath: keyPath]) : nil
+        let current = Double(setRows[index][keyPath: keyPath]) ?? above ?? 0
+        let next = max(0, current + direction * increment)
+        setRows[index][keyPath: keyPath] = next == 0 && field == .reps ? "" : Self.trimmedNumber(next)
+        applyEstimateIfNeeded()
+    }
+
+    /// Minutes in fives — sessions get rounded that way anyway. An odd
+    /// figure goes to the next five in the direction pressed: 32 becomes 35
+    /// or 30, never 25.
+    func stepDuration(by direction: Double) {
+        let current = Double(durationMinutesText) ?? 0
+        let fives = direction > 0 ? (current / 5).rounded(.down) : (current / 5).rounded(.up)
+        let next = max(0, (fives + direction) * 5)
+        durationMinutesText = next == 0 ? "" : Self.trimmedNumber(next)
+        applyEstimateIfNeeded()
+    }
+
+    /// The preset chips under Duration.
+    func setDuration(_ minutes: Int) {
+        durationMinutesText = String(minutes)
+        applyEstimateIfNeeded()
+    }
+
+    /// Half a kilometre (or mile) either side.
+    func stepDistance(by direction: Double) {
+        let current = Double(distanceText) ?? 0
+        let next = max(0, current + direction * 0.5)
+        distanceText = next == 0 ? "" : Self.trimmedNumber(next)
+    }
+
+    // MARK: - Delete
+
+    /// Edit mode only: removing the entry from inside it, where the user
+    /// already is, rather than only by swiping its row.
+    @discardableResult
+    func delete() async -> Bool {
+        guard let existingEntryId else { return false }
+        isDeleting = true
+        bannerMessage = nil
+        defer { isDeleting = false }
+        do {
+            try await apiClient.deleteExerciseEntry(id: existingEntryId)
+            Haptics.warning()
+            return true
+        } catch {
+            bannerMessage = error.localizedDescription
+            Haptics.error()
+            return false
+        }
     }
 
     @discardableResult

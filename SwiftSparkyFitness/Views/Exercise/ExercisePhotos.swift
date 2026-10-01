@@ -24,10 +24,11 @@ struct ExercisePhotos: View {
     /// them — so the form below doesn't jump when they land.
     @State private var reservesSpace: Bool
 
-    private static let height: CGFloat = 132
+    private let height: CGFloat
 
-    init(exerciseName: String) {
+    init(exerciseName: String, height: CGFloat = 132) {
         self.exerciseName = exerciseName
+        self.height = height
         let cached = ExercisePhotoStore.cached(for: exerciseName)
         _images = State(initialValue: cached ?? [])
         _reservesSpace = State(initialValue: cached == nil && ExercisePhotoStore.expectsPhotos(for: exerciseName))
@@ -71,7 +72,7 @@ struct ExercisePhotos: View {
                 // row to the edges.
                 Color.clear
                     .frame(maxWidth: .infinity)
-                    .frame(height: Self.height)
+                    .frame(height: height)
                     .overlay { content(index) }
                     .clipShape(RoundedRectangle(cornerRadius: AppRadius.sm, style: .continuous))
             }

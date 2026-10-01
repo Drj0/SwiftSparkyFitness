@@ -182,7 +182,10 @@ struct TodayView: View {
             ExerciseSearchView(entryDate: viewModel.entryDate) {
                 viewModel.isPresentingLogExercise = false
             }
-                .presentationDetents([.medium, .large])
+                // Tall from the start: it's a list to browse (recents,
+                // categories), and its search field no longer raises the
+                // keyboard to push it up.
+                .presentationDetents([.large])
                 .presentationDragIndicator(.visible)
         }
         .sheet(item: $viewModel.editingFoodEntry, onDismiss: { Task { await viewModel.load() } }) { entry in
