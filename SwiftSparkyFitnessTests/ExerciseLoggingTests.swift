@@ -83,12 +83,26 @@ final class ExerciseLoggingTests: XCTestCase {
         XCTAssertNil(history[ExerciseLastSession.key(ExerciseSessionSummary.healthActiveEnergyName)])
     }
 
+    /// Two sessions on one day: the one logged last is "last time", even
+    /// when the earlier one carries a real time of day and the later one
+    /// the midnight a day page logs with.
+    func testSameDayHistoryPrefersTheSessionLoggedLast() async throws {
+        let local = makeLocal()
+        let walk = try await local.createCustomExercise(CustomExerciseInput(name: "Brisk Walk", category: "Cardio", modality: .duration))
+        let morning = Calendar.current.date(bySettingHour: 7, minute: 30, second: 0, of: Date())!
+        try await log(local, walk, on: morning, minutes: 20)
+        try await log(local, walk, on: Calendar.current.startOfDay(for: Date()), minutes: 45)
+
+        let history = await local.exerciseHistory(since: daysAgo(30))
+        XCTAssertEqual(history[ExerciseLastSession.key("Brisk Walk")]?.durationMinutes, 45)
+    }
+
     // MARK: - Editor starting from last time
 
     func testEditorStartsFromTheLastSessionsSets() {
         let exercise = Exercise(id: "e1", name: "Goblet Squat", category: "Strength", modality: .weightReps, caloriesPerHour: 300)
         let last = ExerciseLastSession(
-            date: daysAgo(2), modality: .weightReps, durationMinutes: 4, caloriesBurned: 20,
+            date: daysAgo(2), modality: .weightReps, durationMinutes: 4, caloriesBurned: 55,
             distance: nil, sets: sets([(8, 20), (6, 20)]), timesThisWeek: 1
         )
         let viewModel = ExerciseEntryEditorViewModel(exercise: exercise, lastSession: last, apiClient: makeLocal())
@@ -96,7 +110,8 @@ final class ExerciseLoggingTests: XCTestCase {
         XCTAssertTrue(viewModel.startsFromLastSession)
         XCTAssertEqual(viewModel.setRows.map(\.repsText), ["8", "6"])
         XCTAssertEqual(viewModel.setRows.map(\.weightText), ["20", "20"])
-        // 300 kcal/h over two sets at two minutes each.
+        // 300 kcal/h over two sets at two minutes each — estimated for this
+        // session, not last time's 55 copied over.
         XCTAssertEqual(viewModel.caloriesText, "20")
         XCTAssertTrue(viewModel.caloriesAreEstimated)
     }
@@ -119,7 +134,7 @@ final class ExerciseLoggingTests: XCTestCase {
     func testTimedEditorCarriesDurationAndDistanceOver() {
         let exercise = Exercise(id: "e2", name: "Running", category: "Cardio", modality: .durationDistance, caloriesPerHour: 600)
         let last = ExerciseLastSession(
-            date: daysAgo(1), modality: .durationDistance, durationMinutes: 30, caloriesBurned: 300,
+            date: daysAgo(1), modality: .durationDistance, durationMinutes: 30, caloriesBurned: 410,
             distance: 5, sets: [], timesThisWeek: 1
         )
         let viewModel = ExerciseEntryEditorViewModel(exercise: exercise, lastSession: last, apiClient: makeLocal())
@@ -190,6 +205,50 @@ final class ExerciseLoggingTests: XCTestCase {
         XCTAssertEqual(viewModel.durationMinutesText, "", "zero minutes is no duration, not a typed 0")
     }
 
+    /// The decimal pad types "," in many locales; `Double("22,5")` is nil,
+    /// which dropped the weight on save and restarted the stepper from 0.
+    func testCommaDecimalsAreReadBackAndStepped() {
+        var row = ExerciseSetRow()
+        row.repsText = "8"
+        row.weightText = "22,5"
+        XCTAssertEqual(row.input(setNumber: 1).weight, 22.5)
+
+        let exercise = Exercise(id: "e1", name: "Goblet Squat", category: "Strength", modality: .weightReps)
+        let viewModel = ExerciseEntryEditorViewModel(exercise: exercise, apiClient: makeLocal())
+        viewModel.setRows[0].weightText = "22,5"
+        viewModel.step(viewModel.setRows[0], .weight, by: 1)
+        XCTAssertEqual(viewModel.setRows[0].weightText.parsedDecimal, 25)
+    }
+
+    func testHalfStepsDontShowFloatingPointNoise() {
+        let exercise = Exercise(id: "e2", name: "Running", category: "Cardio", modality: .durationDistance)
+        let viewModel = ExerciseEntryEditorViewModel(exercise: exercise, apiClient: makeLocal())
+        viewModel.distanceText = "2.2"
+        viewModel.stepDistance(by: -1)
+        XCTAssertEqual(viewModel.distanceText.parsedDecimal, 1.7)
+        XCTAssertLessThanOrEqual(viewModel.distanceText.count, 3, "not 1.7000000000000002")
+    }
+
+    /// The blank duration's placeholder shows the estimate from sets, so +
+    /// goes up from it rather than down to 5.
+    func testPlusOnABlankStrengthDurationStartsFromTheEstimate() {
+        let exercise = Exercise(id: "e1", name: "Goblet Squat", category: "Strength", modality: .weightReps)
+        let viewModel = ExerciseEntryEditorViewModel(exercise: exercise, apiClient: makeLocal())
+        viewModel.setRows[0].repsText = "8"
+        for _ in 0..<7 { viewModel.addSet() }
+
+        viewModel.stepDuration(by: 1)
+        XCTAssertEqual(viewModel.durationMinutesText, "20", "8 sets is ≈ 16 min; + goes to the next five")
+    }
+
+    func testSteppingABlankWeightUpAndDownLeavesTheSetBlank() {
+        let exercise = Exercise(id: "e1", name: "Goblet Squat", category: "Strength", modality: .weightReps)
+        let viewModel = ExerciseEntryEditorViewModel(exercise: exercise, apiClient: makeLocal())
+        viewModel.step(viewModel.setRows[0], .weight, by: 1)
+        viewModel.step(viewModel.setRows[0], .weight, by: -1)
+        XCTAssertTrue(viewModel.setRows[0].isBlank, "a 0 kg set with no reps would save as a set")
+    }
+
     // MARK: - Repeating a session
 
     /// Quick log lands on the day the sheet was opened for — logging from
@@ -214,6 +273,53 @@ final class ExerciseLoggingTests: XCTestCase {
         XCTAssertNil(viewModel.quickLogError)
         let today = try await local.dailySummary(date: Date()).exerciseSessions
         XCTAssertTrue(today.isEmpty)
+    }
+
+    /// After a quick log, the row's "last time" is the new session — and
+    /// it counts toward this week only when it's in this week.
+    func testQuickLogMovesLastTimeForwardWithinTheWeek() {
+        let last = ExerciseLastSession(
+            date: daysAgo(3), modality: .weightReps, durationMinutes: 6, caloriesBurned: 30,
+            distance: nil, sets: sets([(8, 20)]), timesThisWeek: 1
+        )
+        let today = ExerciseSearchViewModel.history(last, loggedAgainOn: Calendar.current.startOfDay(for: Date()))
+        XCTAssertTrue(Calendar.current.isDateInToday(today.date))
+        XCTAssertEqual(today.timesThisWeek, 2)
+
+        let longAgo = ExerciseSearchViewModel.history(last, loggedAgainOn: daysAgo(20))
+        XCTAssertEqual(longAgo.date, last.date, "an older session isn't the latest one")
+        XCTAssertEqual(longAgo.timesThisWeek, 1)
+    }
+
+    func testAQuickDoubleTapLogsOnce() async throws {
+        let local = makeLocal()
+        let squat = try await strength(local)
+        try await log(local, squat, on: daysAgo(2), sets: sets([(8, 20)]))
+        let viewModel = ExerciseSearchViewModel(apiClient: local)
+        await viewModel.loadHistory()
+
+        await viewModel.quickLog(squat)
+        await viewModel.quickLog(squat)
+
+        let today = try await local.dailySummary(date: Date()).exerciseSessions
+        XCTAssertEqual(today.count, 1)
+    }
+
+    /// A recent made quickly gets the catch-all "Other"; under Cardio it
+    /// still shows as a recent rather than vanishing from both lists.
+    func testARecentFiledUnderOtherStillShowsInItsCategory() async throws {
+        let local = makeLocal()
+        let running = try await local.findOrCreateExercise(named: "Running")
+        XCTAssertEqual(running.category, "Other")
+        try await log(local, running, on: daysAgo(1))
+        let viewModel = ExerciseSearchViewModel(apiClient: local)
+        await viewModel.loadRecents()
+
+        viewModel.category = .cardio
+        XCTAssertEqual(viewModel.visibleRecents.map(\.name), ["Running"])
+        XCTAssertFalse(viewModel.browseExercises.contains { $0.name == "Running" }, "shown once, under Recent")
+        viewModel.category = .strength
+        XCTAssertTrue(viewModel.visibleRecents.isEmpty)
     }
 
     /// The day list's "Log again" copies a logged row as it is.

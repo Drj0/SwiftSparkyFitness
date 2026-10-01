@@ -7,6 +7,11 @@
 //  by one rep or one plate from the set before, so a tap beats the number
 //  pad — and the field still takes typing for a bigger jump.
 //
+//  To VoiceOver it's one element, not three: the field itself is
+//  adjustable (swipe up or down to step, double-tap to type), and the −/+
+//  buttons are hidden. As three stops, activating "+" never said the new
+//  number, and a four-set form was some thirty swipes long.
+//
 
 import SwiftUI
 
@@ -36,6 +41,14 @@ struct StepperField: View {
                     .lineLimit(1)
                     .minimumScaleFactor(0.7)
                     .accessibilityLabel(label)
+                    .accessibilityHint("Changes by \(stepLabel)")
+                    .accessibilityAdjustableAction { direction in
+                        switch direction {
+                        case .increment: onStep(1)
+                        case .decrement: onStep(-1)
+                        @unknown default: break
+                        }
+                    }
                 if let unit {
                     Text(unit)
                         .appBody(12)
@@ -64,7 +77,8 @@ struct StepperField: View {
                 .contentShape(Rectangle())
         }
         .buttonStyle(.pressableCompact)
-        .accessibilityLabel("\(direction > 0 ? "Increase" : "Decrease") \(label.lowercased()) by \(stepLabel)")
+        // The field's adjustable action does this for VoiceOver.
+        .accessibilityHidden(true)
     }
 }
 

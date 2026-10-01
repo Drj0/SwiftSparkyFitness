@@ -19,6 +19,9 @@ import SwiftUI
 struct ServerScreenBar: View {
     var onBack: () -> Void
     var onEditServer: () -> Void
+    /// Where Back goes, for VoiceOver: the start screen, or from sign-up,
+    /// the login form.
+    var backHint = "Returns to choosing how to use Sparky"
 
     /// Read only so the chip redraws the moment the address sheet saves. The
     /// address itself comes from ServerConfig, which also honours SERVER_URL.
@@ -38,7 +41,7 @@ struct ServerScreenBar: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.pressable)
-            .accessibilityHint("Returns to choosing how to use Sparky")
+            .accessibilityHint(backHint)
 
             Spacer(minLength: 8)
 

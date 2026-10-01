@@ -65,14 +65,16 @@ final class ServerModeClient: APIClientProtocol {
     // MARK: - Session
 
     func signIn(email: String, password: String) async throws -> SessionUser {
+        let epoch = AppMode.changeCount
         let user = try await remote.signIn(email: email, password: password)
-        signedIn(user)
+        signedIn(user, epoch: epoch)
         return user
     }
 
     func signUp(email: String, password: String) async throws -> SessionUser {
+        let epoch = AppMode.changeCount
         let user = try await remote.signUp(email: email, password: password)
-        signedIn(user)
+        signedIn(user, epoch: epoch)
         return user
     }
 
@@ -83,6 +85,7 @@ final class ServerModeClient: APIClientProtocol {
     func currentSession() async throws -> SessionUser? {
         let serverURL = ServerConfig.urlString
         let remote = self.remote
+        let epoch = AppMode.changeCount
         // With a saved session, a server that accepts the connection and
         // then hangs mustn't hold the launch for the whole request timeout:
         // after a moment the diary opens from this device, and the check
@@ -90,11 +93,11 @@ final class ServerModeClient: APIClientProtocol {
         if let cached = SessionCache.user(forServer: serverURL) {
             let check = Task { try await remote.currentSession() }
             guard let early = await Self.result(of: check, within: .seconds(3)) else {
-                sync.activate(user: cached, serverURL: serverURL)
-                Task { await self.finishSessionCheck(check) }
+                activateSync(cached, serverURL: serverURL, epoch: epoch)
+                Task { await self.finishSessionCheck(check, epoch: epoch) }
                 return cached
             }
-            return try resolveSession(early, cached: cached, serverURL: serverURL)
+            return try resolveSession(early, cached: cached, serverURL: serverURL, epoch: epoch)
         }
         do {
             guard let user = try await remote.currentSession() else {
@@ -102,22 +105,22 @@ final class ServerModeClient: APIClientProtocol {
                 sync.deactivate(removingCopy: false)
                 return nil
             }
-            signedIn(user)
+            signedIn(user, epoch: epoch)
             return user
         } catch where error.isTransientFailure || error is DecodingError {
             // A body that isn't a session at all — a hotel Wi-Fi login page
             // answering in the server's place — says nothing about the
             // session either; it's being out of range by another name.
             guard let cached = SessionCache.user(forServer: serverURL) else { throw error }
-            sync.activate(user: cached, serverURL: serverURL)
+            activateSync(cached, serverURL: serverURL, epoch: epoch)
             return cached
         }
     }
 
-    private func resolveSession(_ result: Result<SessionUser?, Error>, cached: SessionUser, serverURL: String) throws -> SessionUser? {
+    private func resolveSession(_ result: Result<SessionUser?, Error>, cached: SessionUser, serverURL: String, epoch: Int) throws -> SessionUser? {
         switch result {
         case .success(let user?):
-            signedIn(user)
+            signedIn(user, epoch: epoch)
             return user
         case .success(nil):
             SessionCache.clear()
@@ -126,20 +129,22 @@ final class ServerModeClient: APIClientProtocol {
         case .failure:
             // APIClient turns a definite "signed out" into nil; any error
             // left is the server not answering properly, not a sign-out.
-            sync.activate(user: cached, serverURL: serverURL)
+            activateSync(cached, serverURL: serverURL, epoch: epoch)
             return cached
         }
     }
 
     /// The rest of a session check the launch stopped waiting for.
-    private func finishSessionCheck(_ check: Task<SessionUser?, Error>) async {
+    private func finishSessionCheck(_ check: Task<SessionUser?, Error>, epoch: Int) async {
         switch await check.result {
         case .success(let user?):
-            signedIn(user)
+            signedIn(user, epoch: epoch)
         case .success(nil):
             // The server answered after all: this session is over. The copy
             // stays; signing in again returns to it.
             SessionCache.clear()
+            // Only to a user still in the server mode this check began in.
+            guard AppMode.changeCount == epoch else { return }
             NotificationCenter.default.post(name: .sessionExpired, object: nil)
         case .failure:
             break // still out of range: carry on from this device
@@ -179,9 +184,19 @@ final class ServerModeClient: APIClientProtocol {
         }
     }
 
-    private func signedIn(_ user: SessionUser) {
+    private func signedIn(_ user: SessionUser, epoch: Int) {
         SessionCache.save(user, serverURL: ServerConfig.urlString)
-        sync.activate(user: user)
+        activateSync(user, serverURL: ServerConfig.urlString, epoch: epoch)
+    }
+
+    /// Starts syncing only if the app is still in the mode the check or
+    /// sign-in began in. One the user walked away from — Back to the start
+    /// screen mid-connect, then on to this iPhone — can still finish, and
+    /// used to start server sync behind local mode. The session is still
+    /// cached either way, so choosing the server again picks it up.
+    private func activateSync(_ user: SessionUser, serverURL: String, epoch: Int) {
+        guard AppMode.changeCount == epoch else { return }
+        sync.activate(user: user, serverURL: serverURL)
     }
 
     /// The copy is deleted with the session — after Settings has warned

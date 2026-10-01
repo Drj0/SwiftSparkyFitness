@@ -110,17 +110,29 @@ final class ExerciseSearchViewModel: ObservableObject {
     @Published private(set) var justLogged: Set<String> = []
     @Published private(set) var quickLoggingId: String?
     @Published var quickLogError: String?
+    /// When each exercise was last quick-logged. Logging is quick enough
+    /// that the busy state never shows, so a double-tap logged twice.
+    private var quickLoggedAt: [String: Date] = [:]
 
     /// Recents in the selected category.
     var visibleRecents: [Exercise] {
-        recentExercises.filter { category.matches($0.category ?? ExerciseCatalog.entry(named: $0.name)?.category) }
+        recentExercises.filter { category.matches(Self.category(of: $0)) }
+    }
+
+    /// A library row's own category, unless it's the catch-all "Other" a
+    /// quickly-created row gets — then the catalog's, so a "Running" made
+    /// that way still files under Cardio.
+    private static func category(of exercise: Exercise) -> String? {
+        if let own = exercise.category, own.lowercased() != "other" { return own }
+        return ExerciseCatalog.entry(named: exercise.name)?.category ?? exercise.category
     }
 
     /// Catalog suggestions for the selected category, minus whatever Recent
-    /// already shows.
+    /// is showing. Only what it's *showing*: removing every recent name hid
+    /// a recent filed under another category from both lists at once.
     var browseExercises: [CatalogExercise] {
-        let recent = Set(recentExercises.map { ExerciseCatalog.normalized($0.name) })
-        return ExerciseCatalog.browse(category).filter { !recent.contains(ExerciseCatalog.normalized($0.name)) }
+        let shown = Set(visibleRecents.map { ExerciseCatalog.normalized($0.name) })
+        return ExerciseCatalog.browse(category).filter { !shown.contains(ExerciseCatalog.normalized($0.name)) }
     }
 
     /// The old name for All's suggestions, kept for callers that predate
@@ -170,21 +182,39 @@ final class ExerciseSearchViewModel: ObservableObject {
     /// the same "+" Recent foods have. The sheet stays open, so a whole
     /// routine of repeats is a tap each.
     func quickLog(_ exercise: Exercise) async {
-        guard let last = lastSession(for: exercise.name), quickLoggingId == nil else { return }
+        guard let last = lastSession(for: exercise.name), quickLoggingId == nil,
+              Date().timeIntervalSince(quickLoggedAt[exercise.id] ?? .distantPast) > 1 else { return }
         quickLoggingId = exercise.id
         quickLogError = nil
         defer { quickLoggingId = nil }
         do {
             _ = try await apiClient.createExerciseEntry(ExerciseEntryInput(repeating: last, exercise: exercise, on: entryDate))
+            quickLoggedAt[exercise.id] = Date()
             justLogged.insert(exercise.id)
-            var updated = last
-            updated.timesThisWeek += 1
-            history[ExerciseLastSession.key(exercise.name)] = updated
+            history[ExerciseLastSession.key(exercise.name)] = Self.history(last, loggedAgainOn: entryDate)
             Haptics.success()
         } catch {
             quickLogError = "Couldn't log \(exercise.name). Check your connection and try again."
             Haptics.error()
         }
+    }
+
+    /// The row's "last time" after a quick log: the new session if it's the
+    /// most recent one, counted this week only if it falls in this week —
+    /// the same window `exerciseHistory` counts.
+    static func history(_ last: ExerciseLastSession, loggedAgainOn date: Date, now: Date = Date()) -> ExerciseLastSession {
+        let calendar = Calendar.current
+        let weekStart = calendar.date(byAdding: .day, value: -6, to: calendar.startOfDay(for: now)) ?? now
+        let inThisWeek = date >= weekStart && calendar.startOfDay(for: date) <= calendar.startOfDay(for: now)
+        return ExerciseLastSession(
+            date: max(last.date, date),
+            modality: last.modality,
+            durationMinutes: last.durationMinutes,
+            caloriesBurned: last.caloriesBurned,
+            distance: last.distance,
+            sets: last.sets,
+            timesThisWeek: last.timesThisWeek + (inThisWeek ? 1 : 0)
+        )
     }
 
     var hasResults: Bool {

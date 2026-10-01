@@ -36,13 +36,22 @@ struct ExerciseSetRow: Identifiable, Equatable {
         ExerciseSetInput(
             setNumber: setNumber,
             reps: Int(repsText),
-            weight: Double(weightText),
-            rpe: Double(rpeText),
+            weight: weightText.parsedDecimal,
+            rpe: rpeText.parsedDecimal,
             notes: notes.isEmpty ? nil : notes
         )
     }
 
     var isBlank: Bool { repsText.isEmpty && weightText.isEmpty }
+}
+
+extension String {
+    /// A number field's value: "22.5", or "22,5" where the decimal pad
+    /// types a comma. `Double("22,5")` is nil, which silently dropped a
+    /// typed weight on save and restarted the steppers from zero.
+    var parsedDecimal: Double? {
+        Double(trimmingCharacters(in: .whitespaces).replacingOccurrences(of: ",", with: "."))
+    }
 }
 
 @MainActor
@@ -154,9 +163,11 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
 
     /// "100" for a whole weight/distance/RPE, "102.5" for a fractional one —
     /// `String(Double)` alone always renders "100.0", which reads oddly in a
-    /// field the user is about to keep typing into.
+    /// field the user is about to keep typing into. Two places at most, so a
+    /// half-step from 2.2 reads 1.7 rather than 1.7000000000000002, in the
+    /// locale's own decimal separator (`parsedDecimal` reads either back).
     private static func trimmedNumber(_ value: Double) -> String {
-        value == value.rounded() ? String(Int(value)) : String(value)
+        value.formatted(.number.grouping(.never).precision(.fractionLength(0...2)))
     }
 
     private static func parseEntryDate(_ string: String?) -> Date? {
@@ -168,15 +179,15 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
     }
 
     private var durationMinutes: Double? {
-        Double(durationMinutesText).flatMap { $0 > 0 ? $0 : nil }
+        durationMinutesText.parsedDecimal.flatMap { $0 > 0 ? $0 : nil }
     }
 
     private var caloriesBurned: Double? {
-        Double(caloriesText).flatMap { $0 > 0 ? $0 : nil }
+        caloriesText.parsedDecimal.flatMap { $0 > 0 ? $0 : nil }
     }
 
     private var distance: Double? {
-        Double(distanceText).flatMap { $0 > 0 ? $0 : nil }
+        distanceText.parsedDecimal.flatMap { $0 > 0 ? $0 : nil }
     }
 
     /// Rough time for a set-based session the user didn't time: about two
@@ -215,7 +226,7 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
     /// stops the moment they type their own.
     func applyEstimateIfNeeded() {
         guard let estimated = estimatedCalories else { return }
-        caloriesText = String(Int(estimated))
+        caloriesText = Self.trimmedNumber(estimated)
         lastEstimateText = caloriesText
     }
 
@@ -241,27 +252,38 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
 
     enum SetField { case reps, weight }
 
-    /// A plate's worth either side: 2.5 kg, or 5 lb.
-    var weightStep: Double { weightUnit == "lb" ? 5 : 2.5 }
+    /// A plate's worth either side: 2.5 kg, 5 lb, or half a stone.
+    var weightStep: Double {
+        switch weightUnit {
+        case "lb": return 5
+        case "st": return 0.5
+        default: return 2.5
+        }
+    }
 
     /// −/+ on a set's reps or weight. A blank field starts from the set
-    /// above — the next set is usually the same — or from zero.
+    /// above — the next set is usually the same — or from zero. Zero goes
+    /// back to blank, so stepping a blank row up and down leaves it blank
+    /// rather than a saved "0 kg" set.
     func step(_ row: ExerciseSetRow, _ field: SetField, by direction: Double) {
         guard let index = setRows.firstIndex(where: { $0.id == row.id }) else { return }
         let keyPath: WritableKeyPath<ExerciseSetRow, String> = field == .reps ? \.repsText : \.weightText
         let increment = field == .reps ? 1 : weightStep
-        let above = index > 0 ? Double(setRows[index - 1][keyPath: keyPath]) : nil
-        let current = Double(setRows[index][keyPath: keyPath]) ?? above ?? 0
+        let above = index > 0 ? setRows[index - 1][keyPath: keyPath].parsedDecimal : nil
+        let current = setRows[index][keyPath: keyPath].parsedDecimal ?? above ?? 0
         let next = max(0, current + direction * increment)
-        setRows[index][keyPath: keyPath] = next == 0 && field == .reps ? "" : Self.trimmedNumber(next)
+        setRows[index][keyPath: keyPath] = next == 0 ? "" : Self.trimmedNumber(next)
         applyEstimateIfNeeded()
     }
 
     /// Minutes in fives — sessions get rounded that way anyway. An odd
     /// figure goes to the next five in the direction pressed: 32 becomes 35
     /// or 30, never 25.
+    ///
+    /// A blank strength duration starts from the estimate its placeholder
+    /// shows ("≈ 16"), so + can't drop it to 5.
     func stepDuration(by direction: Double) {
-        let current = Double(durationMinutesText) ?? 0
+        let current = durationMinutesText.parsedDecimal ?? (modality.usesSets ? effectiveMinutes ?? 0 : 0)
         let fives = direction > 0 ? (current / 5).rounded(.down) : (current / 5).rounded(.up)
         let next = max(0, (fives + direction) * 5)
         durationMinutesText = next == 0 ? "" : Self.trimmedNumber(next)
@@ -276,7 +298,7 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
 
     /// Half a kilometre (or mile) either side.
     func stepDistance(by direction: Double) {
-        let current = Double(distanceText) ?? 0
+        let current = distanceText.parsedDecimal ?? 0
         let next = max(0, current + direction * 0.5)
         distanceText = next == 0 ? "" : Self.trimmedNumber(next)
     }

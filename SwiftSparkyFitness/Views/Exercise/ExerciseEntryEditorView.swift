@@ -28,6 +28,7 @@ struct ExerciseEntryEditorView: View {
     @StateObject private var viewModel: ExerciseEntryEditorViewModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @Environment(\.dynamicTypeSize) private var dynamicTypeSize
     var onSaved: () -> Void = {}
 
     @State private var isConfirmingDelete = false
@@ -61,40 +62,52 @@ struct ExerciseEntryEditorView: View {
         VStack(spacing: 0) {
             header
 
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    if let bannerMessage = viewModel.bannerMessage {
-                        ErrorBanner(message: bannerMessage)
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        if let bannerMessage = viewModel.bannerMessage {
+                            ErrorBanner(message: bannerMessage)
+                        }
+
+                        ExercisePhotos(exerciseName: viewModel.exercise.name, height: 104)
+
+                        kindRow
+
+                        if viewModel.startsFromLastSession, let last = viewModel.lastSession {
+                            lastTimeCard(last)
+                        }
+
+                        if viewModel.modality.usesSets {
+                            setsEditor
+                            durationSection
+                        } else {
+                            durationSection
+                            if viewModel.modality == .durationDistance { distanceSection }
+                        }
+
+                        caloriesSection
+                        moreDetails
+
+                        if viewModel.isEditing { deleteButton }
                     }
-
-                    ExercisePhotos(exerciseName: viewModel.exercise.name, height: 104)
-
-                    kindRow
-
-                    if viewModel.startsFromLastSession, let last = viewModel.lastSession {
-                        lastTimeCard(last)
-                    }
-
-                    if viewModel.modality.usesSets {
-                        setsEditor
-                        durationSection
-                    } else {
-                        durationSection
-                        if viewModel.modality == .durationDistance { distanceSection }
-                    }
-
-                    caloriesSection
-                    moreDetails
-
-                    if viewModel.isEditing { deleteButton }
+                    .padding(18)
+                    .id(Self.topAnchor)
+                    .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.bannerMessage)
+                    .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: viewModel.setRows.count)
                 }
-                .padding(18)
-                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.bannerMessage)
-                .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: viewModel.setRows.count)
+                // Number pads have no return key; the search sheets dismiss the
+                // same way.
+                .scrollDismissesKeyboard(.interactively)
+                // A failed save or delete reports at the top, and Delete sits at
+                // the bottom — so the banner is brought into view, and spoken.
+                .onChange(of: viewModel.bannerMessage) { _, message in
+                    guard let message else { return }
+                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.3)) {
+                        proxy.scrollTo(Self.topAnchor, anchor: .top)
+                    }
+                    AccessibilityNotification.Announcement(message).post()
+                }
             }
-            // Number pads have no return key; the search sheets dismiss the
-            // same way.
-            .scrollDismissesKeyboard(.interactively)
         }
         .background(AppColor.surface)
         .task { await viewModel.loadUnits() }
@@ -194,7 +207,7 @@ struct ExerciseEntryEditorView: View {
                 }
             }
 
-            columnHeadings
+            if !stacksSetFields { columnHeadings }
 
             ForEach(Array(viewModel.setRows.enumerated()), id: \.element.id) { index, row in
                 setRow(index: index, row: row)
@@ -229,7 +242,7 @@ struct ExerciseEntryEditorView: View {
             if viewModel.modality == .weightReps {
                 Text("WEIGHT (\(viewModel.weightUnit.uppercased()))").frame(maxWidth: .infinity)
             }
-            Color.clear.frame(width: 32)
+            Color.clear.frame(width: Self.removeWidth + 4)
         }
         .appBody(10, weight: .semibold)
         .foregroundStyle(AppColor.placeholder)
@@ -237,51 +250,88 @@ struct ExerciseEntryEditorView: View {
         .accessibilityHidden(true)
     }
 
+    private static let topAnchor = "editorTop"
+
+    /// From here up the two steppers no longer fit side by side — the
+    /// fields' text scales and their columns don't — so each set stacks
+    /// its fields under a heading instead of clipping "102.5" to "10".
+    private var stacksSetFields: Bool { dynamicTypeSize >= .xxxLarge }
+
+    @ViewBuilder
     private func setRow(index: Int, row: ExerciseSetRow) -> some View {
-        HStack(spacing: 8) {
-            Text("\(index + 1)")
-                .appBody(14, weight: .semibold)
-                .foregroundStyle(AppColor.secondaryText)
-                .monospacedDigit()
-                .frame(width: 26, alignment: .leading)
-                .accessibilityHidden(true)
-
-            StepperField(
-                label: "Reps, set \(index + 1)",
-                text: binding(for: row, \.repsText),
-                placeholder: "0",
-                stepLabel: "1"
-            ) { viewModel.step(row, .reps, by: $0) }
-
-            if viewModel.modality == .weightReps {
-                StepperField(
-                    label: "Weight, set \(index + 1)",
-                    text: binding(for: row, \.weightText),
-                    placeholder: "0",
-                    keyboardType: .decimalPad,
-                    stepLabel: "\(ExerciseFormatting.number(viewModel.weightStep)) \(viewModel.weightUnit)"
-                ) { viewModel.step(row, .weight, by: $0) }
-            }
-
-            // The last set can't be removed (see removeSet), so its button
-            // would only buzz; keep the column so the fields stay aligned.
-            if viewModel.setRows.count > 1 {
-                Button {
-                    Haptics.warning()
-                    viewModel.removeSet(row)
-                } label: {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 12, weight: .bold))
-                        .foregroundStyle(AppColor.placeholder)
-                        .frame(width: 32, height: 44)
-                        .contentShape(Rectangle())
+        if stacksSetFields {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Text("Set \(index + 1)")
+                        .appBody(14, weight: .semibold)
+                        .foregroundStyle(AppColor.secondaryText)
+                        .accessibilityAddTraits(.isHeader)
+                    Spacer()
+                    if viewModel.setRows.count > 1 { removeSetButton(index: index, row: row) }
                 }
-                .buttonStyle(.pressableCompact)
-                .accessibilityLabel("Remove set \(index + 1)")
-            } else {
-                Color.clear.frame(width: 32, height: 44).accessibilityHidden(true)
+                repsField(index: index, row: row)
+                if viewModel.modality == .weightReps { weightField(index: index, row: row) }
+            }
+        } else {
+            HStack(spacing: 8) {
+                Text("\(index + 1)")
+                    .appBody(14, weight: .semibold)
+                    .foregroundStyle(AppColor.secondaryText)
+                    .monospacedDigit()
+                    .frame(width: 26, alignment: .leading)
+                    .accessibilityHidden(true)
+
+                repsField(index: index, row: row)
+                if viewModel.modality == .weightReps { weightField(index: index, row: row) }
+
+                // The last set can't be removed (see removeSet), so its button
+                // would only buzz; keep the column so the fields stay aligned.
+                if viewModel.setRows.count > 1 {
+                    removeSetButton(index: index, row: row)
+                } else {
+                    Color.clear.frame(width: Self.removeWidth + 4, height: 44).accessibilityHidden(true)
+                }
             }
         }
+    }
+
+    private func repsField(index: Int, row: ExerciseSetRow) -> some View {
+        StepperField(
+            label: "Reps, set \(index + 1)",
+            text: binding(for: row, \.repsText),
+            placeholder: "0",
+            stepLabel: "1"
+        ) { viewModel.step(row, .reps, by: $0) }
+    }
+
+    private func weightField(index: Int, row: ExerciseSetRow) -> some View {
+        StepperField(
+            label: "Weight in \(viewModel.weightUnit), set \(index + 1)",
+            text: binding(for: row, \.weightText),
+            placeholder: "0",
+            keyboardType: .decimalPad,
+            stepLabel: "\(ExerciseFormatting.number(viewModel.weightStep)) \(viewModel.weightUnit)"
+        ) { viewModel.step(row, .weight, by: $0) }
+    }
+
+    /// Set apart from the weight's "+" — the most-tapped control in the row
+    /// sat 8pt from it, and a slightly wide tap removed the whole set.
+    private static let removeWidth: CGFloat = 36
+
+    private func removeSetButton(index: Int, row: ExerciseSetRow) -> some View {
+        Button {
+            Haptics.warning()
+            viewModel.removeSet(row)
+        } label: {
+            Image(systemName: "xmark")
+                .font(.system(size: 12, weight: .bold))
+                .foregroundStyle(AppColor.placeholder)
+                .frame(width: Self.removeWidth, height: 44, alignment: .trailing)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressableCompact)
+        .padding(.leading, 4)
+        .accessibilityLabel("Remove set \(index + 1)")
     }
 
     /// A single row's field, addressed by index rather than id — `ForEach`
@@ -308,7 +358,9 @@ struct ExerciseEntryEditorView: View {
                 label: "Duration in minutes",
                 text: $viewModel.durationMinutesText.onChange { viewModel.applyEstimateIfNeeded() },
                 placeholder: usesSets ? estimatedFromSets : "0",
-                unit: "min",
+                // "≈ 2 min a set" already says minutes; a unit after it read
+                // "≈ 2 min a set min".
+                unit: usesSets && viewModel.durationMinutesText.isEmpty && viewModel.effectiveMinutes == nil ? nil : "min",
                 stepLabel: "5 minutes"
             ) { viewModel.stepDuration(by: $0) }
             if !usesSets {

@@ -93,7 +93,12 @@ struct NutritionTrendCard: View {
         if let constant = viewModel.constantGoal {
             parts.append("Goal \(Self.number(constant)) \(series.unit)")
         } else if let first = viewModel.goalLine.first?.value, let last = viewModel.goalLine.last?.value {
-            parts.append("Goal \(Self.number(first)) → \(Self.number(last)) \(series.unit)")
+            if first != last {
+                parts.append("Goal \(Self.number(first)) → \(Self.number(last)) \(series.unit)")
+            } else if let low = viewModel.goalLine.map(\.value).min(), let high = viewModel.goalLine.map(\.value).max() {
+                // Changed and changed back: "2,000 → 2,000" said nothing.
+                parts.append("Goal \(Self.number(low))–\(Self.number(high)) \(series.unit)")
+            }
         }
         let days = viewModel.loadedRange.dayCount
         parts.append("\(viewModel.loggedDayCount) of \(days) day\(days == 1 ? "" : "s") logged")

@@ -240,7 +240,13 @@ struct ProgressTabView: View {
             message = "Log a meal, a workout or your weight on Today, and this is where it adds up over the days."
         case .lastLogged(let date):
             title = viewModel.preset.days.map { "Nothing logged in the last \($0) days" } ?? "Nothing logged in this range"
-            message = "Your last entry was on \(date.formatted(.dateTime.weekday(.wide).day().month(.wide)))."
+            // With the year once it isn't this one: the search reaches a year
+            // back, and "Saturday 20 December" read in October sounds ahead.
+            let thisYear = Calendar.current.isDate(date, equalTo: Date(), toGranularity: .year)
+            let day = thisYear
+                ? date.formatted(.dateTime.weekday(.wide).day().month(.wide))
+                : date.formatted(.dateTime.weekday(.wide).day().month(.wide).year())
+            message = "Your last entry was on \(day)."
             suggestion = viewModel.shortestPreset(reaching: date)
         case .unknown:
             title = viewModel.preset.days.map { "Nothing logged in the last \($0) days" } ?? "Nothing logged in this range"

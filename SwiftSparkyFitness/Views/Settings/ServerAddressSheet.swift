@@ -65,6 +65,11 @@ struct ServerAddressSheet: View {
     @State private var draft = ""
     @State private var isChecking = false
     @State private var problem: Problem?
+    /// The check in flight. Cancel abandons it: a server that answered after
+    /// the sheet closed used to save the address and run `onSaved` anyway —
+    /// on the start screen, entering server mode the next time any sheet
+    /// there closed.
+    @State private var probe: Task<Void, Never>?
     @FocusState private var isFocused: Bool
 
     private var offersOverride: Bool { problem?.allowsOverride == true }
@@ -74,7 +79,10 @@ struct ServerAddressSheet: View {
         VStack(spacing: 0) {
             SheetHeader(
                 title: title,
-                onCancel: { dismiss() },
+                onCancel: {
+                    probe?.cancel()
+                    dismiss()
+                },
                 action: SheetAction(
                     saveTitle,
                     isEnabled: !trimmedDraft.isEmpty,
@@ -145,6 +153,7 @@ struct ServerAddressSheet: View {
         // Editing after a failed check is a new address, so it earns a fresh
         // check rather than inheriting the previous one's "Save anyway".
         .onChange(of: draft) { _, _ in problem = nil }
+        .onDisappear { probe?.cancel() }
     }
 
     /// Checks the address reaches a SparkyFitness server before saving it,
@@ -167,10 +176,15 @@ struct ServerAddressSheet: View {
             Haptics.error()
             return
         }
-        Task {
+        probe?.cancel()
+        probe = Task {
             isChecking = true
             let verdict = await ServerProbe.check(url)
             isChecking = false
+            // Closed, or the address edited, while this was checking: the
+            // verdict is about an address nobody is looking at — and acting
+            // on it would offer "Connect anyway" for a draft never checked.
+            guard !Task.isCancelled, trimmedDraft == trimmed else { return }
 
             let host = url.host ?? trimmed
             switch verdict {

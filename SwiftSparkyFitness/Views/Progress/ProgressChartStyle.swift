@@ -168,10 +168,21 @@ extension View {
     /// charts are most of this screen. A UIKit long press sits alongside
     /// the scroll view's own pan the way every list's long press does: a
     /// swipe scrolls, and a finger held still scrubs.
-    func chartScrubbing(_ selection: Binding<Date?>, granularity: TrendGranularity = .day) -> some View {
+    ///
+    /// The binding holds what is *selected*, not where the finger is: the
+    /// reading `snap` picks on a line chart, or the bar's bucket. So it only
+    /// changes when the selection does — a raw date changed on every point
+    /// of travel and redrew a year of marks per frame — and a second tap on
+    /// the pinned point compares equal and lets go, where two raw tap
+    /// positions almost never matched.
+    func chartScrubbing(
+        _ selection: Binding<Date?>,
+        granularity: TrendGranularity = .day,
+        snap: ((Date) -> Date?)? = nil
+    ) -> some View {
         chartOverlay { proxy in
             GeometryReader { geometry in
-                ChartScrubLayer(proxy: proxy, geometry: geometry, selection: selection, granularity: granularity)
+                ChartScrubLayer(proxy: proxy, geometry: geometry, selection: selection, granularity: granularity, snap: snap)
             }
         }
     }
@@ -182,6 +193,7 @@ private struct ChartScrubLayer: View {
     let geometry: GeometryProxy
     @Binding var selection: Date?
     let granularity: TrendGranularity
+    let snap: ((Date) -> Date?)?
 
     /// When the last hold lifted. A tap can land as a hold lifts, and it
     /// mustn't un-pin the day the scrub just stopped on; a time window
@@ -195,24 +207,27 @@ private struct ChartScrubLayer: View {
             .contentShape(Rectangle())
             .gesture(HoldToScrub { location in
                 if let location {
-                    selection = date(at: location.x)
+                    let next = target(at: location.x)
+                    if next != selection { selection = next }
                 } else {
                     scrubEndedAt = Date()
                 }
             })
             .onTapGesture(coordinateSpace: .local) { location in
                 guard Date().timeIntervalSince(scrubEndedAt) > 0.3,
-                      let tapped = date(at: location.x) else { return }
-                if let current = selection,
-                   bucketStart(of: current, granularity) == bucketStart(of: tapped, granularity) {
-                    selection = nil
-                } else {
-                    selection = tapped
-                }
+                      let tapped = target(at: location.x) else { return }
+                selection = selection == tapped ? nil : tapped
             }
             // VoiceOver reads the marks themselves; this layer only catches
             // touches.
             .accessibilityHidden(true)
+    }
+
+    /// What a touch at `x` selects: the reading it snaps to, or its bucket.
+    private func target(at x: CGFloat) -> Date? {
+        guard let raw = date(at: x) else { return nil }
+        if let snap { return snap(raw) }
+        return bucketStart(of: raw, granularity)
     }
 
     /// The date under an x position in the overlay, clamped to the plot.

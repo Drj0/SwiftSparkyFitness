@@ -31,10 +31,6 @@
 import SwiftUI
 
 struct ModeChoiceView: View {
-    /// Called once a mode is stored, so the caller can restore the session —
-    /// which in local mode is synthetic and instant.
-    var onChosen: () async -> Void
-
     @State private var isConnectingServer = false
     /// Set by the sheet's save, acted on once it has finished dismissing:
     /// storing the mode swaps this whole view out, and doing that while its
@@ -99,10 +95,11 @@ struct ModeChoiceView: View {
         }
     }
 
+    /// Storing the mode is the whole job: ContentView sees it change and
+    /// restores the session for it.
     private func choose(_ mode: AppMode) {
         AppMode.current = mode
         Haptics.success()
-        Task { await onChosen() }
     }
 
     /// The same ring-and-wordmark lockup the login screen opens with, so the
@@ -204,5 +201,5 @@ struct ModeChoiceView: View {
 }
 
 #Preview {
-    ModeChoiceView {}
+    ModeChoiceView()
 }

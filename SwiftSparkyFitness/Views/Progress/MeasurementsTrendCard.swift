@@ -30,7 +30,7 @@ struct MeasurementsTrendCard: View {
     private var field: BodyField { viewModel.selectedBodyField }
     private var points: [BodyTrendPoint] { viewModel.points(for: field) }
     private var unit: String { field.unitLabel(viewModel.preferences) }
-    private var selected: BodyTrendPoint? { rawSelection.flatMap { nearestPoint(points, to: $0) } }
+    private var selected: BodyTrendPoint? { rawSelection.flatMap { date in points.first { $0.date == date } } }
     private var logAction: TrendCardAction? { onLog.map { TrendCardAction(label: "Log measurements", perform: $0) } }
 
     var body: some View {
@@ -56,7 +56,7 @@ struct MeasurementsTrendCard: View {
         if let first = points.first, let last = points.last {
             if let selected {
                 TrendHeadline(
-                    eyebrow: "\(field.label) · \(viewModel.formattedBucket(selected.date))",
+                    eyebrow: "\(field.label) · \(viewModel.formattedReading(selected.date))",
                     value: formatted(selected.value),
                     unit: unit,
                     detail: selected.date == first.date
@@ -147,7 +147,7 @@ struct MeasurementsTrendCard: View {
         }
         .chartYScale(domain: (low - pad)...(high + pad))
         .progressChartAxes(range: viewModel.loadedRange)
-        .chartScrubbing($rawSelection)
+        .chartScrubbing($rawSelection) { nearestPoint(points, to: $0)?.date }
         .sensoryFeedback(.selection, trigger: selected?.date)
         .frame(height: 170)
         .accessibilityLabel("\(field.label) trend")

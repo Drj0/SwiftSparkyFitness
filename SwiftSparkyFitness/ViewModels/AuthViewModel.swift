@@ -66,7 +66,10 @@ final class AuthViewModel: ObservableObject {
     }
 
     private func handleSessionExpired() {
-        guard session != nil else { return }
+        // A 401 or a late "no session" belongs to server mode. Arriving in
+        // local mode — a check the user walked away from, a handoff call —
+        // it used to sign the on-device user out onto the server login.
+        guard session != nil, AppMode.current == .server else { return }
         session = nil
         // Server mode's copy stays on this device through sign-in; saying so
         // stops "session expired" reading as "what I logged offline is gone".
@@ -122,6 +125,24 @@ final class AuthViewModel: ObservableObject {
         clearErrors()
         session = nil
         restoreState = .done
+    }
+
+    /// The mode changed — to the other one, or back to the start screen —
+    /// so whoever is signed in belongs to the mode being left. Keeping them
+    /// is how the on-device user stayed "signed in" after Delete all local
+    /// data and then opened server mode's tabs, writing to no account at
+    /// all, when the server they picked didn't answer. A restore still in
+    /// flight for the old mode is superseded, so its answer lands nowhere.
+    /// `restoring` when a restore for the new mode follows at once, so the
+    /// frame in between shows the connecting state rather than the login form.
+    func resetForModeChange(restoring: Bool) {
+        restoreGeneration += 1
+        session = nil
+        restoreState = restoring ? .restoring : .done
+        password = ""
+        confirmPassword = ""
+        mode = .login
+        clearErrors()
     }
 
     func restoreSession() async {

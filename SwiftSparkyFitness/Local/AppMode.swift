@@ -29,6 +29,7 @@ enum AppMode: String {
             return AppMode(rawValue: raw)
         }
         set {
+            changeCount += 1
             guard let newValue else {
                 UserDefaults.standard.removeObject(forKey: defaultsKey)
                 return
@@ -36,6 +37,11 @@ enum AppMode: String {
             UserDefaults.standard.set(newValue.rawValue, forKey: defaultsKey)
         }
     }
+
+    /// Bumped on every change of mode, so work started under one mode — a
+    /// server session check, a sign-in — can tell when it finishes that the
+    /// user has since left it, and not act on a mode they walked away from.
+    private(set) static var changeCount = 0
 
     static var isLocal: Bool { current == .local }
 }

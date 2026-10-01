@@ -276,10 +276,14 @@ extension LocalAPIClient {
         let weekKey = LocalDay.key(Calendar.current.date(byAdding: .day, value: -6, to: Date()) ?? Date())
         let sentinel = ExerciseSessionSummary.healthActiveEnergyName
         var history: [String: ExerciseLastSession] = [:]
+        // Within a day, by when the row was last written, not `entryDate`:
+        // that is the real time for a session logged from Today or Health
+        // but midnight for one logged from a day page, so a morning walk
+        // used to outrank the evening's longer one as "last time".
         let rows = store.fetch(
             LocalExerciseEntry.self,
             where: #Predicate { $0.dayKey >= startKey },
-            sortBy: [SortDescriptor(\.dayKey), SortDescriptor(\.entryDate)]
+            sortBy: [SortDescriptor(\.dayKey), SortDescriptor(\.updatedAt)]
         )
         for row in rows where row.name != sentinel {
             let key = ExerciseLastSession.key(row.name)

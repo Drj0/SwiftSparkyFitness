@@ -42,7 +42,10 @@ struct DiaryDayHeader: View {
                 viewModel.goToPreviousDay()
             }
 
-            Button { isPresentingDatePicker = true } label: {
+            Button {
+                guard !viewModel.isMidDaySwipe else { return }
+                isPresentingDatePicker = true
+            } label: {
                 HStack(spacing: 4) {
                     Text(Self.label(for: viewModel.selectedDate))
                         .appBody(15, weight: .semibold)
@@ -101,11 +104,23 @@ struct DiaryDayHeader: View {
 
 extension View {
     /// A horizontal swipe pages the day. Simultaneous, not `.gesture`: the
-    /// List owns vertical scrolling and the rows own `.swipeActions`, and
-    /// neither may lose to day paging.
+    /// List owns vertical scrolling, and that may not lose to day paging.
+    ///
+    /// Applied to everything on a day page *except* rows with swipe
+    /// actions, never to the whole List. On the List it fired alongside a
+    /// row's own swipe: a full swipe to "Log again" also paged to
+    /// yesterday, a partial one paged instead of revealing the button, and
+    /// a delete on a past day jumped to the next. A swipe on a row now acts
+    /// on that row; anywhere else — the header, the summary, section
+    /// headers, an empty day — it changes the day.
     func diaryDayPaging(_ viewModel: DiaryViewModel) -> some View {
         simultaneousGesture(
             DragGesture(minimumDistance: 24)
+                .onChanged { value in
+                    if abs(value.translation.width) > abs(value.translation.height) {
+                        viewModel.lastDaySwipeAt = Date()
+                    }
+                }
                 .onEnded { value in
                     let dx = value.translation.width
                     let dy = value.translation.height

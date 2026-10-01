@@ -176,22 +176,14 @@ struct SettingsView: View {
         // as the only escape — discoverable with a finger, not with VoiceOver
         // or Switch Control. An alert always draws both.
         .alert("Delete all local data?", isPresented: $isConfirmingWipe) {
-            // Offered only when nothing else holds a full copy: a file is then
-            // the last way to keep one.
-            if !iCloudHoldsTheDiary {
-                Button("Export first", action: exportDiary)
-            }
+            // Always offered: even a synced diary can hold entries from the
+            // last few moments that iCloud hasn't taken yet, and a file is
+            // the one copy that can't be behind.
+            Button("Export first", action: exportDiary)
             Button("Cancel", role: .cancel) {}
             Button("Delete from this iPhone", role: .destructive, action: wipeLocalData)
         } message: {
-            // Only this iPhone's copy goes — iCloud's is never touched (see
-            // LocalStore.eraseThisDeviceCopy) — so the message says which
-            // case this is: whether there is a copy to come back to.
-            if iCloudHoldsTheDiary {
-                Text("Your diary is removed from this iPhone only. Your iCloud copy stays as it is: choose “Use on this device” again to bring it back. You'll return to the start screen.")
-            } else {
-                Text("Your diary is removed from this iPhone. It isn't fully backed up to iCloud, so anything not yet there can't be recovered unless you export a copy first. You'll return to the start screen.")
-            }
+            Text(wipeMessage)
         }
         .fileExporter(
             isPresented: $isExportingArchive,
@@ -232,7 +224,7 @@ struct SettingsView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             if localHasEntries {
-                Text("Copy your foods, exercise, water, weight, measurements and goals from the server, or start with an empty diary. This iPhone already has a diary of its own: copying adds the server's to it without duplicating anything already here; starting fresh replaces it. The server keeps its copy either way.\(offlineCopyNote)")
+                Text("Copy your foods, exercise, water, weight, measurements and goals from the server, or start with an empty diary. This iPhone already has a diary of its own: copying adds the server's to it without duplicating anything already here; starting fresh replaces it\(startFreshReach). The server keeps its copy either way.\(offlineCopyNote)")
             } else {
                 Text("Copy your foods, exercise, water, weight, measurements and goals from the server, or start with an empty diary. The server keeps its copy either way.\(offlineCopyNote)")
             }
@@ -847,6 +839,13 @@ struct SettingsView: View {
         importError = nil
     }
 
+    /// Starting fresh empties the store, and a CloudKit store's deletes
+    /// reach iCloud — unlike Delete all local data, an empty diary that
+    /// iCloud refilled wouldn't be fresh — so the alert has to say so.
+    private var startFreshReach: String {
+        LocalStore.shared.isCloudKitEnabled ? ", here and in iCloud" : ""
+    }
+
     /// An empty diary, whatever this device held before, starting today.
     private func startFresh() {
         do {
@@ -861,11 +860,22 @@ struct SettingsView: View {
         switchMode(to: .local)
     }
 
-    /// True only once iCloud has confirmed it has everything: an upload in
-    /// flight, or not yet started, can still be holding the newest entries.
-    private var iCloudHoldsTheDiary: Bool {
-        if case .synced = sync.state { return true }
-        return false
+    /// Only this iPhone's copy goes — iCloud's is never touched (see
+    /// LocalStore.eraseThisDeviceCopy) — so the message says whether there
+    /// is a copy to come back to. "Synced" is the last event that
+    /// succeeded, not proof the newest entries were uploaded, so even that
+    /// case doesn't promise them.
+    private var wipeMessage: String {
+        let ending = " This iPhone's automatic backups are removed too. You'll return to the start screen."
+        if sync.state.backsUpTheDiary {
+            return "Only this iPhone's copy is removed. Your iCloud copy stays, and comes back when you choose “On this iPhone” again — though anything logged in the last few moments may not have reached it yet." + ending
+        }
+        switch sync.state {
+        case .unavailable(.notSignedIn), .unavailable(.restricted), .unavailable(.notConfigured):
+            return "Your diary isn't in iCloud, so once it's removed from this iPhone it can't be recovered unless you export a copy first." + ending
+        default:
+            return "iCloud hasn't confirmed it has your whole diary, so anything not yet there can't be recovered unless you export a copy first." + ending
+        }
     }
 
     /// Erases this iPhone's copy and goes back to the start screen, where the
@@ -873,14 +883,16 @@ struct SettingsView: View {
     /// down) or a server. Staying in an emptied local mode left the user in
     /// Settings with no sign anything had happened.
     private func wipeLocalData() {
-        let keepsCloudCopy = iCloudHoldsTheDiary
+        // Whatever the sync state said, a CloudKit store gets its iCloud
+        // history back on the next open, and the first-use date floors how
+        // far back day navigation reaches; only a store with no iCloud copy
+        // starts genuinely new.
+        let keepsCloudCopy = LocalStore.shared.isCloudKitEnabled
         do {
             try LocalStore.shared.eraseThisDeviceCopy()
             wipeError = nil
             Haptics.success()
             NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
-            // The first-use date floors day navigation; an iCloud diary that
-            // comes back keeps its history reachable only if it stays.
             if !keepsCloudCopy {
                 UserDefaults.standard.removeObject(forKey: LocalAPIClient.firstUseKey)
             }

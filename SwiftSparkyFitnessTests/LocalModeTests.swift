@@ -531,4 +531,48 @@ final class LocalModeTests: XCTestCase {
         XCTAssertEqual(today.waterIntake, 0)
         XCTAssertEqual(preferences.defaultWeightUnit, "kg")
     }
+
+    // MARK: - Delete all local data
+
+    /// "Delete all local data" destroys an on-disk store's files rather than
+    /// deleting its rows (row deletes would reach iCloud), then reopens it:
+    /// empty, and still taking writes — not a destroyed store that loses
+    /// every entry after it.
+    func testErasingThisDevicesCopyLeavesAnEmptyWorkingStore() async throws {
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent("erase-\(UUID().uuidString).store")
+        addTeardownBlock { try? FileManager.default.removeItem(at: url) }
+        let store = try LocalStore(url: url)
+        let local = LocalAPIClient(store: store)
+        let run = try await local.findOrCreateExercise(named: "Run")
+        _ = try await local.createExerciseEntry(
+            ExerciseEntryInput(exerciseId: run.id, modality: .duration, entryDate: Date(), durationMinutes: 30, caloriesBurned: 300)
+        )
+        XCTAssertFalse(store.all(LocalExerciseEntry.self).isEmpty)
+
+        try store.eraseThisDeviceCopy()
+
+        XCTAssertTrue(store.all(LocalExerciseEntry.self).isEmpty)
+        XCTAssertTrue(store.all(LocalExercise.self).isEmpty)
+        let again = try await local.findOrCreateExercise(named: "Swim")
+        _ = try await local.createExerciseEntry(
+            ExerciseEntryInput(exerciseId: again.id, modality: .duration, entryDate: Date(), durationMinutes: 20, caloriesBurned: 150)
+        )
+        XCTAssertEqual(store.all(LocalExerciseEntry.self).count, 1)
+    }
+
+    /// Leaving a mode forgets whoever was signed in to it. Holding on let
+    /// the on-device user open server mode's tabs after Delete all local
+    /// data, writing to no account, when the chosen server didn't answer.
+    func testAModeChangeForgetsTheSignedInUser() async throws {
+        let auth = AuthViewModel(apiClient: LocalAPIClient(store: LocalStore(inMemory: true)))
+        await auth.restoreSession()
+        XCTAssertNotNil(auth.session)
+
+        auth.resetForModeChange(restoring: false)
+        XCTAssertNil(auth.session)
+        XCTAssertEqual(auth.restoreState, .done)
+
+        auth.resetForModeChange(restoring: true)
+        XCTAssertEqual(auth.restoreState, .restoring, "the frame before the new mode's restore isn't the login form")
+    }
 }

@@ -24,6 +24,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import UIKit
 
 @MainActor
 final class ProgressViewModel: ObservableObject {
@@ -65,12 +66,11 @@ final class ProgressViewModel: ObservableObject {
     @Published private(set) var loadedRange: ProgressDateRange
 
     @Published private(set) var isLoading = false
-    /// Visible loads in flight. Tapping through ranges quickly overlaps
-    /// them, and the first to land used to clear the dimming while the
-    /// newest was still loading — stale charts shown at full strength.
-    private var visibleLoads = 0 {
-        didSet { isLoading = visibleLoads > 0 }
-    }
+    /// The newest visible load; only it may clear the dimming. Tapping
+    /// through ranges overlaps loads. A count of them kept fresh charts
+    /// dimmed and untappable until a superseded one finished too, and
+    /// before that the first to land cleared the dimming early.
+    private var visibleLoad = 0
     @Published private(set) var hasLoadedOnce = false
     /// Every read that feeds a chart failed, so an empty screen means "we
     /// couldn't ask", not "nothing was logged" — the two need different
@@ -82,10 +82,12 @@ final class ProgressViewModel: ObservableObject {
     /// break from a blank slate. Only ever looked up when the range is
     /// empty.
     enum EarlierHistory: Equatable {
+        /// Not looked yet, or the look failed.
         case unknown
-        /// Nothing in the year before the range — or no year before it.
+        /// Nothing logged in the past year.
         case none
-        /// The newest day with anything logged, before the range.
+        /// The newest day with anything logged in the past year — before
+        /// the range, or after it when the range is in the past.
         case lastLogged(Date)
     }
     @Published private(set) var earlierHistory: EarlierHistory = .unknown
@@ -158,6 +160,22 @@ final class ProgressViewModel: ObservableObject {
                 Task { @MainActor in await self?.refresh() }
             }
             .store(in: &cancellables)
+
+        // Midnight while open, or waking on a later day: today, the preset
+        // ranges ending on it, and the day the log sheets open on all move
+        // with the clock — not on whichever load happens next.
+        NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)
+            .merge(with: NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification))
+            .sink { [weak self] _ in
+                Task { @MainActor in await self?.rollOverToToday() }
+            }
+            .store(in: &cancellables)
+    }
+
+    /// A reload moves `maxDate` first thing, so a new day is one refresh.
+    func rollOverToToday() async {
+        guard Calendar.current.startOfDay(for: Date()) > maxDate else { return }
+        await refresh()
     }
 
     // MARK: - Range
@@ -254,8 +272,12 @@ final class ProgressViewModel: ObservableObject {
         if today > maxDate { maxDate = today }
 
         let window = range
-        if showsProgress { visibleLoads += 1 }
-        defer { if showsProgress { visibleLoads -= 1 } }
+        if showsProgress {
+            visibleLoad += 1
+            isLoading = true
+        }
+        let load = visibleLoad
+        defer { if showsProgress, load == visibleLoad { isLoading = false } }
 
         // Independent reads, run together. `async let` rather than a task
         // group because each result has a different type and each is allowed
@@ -323,19 +345,20 @@ final class ProgressViewModel: ObservableObject {
         } else if earlierHistory == .unknown || isNewWindow {
             earlierHistory = .unknown
             // Its own task, so the empty state isn't held dimmed behind it.
-            Task { await findEarlierHistory(before: window) }
+            Task { await findLastEntry(outside: window) }
         }
     }
 
-    /// Looks back up to a year before an empty range for the newest day with
-    /// anything logged. Three reads, only ever for an empty range — which,
-    /// for an account with history, means they come back small.
-    private func findEarlierHistory(before window: ProgressDateRange) async {
+    /// Looks through the past year for the newest day with anything logged,
+    /// for an empty range's message. The whole year up to today, not only
+    /// before the range: an empty custom range in March can sit before
+    /// yesterday's entries, and searching behind it told someone with
+    /// history that their trends start here. The range itself is empty, so
+    /// including it costs nothing. Three reads, only ever for an empty
+    /// range.
+    private func findLastEntry(outside window: ProgressDateRange) async {
         let calendar = Calendar.current
-        guard let end = calendar.date(byAdding: .day, value: -1, to: window.start), end >= minDate else {
-            earlierHistory = .none
-            return
-        }
+        let end = maxDate
         let start = max(minDate, calendar.date(byAdding: .day, value: -365, to: end) ?? minDate)
 
         async let food = try? apiClient.foodEntries(from: start, to: end)
@@ -344,6 +367,11 @@ final class ProgressViewModel: ObservableObject {
         let (foodRows, bodyRows, summary) = await (food, body, workouts)
 
         guard !Task.isCancelled, window == loadedRange, !hasAnyData else { return }
+        // Every read failed: that's "couldn't ask", not "nothing logged".
+        guard foodRows != nil || bodyRows != nil || summary != nil else {
+            earlierHistory = .unknown
+            return
+        }
         // Day keys compare correctly as strings, so no date parsing until
         // the one winner.
         let keys = (foodRows?.map(\.entryDate) ?? [])
@@ -627,10 +655,25 @@ final class ProgressViewModel: ObservableObject {
     }
 
     /// A chart bucket's name: the day with its weekday ("Tue 24 Sep"), or on
-    /// the weekly ranges the week it starts ("Week of 2 Jun").
+    /// the weekly ranges the week it starts ("Week of 2 Jun"). The first
+    /// week can begin before the range does; it is named by the days it
+    /// holds ("2 Oct – 3 Oct"), since "Week of 28 Sep" claimed days it
+    /// doesn't sum.
     func formattedBucket(_ date: Date) -> String {
-        if loadedRange.granularity == .week { return "Week of \(formattedDay(date))" }
-        return isThisYear(date)
+        if loadedRange.granularity == .week {
+            if date < loadedRange.start, let weekEnd = Calendar.current.date(byAdding: .day, value: 6, to: date) {
+                return "\(formattedDay(loadedRange.start)) – \(formattedDay(min(weekEnd, loadedRange.end)))"
+            }
+            return "Week of \(formattedDay(date))"
+        }
+        return formattedReading(date)
+    }
+
+    /// One day's reading ("Tue 24 Sep") at any range. The weight and
+    /// measurement charts plot every weigh-in even on the weekly ranges,
+    /// where "Week of 12 Mar" implied a weekly figure that wasn't there.
+    func formattedReading(_ date: Date) -> String {
+        isThisYear(date)
             ? date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
             : date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).year())
     }

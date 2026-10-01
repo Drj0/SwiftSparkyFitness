@@ -396,4 +396,32 @@ final class ServerSyncTests: XCTestCase {
         let link = store.link(kind: LocalFood.syncKind, localKey: "srv-food", account: try XCTUnwrap(sync.account))
         XCTAssertEqual(link?.serverVariantId, "srv-variant")
     }
+
+    /// Back to the start screen mid-connect, then on to this iPhone: the
+    /// session check still finishes, and used to start server sync behind
+    /// local mode — whose next 401 then signed the on-device user out.
+    func testASessionCheckFinishedAfterLeavingServerModeDoesntStartSyncing() async throws {
+        let defaults = UserDefaults.standard
+        let original = defaults.string(forKey: AppMode.defaultsKey)
+        addTeardownBlock {
+            if let original { defaults.set(original, forKey: AppMode.defaultsKey) } else { defaults.removeObject(forKey: AppMode.defaultsKey) }
+        }
+        AppMode.current = .server
+        let sync = ServerSync(server: FakeSyncServer(), storeFor: { _ in LocalStore(inMemory: true) })
+        let client = ServerModeClient(remote: APIClient(session: StubURLProtocol.session()), sync: sync)
+        SessionCache.save(user, serverURL: ServerConfig.urlString)
+        StubURLProtocol.hangs = true
+        defer {
+            StubURLProtocol.hangs = false
+            SessionCache.clear()
+        }
+
+        let check = Task { try await client.currentSession() }
+        try await Task.sleep(for: .milliseconds(200))
+        AppMode.current = nil
+        AppMode.current = .local
+        _ = try await check.value
+
+        XCTAssertFalse(sync.isActive)
+    }
 }

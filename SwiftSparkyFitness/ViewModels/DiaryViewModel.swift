@@ -16,6 +16,7 @@
 import Foundation
 import Combine
 import SwiftUI
+import UIKit
 
 @MainActor
 final class DiaryViewModel: ObservableObject {
@@ -59,18 +60,34 @@ final class DiaryViewModel: ObservableObject {
     /// Confirmed with the user: Diary can't navigate before the account
     /// existed (nothing to show) or past today (nothing logged yet).
     let minDate: Date
-    let maxDate: Date
+    /// Today. Moves with the clock (see `rollOverToToday`): the view model
+    /// lives as long as its tab, which can be days.
+    @Published private(set) var maxDate: Date
 
     private let apiClient: APIClientProtocol
     private var cancellables = Set<AnyCancellable>()
+    /// Which `load()` owns the outcome. Paging quickly overlaps them, and a
+    /// slower one for a day already paged past used to land last — one
+    /// day's rows under another day's header, there to edit or delete.
+    private var loadGeneration = 0
+
+    /// When a horizontal day swipe last moved. A button under the finger
+    /// still fires on the release that ends a swipe — one across a meal
+    /// header collapsed it as well as changing the day — so the buttons a
+    /// swipe can cross ask `isMidDaySwipe` first. A time rather than a
+    /// flag, so a drag the system cancels can't leave buttons dead. Not
+    /// published: nothing draws from it.
+    var lastDaySwipeAt = Date.distantPast
+    var isMidDaySwipe: Bool { Date().timeIntervalSince(lastDaySwipeAt) < 0.3 }
 
     init(user: SessionUser, apiClient: APIClientProtocol = AppServices.client) {
         self.apiClient = apiClient
         let calendar = Calendar.current
-        maxDate = calendar.startOfDay(for: Date())
-        minDate = min(calendar.startOfDay(for: user.createdAt ?? Date()), maxDate)
-        selectedDate = maxDate
-        water = WaterViewModel(date: maxDate, apiClient: apiClient)
+        let today = calendar.startOfDay(for: Date())
+        maxDate = today
+        minDate = min(calendar.startOfDay(for: user.createdAt ?? Date()), today)
+        selectedDate = today
+        water = WaterViewModel(date: today, apiClient: apiClient)
         // Same reason as TodayViewModel: `water` publishes on its own, but
         // this screen renders the section header's total, the summary card's
         // water ring and the has-anything-logged branch off it.
@@ -91,6 +108,29 @@ final class DiaryViewModel: ObservableObject {
                 }
             }
             .store(in: &cancellables)
+
+        // Midnight while open, or waking up on a later day: iOS delivers the
+        // time-change notice on resume, and becoming active covers the rest.
+        NotificationCenter.default.publisher(for: UIApplication.significantTimeChangeNotification)
+            .merge(with: NotificationCenter.default.publisher(for: UIApplication.didBecomeActiveNotification))
+            .sink { [weak self] _ in
+                Task { @MainActor in self?.rollOverToToday() }
+            }
+            .store(in: &cancellables)
+    }
+
+    /// A screen left on today follows today. Without this, opening the app
+    /// the next morning showed "Yesterday" with Next disabled, and every
+    /// "+", quick log and "Log again" landed on yesterday.
+    func rollOverToToday() {
+        let today = Calendar.current.startOfDay(for: Date())
+        guard today > maxDate else { return }
+        let wasOnToday = Calendar.current.isDate(selectedDate, inSameDayAs: maxDate)
+        maxDate = today
+        guard wasOnToday else { return }
+        lastPageDirection = .forward
+        selectedDate = today
+        Task { await load() }
     }
 
     var canGoToPreviousDay: Bool {
@@ -160,6 +200,7 @@ final class DiaryViewModel: ObservableObject {
     /// `animated` comes from the view because Reduce Motion lives in the
     /// SwiftUI environment, which a view model can't see.
     func toggleSection(_ sectionId: String, animated: Bool = true) {
+        guard !isMidDaySwipe else { return }
         // A hand-rolled disclosure control: the system would fire this for a
         // real DisclosureGroup, so it has to be fired by hand here.
         Haptics.selection()
@@ -177,31 +218,40 @@ final class DiaryViewModel: ObservableObject {
     }
 
     func load() async {
+        loadGeneration += 1
+        let generation = loadGeneration
+        let date = selectedDate
         isLoading = true
         errorMessage = nil
-        defer { isLoading = false }
-        water.setDate(selectedDate)
-        await HealthWorkoutImporter.importWorkouts(on: selectedDate, apiClient: apiClient)
+        defer { if generation == loadGeneration { isLoading = false } }
+        water.setDate(date)
+        await HealthWorkoutImporter.importWorkouts(on: date, apiClient: apiClient)
         do {
-            async let summaryTask = apiClient.dailySummary(date: selectedDate)
+            async let summaryTask = apiClient.dailySummary(date: date)
             async let mealTypesTask = mealTypes.isEmpty ? apiClient.mealTypes() : mealTypes
-            async let bodyTask = apiClient.bodyMeasurements(date: selectedDate)
+            async let bodyTask = apiClient.bodyMeasurements(date: date)
             async let preferencesTask = apiClient.userPreferences()
 
             let loadedSummary = try await summaryTask
+            guard generation == loadGeneration else { return }
             summary = loadedSummary
             water.adopt(summary: loadedSummary)
             // Quick-add has to name the primary container explicitly, so the
             // screen needs to know which one that is before the first tap.
             await water.loadPrimaryContainer()
-            mealTypes = try await mealTypesTask
-            bodyMeasurements = try await bodyTask
-            preferences = try await preferencesTask
+            let loadedMealTypes = try await mealTypesTask
+            let loadedBody = try await bodyTask
+            let loadedPreferences = try await preferencesTask
+            guard generation == loadGeneration else { return }
+            mealTypes = loadedMealTypes
+            bodyMeasurements = loadedBody
+            preferences = loadedPreferences
             // The ledger is what makes Diary's water rows individually
             // deletable, so it's loaded after the total is on screen rather
             // than blocking it.
             await water.loadEntries()
         } catch {
+            guard generation == loadGeneration else { return }
             errorMessage = error.localizedDescription
             Haptics.error()
         }
@@ -264,8 +314,10 @@ final class DiaryViewModel: ObservableObject {
         }
     }
 
+    /// Against the clock, not `maxDate`, so it's right even in the moment
+    /// before a rollover lands.
     var isViewingToday: Bool {
-        Calendar.current.isDate(selectedDate, inSameDayAs: maxDate)
+        Calendar.current.isDateInToday(selectedDate)
     }
 
     func deleteExerciseEntry(_ entry: ExerciseSessionSummary) async {

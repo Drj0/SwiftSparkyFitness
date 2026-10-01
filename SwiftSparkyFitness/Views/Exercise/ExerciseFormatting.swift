@@ -133,7 +133,7 @@ extension ExerciseEntryInput {
         distance = session.distance
         avgHeartRate = session.avgHeartRate
         sets = session.setsList.enumerated().map { index, set in
-            ExerciseSetInput(setNumber: index + 1, setType: set.setType ?? "Working Set", reps: set.reps, weight: set.weight, rpe: set.rpe)
+            ExerciseSetInput(setNumber: index + 1, setType: set.setType ?? "Working Set", reps: set.reps, weight: set.weight, rpe: set.rpe, notes: set.notes)
         }
     }
 }

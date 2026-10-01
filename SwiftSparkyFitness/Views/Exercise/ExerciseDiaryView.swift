@@ -24,6 +24,9 @@ struct ExerciseDiaryView: View {
     /// A one-line confirmation after "Log again" — it may land on a day
     /// other than the one on screen, so the list alone can't show it.
     @State private var toast: String?
+    /// Which toast is up, so an earlier one's timer can't clear a later one
+    /// that happens to say the same thing.
+    @State private var toastID = 0
 
     private var sessions: [ExerciseSessionSummary] {
         viewModel.summary?.exerciseSessions.userLogged ?? []
@@ -35,7 +38,7 @@ struct ExerciseDiaryView: View {
     var body: some View {
         List {
             Section {
-                DiaryDayHeader(viewModel: viewModel).diaryRow()
+                DiaryDayHeader(viewModel: viewModel).diaryRow().diaryDayPaging(viewModel)
             }
 
             content
@@ -48,7 +51,13 @@ struct ExerciseDiaryView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(AppColor.background)
-        .diaryDayPaging(viewModel)
+        .safeAreaInset(edge: .top) { errorInset }
+        .onChange(of: viewModel.errorMessage) { _, message in
+            // The banner appears without moving focus; VoiceOver would
+            // otherwise never hear that a delete or Log again failed.
+            guard let message, viewModel.summary != nil else { return }
+            AccessibilityNotification.Announcement(message).post()
+        }
         .refreshable { await viewModel.load() }
         .safeAreaInset(edge: .bottom) { bottomBar }
         .sheet(item: $viewModel.editingExerciseEntry, onDismiss: { Task { await viewModel.load() } }) { entry in
@@ -86,17 +95,18 @@ struct ExerciseDiaryView: View {
     private var content: some View {
         if viewModel.isLoading && viewModel.summary == nil {
             Section {
-                ProgressView().frame(maxWidth: .infinity).padding(.top, 40).diaryRow()
+                ProgressView().frame(maxWidth: .infinity).padding(.top, 40).diaryRow().diaryDayPaging(viewModel)
             }
         } else if let summary = viewModel.summary {
             if sessions.isEmpty {
-                Section { emptyState.diaryRow() }
+                Section { emptyState.diaryRow().diaryDayPaging(viewModel) }
             } else {
                 Section {
                     summaryCard(healthEnergy: summary.exerciseSessions.healthActiveEnergy)
                         .padding(.horizontal, AppSpacing.screenPad)
                         .padding(.top, 6)
                         .diaryRow()
+                        .diaryDayPaging(viewModel)
                 }
                 Section {
                     ForEach(sessions) { session in
@@ -129,12 +139,15 @@ struct ExerciseDiaryView: View {
                         .tracking(0.8)
                         .foregroundStyle(AppColor.secondaryText)
                         .padding(.horizontal, AppSpacing.screenPad)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                         .accessibilityAddTraits(.isHeader)
+                        .diaryDayPaging(viewModel)
                 }
             }
         } else if let errorMessage = viewModel.errorMessage {
             Section {
-                loadErrorState(errorMessage).diaryRow()
+                loadErrorState(errorMessage).diaryRow().diaryDayPaging(viewModel)
             }
         }
     }
@@ -178,7 +191,9 @@ struct ExerciseDiaryView: View {
     }
 
     private func logAgain(_ session: ExerciseSessionSummary) {
-        let target = viewModel.maxDate
+        // The clock's today, not the view model's: right even if the app
+        // woke on a new day a moment before the rollover reached it.
+        let target = Calendar.current.startOfDay(for: Date())
         let name = session.name ?? "Exercise"
         Task {
             if await viewModel.logAgain(session, on: target) {
@@ -255,13 +270,34 @@ struct ExerciseDiaryView: View {
         .accessibilityLabel("\(name), \(session.isHealthWorkout ? "from Apple Health, " : "")\(detail)")
         .accessibilityValue("\(calories) calories burned")
         .accessibilityHint(session.exerciseId != nil ? "Opens for editing" : "")
-        .accessibilityAction(named: logAgainTitle) { logAgain(session) }
+        .accessibilityActions {
+            // Only where it can work, as in the context menu and swipe.
+            if session.exerciseId != nil {
+                Button(logAgainTitle) { logAgain(session) }
+            }
+        }
         .accessibilityAction(named: "Delete") {
             Task { await viewModel.deleteExerciseEntry(session) }
         }
     }
 
     // MARK: - States
+
+    /// A failure with the day already on screen — a delete, Log again or a
+    /// refresh — used to be a haptic and nothing else: `errorMessage` was
+    /// only drawn when there was no day to show. Same banner as Food & Water.
+    private var errorInset: some View {
+        VStack(spacing: 0) {
+            if let errorMessage = viewModel.errorMessage, viewModel.summary != nil {
+                ErrorBanner(message: errorMessage)
+                    .padding(.horizontal, AppSpacing.screenPad)
+                    .padding(.bottom, 10)
+                    .transition(reduceMotion ? .opacity : .move(edge: .top).combined(with: .opacity))
+            }
+        }
+        .background(AppColor.background)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.errorMessage)
+    }
 
     /// Says which day is empty, and offers the one thing to do about it.
     private var emptyState: some View {
@@ -283,6 +319,8 @@ struct ExerciseDiaryView: View {
                 .multilineTextAlignment(.center)
                 .fixedSize(horizontal: false, vertical: true)
             PrimaryButton(title: "Log a workout") {
+                // A day swipe across the card ends on this button.
+                guard !viewModel.isMidDaySwipe else { return }
                 Haptics.light()
                 viewModel.isPresentingExerciseSearch = true
             }
@@ -352,11 +390,13 @@ struct ExerciseDiaryView: View {
     }
 
     private func showToast(_ message: String) {
+        toastID += 1
+        let id = toastID
         toast = message
         AccessibilityNotification.Announcement(message).post()
         Task {
             try? await Task.sleep(for: .seconds(2.4))
-            if toast == message { toast = nil }
+            if toastID == id { toast = nil }
         }
     }
 }

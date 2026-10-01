@@ -37,7 +37,11 @@ struct AuthContainerView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppColor.background)
         .safeAreaInset(edge: .top, spacing: 0) {
-            ServerScreenBar(onBack: goBack, onEditServer: { isEditingServer = true })
+            ServerScreenBar(
+                onBack: goBack,
+                onEditServer: { isEditingServer = true },
+                backHint: viewModel.mode == .signUp ? "Returns to log in" : "Returns to choosing how to use Sparky"
+            )
         }
         .sheet(isPresented: $isEditingServer) {
             ServerAddressSheet()

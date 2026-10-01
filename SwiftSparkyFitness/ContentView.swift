@@ -23,7 +23,7 @@ struct ContentView: View {
     var body: some View {
         Group {
             if modeRaw.isEmpty {
-                ModeChoiceView { await authViewModel.restoreSession() }
+                ModeChoiceView()
                     .transition(.opacity)
             } else {
                 // Keyed on the mode so switching it rebuilds the tab tree.
@@ -50,10 +50,16 @@ struct ContentView: View {
         // login if there's no cookie. Doing it here keeps Settings from
         // needing a route back up to the auth state.
         //
+        // Whoever was signed in belonged to the mode being left, so they go
+        // first. Every change of mode lands here — the start screen, Back,
+        // Settings, a move made on another device — so this is the one place
+        // a session is restored after launch.
         // Not on the way back to the start screen, though: with no mode the
         // client resolves to the server one, and a restore then would send a
         // request to a server the user just stepped away from.
         .onChange(of: modeRaw) { _, newValue in
+            isRetrying = false
+            authViewModel.resetForModeChange(restoring: !newValue.isEmpty)
             guard !newValue.isEmpty else { return }
             Task { await authViewModel.restoreSession() }
         }
@@ -197,11 +203,16 @@ struct ContentView: View {
     private func retry() {
         guard !isRetrying else { return }
         isRetrying = true
+        let mode = AppMode.changeCount
         Task {
             let started = ContinuousClock.now
             await authViewModel.restoreSession()
             let elapsed = ContinuousClock.now - started
             if elapsed < .milliseconds(600) { try? await Task.sleep(for: .milliseconds(600) - elapsed) }
+            // Left the screen meanwhile (Back, or on to this iPhone): the
+            // mode change already reset this, and the buzz would land on
+            // whatever screen is up now.
+            guard AppMode.changeCount == mode else { return }
             isRetrying = false
             if authViewModel.restoreState == .unreachable { Haptics.error() }
         }

@@ -41,7 +41,7 @@ struct DiaryView: View {
     var body: some View {
         List {
             Section {
-                header.diaryRow()
+                header.diaryRow().diaryDayPaging(viewModel)
             }
 
             // Keyed on the date so paging is an insert+remove (and so can
@@ -59,7 +59,6 @@ struct DiaryView: View {
         .listStyle(.plain)
         .scrollContentBackground(.hidden)
         .background(AppColor.background)
-        .diaryDayPaging(viewModel)
         .safeAreaInset(edge: .top) { errorInset }
         .onChange(of: viewModel.errorMessage) { _, message in
             // The banner appears without moving focus, so VoiceOver would
@@ -95,6 +94,7 @@ struct DiaryView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.top, 40)
                     .diaryRow()
+                    .diaryDayPaging(viewModel)
             }
         } else if let summary = viewModel.summary {
             if viewModel.hasLoggedAnything {
@@ -105,6 +105,7 @@ struct DiaryView: View {
                     )
                     .padding(.horizontal, AppSpacing.screenPad)
                     .diaryRow()
+                    .diaryDayPaging(viewModel)
                 }
                 ForEach(viewModel.entriesByMeal, id: \.mealType.id) { group in
                     mealSection(group.mealType, group.entries)
@@ -113,12 +114,12 @@ struct DiaryView: View {
                 bodySection()
             } else {
                 Section {
-                    emptyState.diaryRow()
+                    emptyState.diaryRow().diaryDayPaging(viewModel)
                 }
             }
         } else if let errorMessage = viewModel.errorMessage {
             Section {
-                loadErrorState(errorMessage).diaryRow()
+                loadErrorState(errorMessage).diaryRow().diaryDayPaging(viewModel)
             }
         }
     }
@@ -223,7 +224,10 @@ struct DiaryView: View {
                         .appBody(13)
                         .foregroundStyle(AppColor.placeholder)
                         .padding(.horizontal, AppSpacing.screenPad)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                         .diaryRow()
+                        .diaryDayPaging(viewModel)
                 } else {
                     ForEach(entries) { entry in
                         foodRow(entry)
@@ -295,7 +299,10 @@ struct DiaryView: View {
                         .appBody(13)
                         .foregroundStyle(AppColor.placeholder)
                         .padding(.horizontal, AppSpacing.screenPad)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                         .diaryRow()
+                        .diaryDayPaging(viewModel)
                 } else {
                     ForEach(entries) { entry in
                         waterRow(entry)
@@ -381,7 +388,10 @@ struct DiaryView: View {
                         .appBody(13)
                         .foregroundStyle(AppColor.placeholder)
                         .padding(.horizontal, AppSpacing.screenPad)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
                         .diaryRow()
+                        .diaryDayPaging(viewModel)
                 } else {
                     bodyRow(fields)
                         .padding(.horizontal, AppSpacing.screenPad)
@@ -483,6 +493,7 @@ struct DiaryView: View {
         .accessibilityHint(isCollapsed ? "Expands this section" : "Collapses this section")
         .padding(.horizontal, AppSpacing.screenPad)
         .textCase(nil)
+        .diaryDayPaging(viewModel)
     }
 }
 

@@ -31,14 +31,14 @@ struct WeightTrendCard: View {
     /// weigh-in from the chart of them, not only from the day screen.
     var onLog: (() -> Void)?
 
-    /// The raw position under the finger while scrubbing; `selected` snaps
-    /// it to a real weigh-in. Card-local, so scrubbing re-renders this card
-    /// only.
+    /// The weigh-in being inspected — already snapped by `chartScrubbing`,
+    /// so it names a real reading. Card-local, so scrubbing re-renders this
+    /// card only.
     @State private var rawSelection: Date?
 
     private var points: [BodyTrendPoint] { viewModel.weightPoints }
     private var unit: String { viewModel.preferences.weightUnitLabel }
-    private var selected: BodyTrendPoint? { rawSelection.flatMap { nearestPoint(points, to: $0) } }
+    private var selected: BodyTrendPoint? { rawSelection.flatMap { date in points.first { $0.date == date } } }
     private var logAction: TrendCardAction? { onLog.map { TrendCardAction(label: "Log weight", perform: $0) } }
 
     var body: some View {
@@ -62,7 +62,7 @@ struct WeightTrendCard: View {
         if let first = points.first, let last = points.last {
             if let selected {
                 TrendHeadline(
-                    eyebrow: viewModel.formattedBucket(selected.date),
+                    eyebrow: viewModel.formattedReading(selected.date),
                     value: formatted(selected.value),
                     unit: unit,
                     detail: selected.date == first.date
@@ -178,7 +178,7 @@ struct WeightTrendCard: View {
             }
             .chartYScale(domain: floor...(high + pad))
             .progressChartAxes(range: viewModel.loadedRange)
-            .chartScrubbing($rawSelection)
+            .chartScrubbing($rawSelection) { nearestPoint(points, to: $0)?.date }
             .sensoryFeedback(.selection, trigger: selected?.date)
             .frame(height: 180)
             .accessibilityLabel(hasTrend ? "Weight, with a smoothed trend line" : "Weight trend")

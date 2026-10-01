@@ -308,11 +308,15 @@ final class LocalStore {
     /// other device's — while the alert said "on this iPhone". Destroying the
     /// store's files instead (`deleteAllData()`) leaves the mirror nothing to
     /// send: iCloud keeps its copy, and choosing this diary again brings it
-    /// back down. A store nothing mirrors (CloudKit didn't open, or the
-    /// in-memory fallback) has no copy anywhere else, so deleting its rows
-    /// touches only this device and stays the simpler path.
+    /// back down.
+    ///
+    /// Every on-disk store goes this way, not only one that opened with
+    /// CloudKit this launch: a file whose CloudKit setup failed today may
+    /// have mirrored yesterday, and row deletes recorded in its history
+    /// would be sent the next time it opens with syncing on. Only the
+    /// in-memory fallback, which no launch ever mirrored, deletes rows.
     func eraseThisDeviceCopy() throws {
-        guard isCloudKitEnabled else {
+        guard !container.configurations.contains(where: \.isStoredInMemoryOnly) else {
             try deleteEverything()
             return
         }
@@ -322,7 +326,21 @@ final class LocalStore {
         // A container whose files were just destroyed isn't one to keep
         // writing through; the same configuration, reopened, is an empty
         // store that re-imports whatever iCloud holds.
-        container = try ModelContainer(for: Self.schema, configurations: configurations)
+        do {
+            container = try ModelContainer(for: Self.schema, configurations: configurations)
+        } catch {
+            // The data is gone either way. What mustn't happen is the rest
+            // of the session writing into the destroyed store and losing
+            // every entry silently: memory, like launch's last resort,
+            // keeps the app usable and says why.
+            loadFailure = error
+            container = try ModelContainer(
+                for: Self.schema,
+                configurations: ModelConfiguration(schema: Self.schema, isStoredInMemoryOnly: true, cloudKitDatabase: .none)
+            )
+            prepareContext()
+            throw error
+        }
         prepareContext()
     }
 
