@@ -21,7 +21,9 @@ struct ServerAddressSheet: View {
     /// "Connect to Sparky Server" when this is the step that joins one.
     var title: String = "Sparky Server"
     /// "Save" when editing, "Connect" when joining. The override variant is
-    /// built from this, so a failed probe offers "Connect anyway".
+    /// built from this, so a failed probe offers "Connect anyway" — under the
+    /// error it overrides, not in the header, where its extra width ran it
+    /// into the centred title ("Connect to your servConnect anyway").
     var saveTitle: String = "Save"
     /// Shown under the field. Carries the consequence of the action the sheet
     /// is about to take — which is why local mode's "your on-device data
@@ -66,6 +68,7 @@ struct ServerAddressSheet: View {
     @FocusState private var isFocused: Bool
 
     private var offersOverride: Bool { problem?.allowsOverride == true }
+    private var trimmedDraft: String { draft.trimmingCharacters(in: .whitespaces) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -73,7 +76,8 @@ struct ServerAddressSheet: View {
                 title: title,
                 onCancel: { dismiss() },
                 action: SheetAction(
-                    offersOverride ? "\(saveTitle) anyway" : saveTitle,
+                    saveTitle,
+                    isEnabled: !trimmedDraft.isEmpty,
                     isBusy: isChecking,
                     perform: save
                 )
@@ -93,6 +97,16 @@ struct ServerAddressSheet: View {
                         focus: $isFocused
                     )
                     .onSubmit(save)
+
+                    if offersOverride {
+                        Button("\(saveTitle) anyway") { commit(trimmedDraft) }
+                            .appBody(14, weight: .semibold)
+                            .foregroundStyle(AppColor.accent)
+                            .frame(minHeight: 44)
+                            .contentShape(Rectangle())
+                            .buttonStyle(.pressable)
+                            .accessibilityHint("Saves the address without reaching the server")
+                    }
 
                     // One line, and nothing about where the server runs.
                     //
@@ -138,22 +152,19 @@ struct ServerAddressSheet: View {
     /// request — surfaces as a timeout on the offline screen, indistinguishable
     /// from a server that's merely down.
     ///
-    /// A failed check *warns* rather than blocks, and a second tap saves
-    /// regardless. Blocking would rebuild the trap this sheet exists to fix:
+    /// A failed check *warns* rather than blocks: "Connect anyway" under the
+    /// warning saves regardless, and the header button checks again.
+    /// Blocking would rebuild the trap this sheet exists to fix:
     /// if the server happens to be off while the user is correcting a typo,
     /// a mandatory probe would refuse the very address that fixes the app, and
     /// this screen is the last one standing when nothing else can load.
     private func save() {
-        let trimmed = draft.trimmingCharacters(in: .whitespaces)
+        let trimmed = trimmedDraft
         guard !trimmed.isEmpty, let url = URL(string: trimmed), url.host != nil else {
-            // Deliberately before the override check: no number of taps can
-            // store an address the app could never build a request from.
+            // No override for this one: nothing can store an address the app
+            // could never build a request from.
             problem = .malformed
             Haptics.error()
-            return
-        }
-        if offersOverride {
-            commit(trimmed)
             return
         }
         Task {

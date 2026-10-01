@@ -126,5 +126,9 @@ struct SheetHeader: View {
         }
         .buttonStyle(.pressable)
         .disabled(!isEnabled)
+        // While busy the label is a bare spinner, which VoiceOver read as an
+        // unnamed button; it keeps its title and says it's working.
+        .accessibilityLabel(title)
+        .accessibilityValue(isBusy ? "In progress" : "")
     }
 }

@@ -19,21 +19,25 @@ struct PrimaryButton: View {
 
     var body: some View {
         Button(action: action) {
-            Group {
-                if isLoading {
-                    ProgressView().tint(.white)
-                } else {
-                    Text(title)
+            // The title stays in the layout, hidden, under the spinner: a
+            // spinner is a point taller than a line of text, so swapping one
+            // for the other nudged everything above the button on every tap.
+            Text(title)
+                .opacity(isLoading ? 0 : 1)
+                .overlay {
+                    if isLoading { ProgressView().tint(.white) }
                 }
-            }
-            .appBody(16, weight: .semibold)
-            .foregroundStyle(.white)
-            .frame(maxWidth: .infinity)
-            .padding(.vertical, 16)
-            .background(AppColor.accent)
-            .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
+                .appBody(16, weight: .semibold)
+                .foregroundStyle(.white)
+                .frame(maxWidth: .infinity)
+                .padding(.vertical, 16)
+                .background(AppColor.accent)
+                .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
         }
         .buttonStyle(.pressableLarge)
         .disabled(isLoading)
+        // A bare spinner read to VoiceOver as an unnamed button.
+        .accessibilityLabel(title)
+        .accessibilityValue(isLoading ? "In progress" : "")
     }
 }

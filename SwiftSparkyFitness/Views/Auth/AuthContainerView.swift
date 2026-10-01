@@ -11,12 +11,17 @@
 //  itself is animated at the two buttons that make it, in LoginView and
 //  SignUpView.
 //
+//  Back and the server address sit above both forms, outside the slide, so
+//  they hold still while the fields move. Back retraces the path the user
+//  took: sign-up returns to login, login returns to the start screen.
+//
 
 import SwiftUI
 
 struct AuthContainerView: View {
     @ObservedObject var viewModel: AuthViewModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isEditingServer = false
 
     var body: some View {
         ZStack {
@@ -31,6 +36,24 @@ struct AuthContainerView: View {
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(AppColor.background)
+        .safeAreaInset(edge: .top, spacing: 0) {
+            ServerScreenBar(onBack: goBack, onEditServer: { isEditingServer = true })
+        }
+        .sheet(isPresented: $isEditingServer) {
+            ServerAddressSheet()
+                .presentationDetents([.medium, .large])
+                .presentationDragIndicator(.visible)
+        }
+    }
+
+    private func goBack() {
+        guard viewModel.mode == .login else {
+            withAnimation(reduceMotion ? nil : .snappy(duration: 0.3)) {
+                viewModel.switchMode(to: .login)
+            }
+            return
+        }
+        AppMode.leaveServer(for: nil)
     }
 
     /// Each form enters and leaves on its own side, so the pair reads as one

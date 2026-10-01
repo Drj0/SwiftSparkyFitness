@@ -108,6 +108,12 @@ final class AuthViewModel: ObservableObject {
 
     @Published private(set) var restoreState: RestoreState = .restoring
 
+    /// Which restore owns the outcome. Leaving the server path while it is
+    /// still connecting starts another restore against the new mode, and the
+    /// server's late answer — "no session" — must not land on top of it and
+    /// sign the user out of the mode they just picked.
+    private var restoreGeneration = 0
+
     func signOut() async {
         await apiClient.signOut()
         email = ""
@@ -119,11 +125,16 @@ final class AuthViewModel: ObservableObject {
     }
 
     func restoreSession() async {
+        restoreGeneration += 1
+        let generation = restoreGeneration
         restoreState = .restoring
         do {
-            session = try await apiClient.currentSession()
+            let user = try await apiClient.currentSession()
+            guard generation == restoreGeneration else { return }
+            session = user
             restoreState = .done
         } catch {
+            guard generation == restoreGeneration else { return }
             // Transport failure, not a logout: keep the user out of the login
             // form and let ContentView offer a retry instead.
             restoreState = .unreachable
