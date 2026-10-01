@@ -11,7 +11,9 @@
 //
 //  Only fields with something logged in the range are offered. The row has
 //  ten columns and most accounts fill two or three; listing all of them
-//  would mean a picker mostly made of empty charts.
+//  would mean a picker mostly made of empty charts. Keeping the selection on
+//  a field that has data is the view model's job (`rebuildDerived`), so a
+//  range change can't leave this card showing an empty chart.
 //
 
 import SwiftUI
@@ -19,89 +21,79 @@ import Charts
 
 struct MeasurementsTrendCard: View {
     @ObservedObject var viewModel: ProgressViewModel
+    var onLog: (() -> Void)?
+
+    @State private var rawSelection: Date?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var fields: [BodyField] { viewModel.populatedBodyFields }
     private var field: BodyField { viewModel.selectedBodyField }
     private var points: [BodyTrendPoint] { viewModel.points(for: field) }
     private var unit: String { field.unitLabel(viewModel.preferences) }
+    private var selected: BodyTrendPoint? { rawSelection.flatMap { nearestPoint(points, to: $0) } }
+    private var logAction: TrendCardAction? { onLog.map { TrendCardAction(label: "Log measurements", perform: $0) } }
 
     var body: some View {
-        TrendCard(
-            title: "Measurements",
-            subtitle: fields.isEmpty ? nil : field.label,
-            accessory: changeStat
-        ) {
+        TrendCard(kind: .measurements, action: fields.isEmpty ? nil : logAction) {
             if fields.isEmpty {
-                TrendEmptyState(
-                    message: "No body measurements logged in this range. Add one from Today's Body card or Diary."
-                )
+                TrendEmptyState(message: "No body measurements in this range.", action: logAction)
             } else {
-                fieldPicker
-                if points.count == 1, let only = points.first {
-                    TrendSinglePoint(
-                        value: "\(viewModel.preferences.formatted(only.value)) \(unit)",
-                        caption: "One reading on \(viewModel.formattedDay(only.date)) — log another to see a trend."
-                    )
-                } else if points.isEmpty {
-                    TrendEmptyState(message: "Nothing logged for \(field.label) in this range.")
-                } else {
-                    chart
-                }
+                if fields.count > 1 { fieldPicker }
+                headline
+                if points.count > 1 { chart }
             }
         }
-        .onAppear(perform: selectAnAvailableField)
-        .onChange(of: fields) { _, _ in selectAnAvailableField() }
+        .onChange(of: viewModel.loadedRange) { _, _ in rawSelection = nil }
+        .onChange(of: field) { _, _ in rawSelection = nil }
     }
 
-    /// The default selection is a field this account may never have logged,
-    /// and changing the range can take the selected field's data away. Either
-    /// way, land on something there is a chart for instead of showing an
-    /// empty one.
-    private func selectAnAvailableField() {
-        guard !fields.isEmpty, !fields.contains(field) else { return }
-        viewModel.selectedBodyField = fields[0]
+    private func formatted(_ value: Double) -> String {
+        viewModel.preferences.formatted(value)
     }
 
-    private var changeStat: AnyView? {
-        guard !fields.isEmpty, let change = viewModel.change(for: field) else { return nil }
-        let sign = change > 0 ? "+" : (change < 0 ? "−" : "")
-        return AnyView(
-            TrendStat(
-                value: "\(sign)\(viewModel.preferences.formatted(abs(change))) \(unit)",
-                label: "over range"
-            )
-        )
+    @ViewBuilder
+    private var headline: some View {
+        if let first = points.first, let last = points.last {
+            if let selected {
+                TrendHeadline(
+                    eyebrow: "\(field.label) · \(viewModel.formattedBucket(selected.date))",
+                    value: formatted(selected.value),
+                    unit: unit,
+                    detail: selected.date == first.date
+                        ? Text("First reading in this range")
+                        : changeDetail(selected.value - first.value, unit: unit, since: viewModel.formattedDay(first.date), format: formatted)
+                )
+            } else {
+                TrendHeadline(
+                    eyebrow: "\(field.label) · \(Calendar.current.isDateInToday(last.date) ? "today" : viewModel.formattedDay(last.date))",
+                    value: formatted(last.value),
+                    unit: unit,
+                    detail: points.count == 1
+                        ? Text("One reading so far. Log another to see a trend.")
+                        : changeDetail(last.value - first.value, unit: unit, since: viewModel.formattedDay(first.date), format: formatted)
+                )
+            }
+        }
     }
 
     private var fieldPicker: some View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(fields) { option in
-                    let isSelected = option == field
-                    Button {
-                        if viewModel.selectedBodyField != option {
-                            Haptics.selection()
+                    TrendChip(title: option.label, isSelected: option == field) {
+                        guard viewModel.selectedBodyField != option else { return }
+                        Haptics.selection()
+                        withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) {
                             viewModel.selectedBodyField = option
                         }
-                    } label: {
-                        Text(option.label)
-                            .appBody(12, weight: .semibold)
-                            .foregroundStyle(isSelected ? .white : AppColor.secondaryText)
-                            .padding(.horizontal, 12)
-                            .padding(.vertical, 7)
-                            .background(isSelected ? AppColor.accent : AppColor.inputBackground)
-                            .clipShape(RoundedRectangle(cornerRadius: 9))
-                            .frame(minHeight: 44)
-                            .contentShape(Rectangle())
                     }
-                    .buttonStyle(.pressable)
-                    .accessibilityAddTraits(isSelected ? [.isSelected] : [])
                 }
             }
         }
-        // The chips are a horizontal scroller inside a vertical one; without
-        // this the card's own padding gets clipped away at the edges.
-        .padding(.horizontal, -2)
+        // A horizontal scroller inside the card: let the chips run to the
+        // card's edges rather than clipping at its padding.
+        .contentMargins(.horizontal, AppSpacing.cardPad, for: .scrollContent)
+        .padding(.horizontal, -AppSpacing.cardPad)
     }
 
     private var chart: some View {
@@ -109,30 +101,54 @@ struct MeasurementsTrendCard: View {
         let low = values.min() ?? 0
         let high = values.max() ?? 1
         let pad = max((high - low) * 0.15, 0.5)
+        let showsPoints = points.count <= 31
+        let selected = selected
 
-        return Chart(points) { point in
-            LineMark(
-                x: .value("Day", point.date, unit: .day),
-                y: .value(field.label, point.value)
-            )
-            .foregroundStyle(AppColor.water)
-            .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-            .interpolationMethod(.monotone)
-            .accessibilityLabel(viewModel.formattedDay(point.date))
-            .accessibilityValue("\(viewModel.preferences.formatted(point.value)) \(unit)")
-
-            if points.count <= 31 {
-                PointMark(
+        return Chart {
+            ForEach(points) { point in
+                LineMark(
                     x: .value("Day", point.date, unit: .day),
                     y: .value(field.label, point.value)
                 )
                 .foregroundStyle(AppColor.water)
-                .symbolSize(28)
+                .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                .interpolationMethod(.monotone)
+                .accessibilityLabel(viewModel.formattedDay(point.date))
+                .accessibilityValue("\(formatted(point.value)) \(unit)")
+
+                if showsPoints {
+                    PointMark(
+                        x: .value("Day", point.date, unit: .day),
+                        y: .value(field.label, point.value)
+                    )
+                    .foregroundStyle(AppColor.water)
+                    .symbolSize(24)
+                    .accessibilityHidden(true)
+                }
+            }
+
+            if let selected {
+                RuleMark(x: .value("Selected", selected.date, unit: .day))
+                    .foregroundStyle(AppColor.ink.opacity(0.25))
+                    .lineStyle(StrokeStyle(lineWidth: 1))
+                    .accessibilityHidden(true)
+                PointMark(
+                    x: .value("Day", selected.date, unit: .day),
+                    y: .value(field.label, selected.value)
+                )
+                .symbol {
+                    Circle()
+                        .fill(AppColor.water)
+                        .stroke(AppColor.surface, lineWidth: 2.5)
+                        .frame(width: 13, height: 13)
+                }
                 .accessibilityHidden(true)
             }
         }
         .chartYScale(domain: (low - pad)...(high + pad))
-        .progressChartAxes(range: viewModel.range)
+        .progressChartAxes(range: viewModel.loadedRange)
+        .chartScrubbing($rawSelection)
+        .sensoryFeedback(.selection, trigger: selected?.date)
         .frame(height: 170)
         .accessibilityLabel("\(field.label) trend")
     }

@@ -10,6 +10,16 @@
 //  is missing rather than replacing the tab with an error state, except when
 //  nothing at all loaded.
 //
+//  DERIVED SERIES ARE BUILT ONCE PER LOAD
+//  --------------------------------------
+//  Every card observes this whole object, so any published change — picking
+//  a macro, a measurement, a range — re-renders all four. The series those
+//  cards draw used to be computed properties: each weight point re-parsed
+//  its row's date string, the measurements picker did that for all ten body
+//  fields, and the goal line ran a DateFormatter per day, several times per
+//  render. They are now built once, when a load lands (`rebuildDerived`),
+//  and a render only reads them.
+//
 
 import Foundation
 import Combine
@@ -49,14 +59,66 @@ final class ProgressViewModel: ObservableObject {
     @Published private(set) var exerciseTotals: ExerciseRangeSummary.Totals?
     @Published private(set) var preferences: UserPreferences = .serverDefaults
 
+    /// The window the data on screen describes. It trails `range` while a
+    /// new selection loads, so the charts keep their axes matched to the
+    /// numbers they're drawing instead of jumping ahead of them.
+    @Published private(set) var loadedRange: ProgressDateRange
+
     @Published private(set) var isLoading = false
+    /// Visible loads in flight. Tapping through ranges quickly overlaps
+    /// them, and the first to land used to clear the dimming while the
+    /// newest was still loading — stale charts shown at full strength.
+    private var visibleLoads = 0 {
+        didSet { isLoading = visibleLoads > 0 }
+    }
     @Published private(set) var hasLoadedOnce = false
+    /// Every read that feeds a chart failed, so an empty screen means "we
+    /// couldn't ask", not "nothing was logged" — the two need different
+    /// screens.
+    @Published private(set) var didFailToLoad = false
     @Published var errorMessage: String?
+
+    /// What came before an empty range, so its empty state can tell a
+    /// break from a blank slate. Only ever looked up when the range is
+    /// empty.
+    enum EarlierHistory: Equatable {
+        case unknown
+        /// Nothing in the year before the range — or no year before it.
+        case none
+        /// The newest day with anything logged, before the range.
+        case lastLogged(Date)
+    }
+    @Published private(set) var earlierHistory: EarlierHistory = .unknown
+
+    // MARK: - Derived (see the header note)
+
+    /// Bars for the nutrition chart: logged days, or weekly means on the
+    /// long ranges (`TrendGranularity`).
+    private(set) var nutritionBars: [DailyNutrition] = []
+    /// Bars for the exercise chart: every day, or weekly totals.
+    private(set) var exerciseBars: [DailyExercise] = []
+    /// Weight over the range. One point per day at most, by schema.
+    private(set) var weightPoints: [BodyTrendPoint] = []
+    /// A smoothed line through `weightPoints` for the long ranges, empty
+    /// otherwise (`weightTrend(_:over:)`).
+    private(set) var weightTrend: [BodyTrendPoint] = []
+    /// Body fields other than weight that actually carry data in this range,
+    /// so the measurements card offers only what there is something to draw
+    /// for rather than ten mostly-empty charts.
+    private(set) var populatedBodyFields: [BodyField] = []
+    /// Days in the range with at least one workout.
+    private(set) var activeExerciseDays = 0
+    private var bodySeries: [BodyField: [BodyTrendPoint]] = [:]
+    private var goalsByDate: [Date: NutritionGoals] = [:]
+    private var goalLines: [MacroSeries: [(date: Date, value: Double)]] = [:]
+    private var averages: [MacroSeries: Double] = [:]
 
     /// Diary's floor, for the same reason: there is nothing to chart before
     /// the account existed, and nothing logged after today.
     let minDate: Date
-    let maxDate: Date
+    /// Today. Rolls forward on the next load if the app stays alive past
+    /// midnight — the tab lives for the whole session behind the tab bar.
+    private(set) var maxDate: Date
 
     private let apiClient: APIClientProtocol
     private var cancellables = Set<AnyCancellable>()
@@ -84,15 +146,16 @@ final class ProgressViewModel: ObservableObject {
         // Floored to the account's start: a seed before it sits outside the
         // pickers' allowed range and reads as a clamp that never happened.
         customStart = max(calendar.date(byAdding: .day, value: -29, to: today) ?? today, minDate)
+        loadedRange = ProgressDateRange(start: today, end: today)
+        loadedRange = range
 
         // Settings can change the units every number here is labelled with,
-        // and a live TabView keeps this screen alive across tab switches, so
-        // nothing re-runs `.task` when the user comes back — the same gap
-        // that silently broke every Settings edit after the Module 5 TabView
-        // migration.
+        // and a sync can land new entries, while this screen stays alive
+        // behind the tab bar. Quietly: a sync finishing while someone reads
+        // the charts shouldn't dim them.
         NotificationCenter.default.publisher(for: .referenceDataChanged)
             .sink { [weak self] _ in
-                Task { @MainActor in await self?.load() }
+                Task { @MainActor in await self?.refresh() }
             }
             .store(in: &cancellables)
     }
@@ -142,13 +205,26 @@ final class ProgressViewModel: ObservableObject {
         return asked < range.start
     }
 
+    /// The shortest preset that reaches back to `date` — what an empty
+    /// range's "show me" button offers, so one tap lands on something
+    /// instead of stepping through a chain of empty ranges.
+    func shortestPreset(reaching date: Date) -> ProgressRangePreset? {
+        let calendar = Calendar.current
+        return ProgressRangePreset.allCases.first { option in
+            guard let days = option.days, option != preset else { return false }
+            let start = calendar.date(byAdding: .day, value: -(days - 1), to: maxDate) ?? maxDate
+            return date >= start
+        }
+    }
+
     private func reloadForRangeChange() {
         Task { await load() }
     }
 
     // MARK: - Loading
 
-    /// Loads the currently selected range.
+    /// Loads the currently selected range, dimming what's on screen until it
+    /// lands.
     ///
     /// Deliberately does NOT cancel an in-flight load. An earlier version did,
     /// and it lost data: changing the range schedules a load of its own, so a
@@ -160,13 +236,26 @@ final class ProgressViewModel: ObservableObject {
     /// caller is told a load finished when nothing was written.
     func load() async {
         if isPreviewSeeded { return }
-        await performLoad()
+        await performLoad(showsProgress: true)
     }
 
-    private func performLoad() async {
+    /// Re-reads the range without dimming anything — for coming back to the
+    /// tab after logging elsewhere, where the numbers usually haven't moved
+    /// and a dim-and-restore flash would read as the screen resetting.
+    /// Measured: every return to the tab used to run a full dimmed load.
+    func refresh() async {
+        if isPreviewSeeded { return }
+        guard hasLoadedOnce else { return await load() }
+        await performLoad(showsProgress: false)
+    }
+
+    private func performLoad(showsProgress: Bool) async {
+        let today = Calendar.current.startOfDay(for: Date())
+        if today > maxDate { maxDate = today }
+
         let window = range
-        isLoading = true
-        defer { isLoading = false; hasLoadedOnce = true }
+        if showsProgress { visibleLoads += 1 }
+        defer { if showsProgress { visibleLoads -= 1 } }
 
         // Independent reads, run together. `async let` rather than a task
         // group because each result has a different type and each is allowed
@@ -180,33 +269,91 @@ final class ProgressViewModel: ObservableObject {
         let (entriesResult, goalsResult, bodyResult, workoutsResult, prefsResult) =
             await (entries, goals, body, workouts, prefs)
 
+        // Leaving the tab cancels the first load's `.task`. A cancelled run
+        // writes nothing: its reads failed *because* it was cancelled, and
+        // reporting that as "couldn't load" would be a false alarm.
+        guard !Task.isCancelled else { return }
+
         // The selection moved while this was in flight, so these numbers
         // describe a range nobody is looking at any more.
         guard window == range else { return }
 
+        // A failed read keeps the previous numbers only when they describe
+        // this same window (a refresh). After a range change they'd be the
+        // old range's data drawn against the new range's axis.
+        let isNewWindow = window != loadedRange
         var failures: [String] = []
 
         switch entriesResult {
         case .success(let rows): nutrition = Self.daily(from: rows, formatter: dayFormatter)
-        case .failure: failures.append("food")
+        case .failure:
+            failures.append("food")
+            if isNewWindow { nutrition = [] }
         }
         switch goalsResult {
         case .success(let value): goalsByDay = value
-        case .failure: failures.append("goals")
+        case .failure:
+            failures.append("goals")
+            if isNewWindow { goalsByDay = [:] }
         }
         switch bodyResult {
         case .success(let rows): bodyRows = rows
-        case .failure: failures.append("weight")
+        case .failure:
+            failures.append("weight")
+            if isNewWindow { bodyRows = [] }
         }
         switch workoutsResult {
         case .success(let summary):
             exerciseTotals = summary.totals
             exercise = Self.daily(from: summary, over: window, formatter: dayFormatter)
-        case .failure: failures.append("exercise")
+        case .failure:
+            failures.append("exercise")
+            if isNewWindow { exerciseTotals = nil; exercise = [] }
         }
         if case .success(let value) = prefsResult { preferences = value }
 
+        loadedRange = window
+        rebuildDerived()
+        didFailToLoad = Set(failures).isSuperset(of: ["food", "weight", "exercise"]) && !hasAnyData
         errorMessage = Self.message(for: failures)
+        hasLoadedOnce = true
+
+        if hasAnyData || didFailToLoad {
+            earlierHistory = .unknown
+        } else if earlierHistory == .unknown || isNewWindow {
+            earlierHistory = .unknown
+            // Its own task, so the empty state isn't held dimmed behind it.
+            Task { await findEarlierHistory(before: window) }
+        }
+    }
+
+    /// Looks back up to a year before an empty range for the newest day with
+    /// anything logged. Three reads, only ever for an empty range — which,
+    /// for an account with history, means they come back small.
+    private func findEarlierHistory(before window: ProgressDateRange) async {
+        let calendar = Calendar.current
+        guard let end = calendar.date(byAdding: .day, value: -1, to: window.start), end >= minDate else {
+            earlierHistory = .none
+            return
+        }
+        let start = max(minDate, calendar.date(byAdding: .day, value: -365, to: end) ?? minDate)
+
+        async let food = try? apiClient.foodEntries(from: start, to: end)
+        async let body = try? apiClient.bodyMeasurements(from: start, to: end)
+        async let workouts = try? apiClient.exerciseSummary(from: start, to: end)
+        let (foodRows, bodyRows, summary) = await (food, body, workouts)
+
+        guard !Task.isCancelled, window == loadedRange, !hasAnyData else { return }
+        // Day keys compare correctly as strings, so no date parsing until
+        // the one winner.
+        let keys = (foodRows?.map(\.entryDate) ?? [])
+            + (bodyRows?.map(\.entryDate) ?? [])
+            + (summary?.intervalsBreakdown.filter { $0.workoutCount > 0 }.map(\.startDate) ?? [])
+        if let newest = keys.max(), let date = dayFormatter.date(from: newest) {
+            earlierHistory = .lastLogged(Calendar.current.startOfDay(for: date))
+        } else {
+            earlierHistory = .none
+        }
     }
 
     /// Wraps a throwing call so one failing read can't cancel its siblings.
@@ -271,6 +418,136 @@ final class ProgressViewModel: ObservableObject {
         }
     }
 
+    /// Weekly means over the days that were logged — the same rule as the
+    /// range average, so a week with two logged days isn't reported as a
+    /// week of fasting.
+    nonisolated static func weekly(_ days: [DailyNutrition], calendar: Calendar = .current) -> [DailyNutrition] {
+        var buckets: [Date: (calories: Double, protein: Double, carbs: Double, fat: Double, days: Int)] = [:]
+        for day in days {
+            let week = calendar.dateInterval(of: .weekOfYear, for: day.date)?.start ?? day.date
+            var bucket = buckets[week] ?? (0, 0, 0, 0, 0)
+            bucket.calories += day.calories
+            bucket.protein += day.protein
+            bucket.carbs += day.carbs
+            bucket.fat += day.fat
+            bucket.days += 1
+            buckets[week] = bucket
+        }
+        return buckets
+            .map { week, bucket in
+                let count = Double(bucket.days)
+                return DailyNutrition(
+                    date: week,
+                    calories: bucket.calories / count,
+                    protein: bucket.protein / count,
+                    carbs: bucket.carbs / count,
+                    fat: bucket.fat / count,
+                    loggedDays: bucket.days
+                )
+            }
+            .sorted { $0.date < $1.date }
+    }
+
+    /// Weekly totals — exercise days are zero-filled, so a sum is the honest
+    /// weekly figure.
+    nonisolated static func weekly(_ days: [DailyExercise], calendar: Calendar = .current) -> [DailyExercise] {
+        var buckets: [Date: (burned: Double, minutes: Double, workouts: Int)] = [:]
+        for day in days {
+            let week = calendar.dateInterval(of: .weekOfYear, for: day.date)?.start ?? day.date
+            var bucket = buckets[week] ?? (0, 0, 0)
+            bucket.burned += day.caloriesBurned
+            bucket.minutes += day.durationMinutes
+            bucket.workouts += day.workoutCount
+            buckets[week] = bucket
+        }
+        return buckets
+            .map { DailyExercise(date: $0.key, caloriesBurned: $0.value.burned, durationMinutes: $0.value.minutes, workoutCount: $0.value.workouts) }
+            .sorted { $0.date < $1.date }
+    }
+
+    /// A centred moving average of the weigh-ins, for ranges long enough
+    /// that day-to-day water weight hides the direction.
+    ///
+    /// Over three months and up, a day's weight swings by more than the
+    /// month's real change, and the raw line reads as noise. Each point here
+    /// is the mean of the readings within a few days either side — centred,
+    /// so the line doesn't lag behind the data the way a running average
+    /// does, and time-based, so sparse weigh-ins aren't averaged across
+    /// weeks. The window widens with the range, since a year can afford
+    /// more smoothing than a quarter. Empty when there's too little to
+    /// smooth, and the chart then draws the readings alone.
+    nonisolated static func weightTrend(_ points: [BodyTrendPoint], over window: ProgressDateRange) -> [BodyTrendPoint] {
+        guard window.dayCount > 45, points.count >= 10 else { return [] }
+        let halfWidth = Double(max(3, window.dayCount / 40)) * 86_400
+        var lower = 0
+        var upper = 0
+        var sum = 0.0
+        return points.map { point in
+            // Two pointers over the sorted readings: O(n), not O(n²).
+            while upper < points.count, points[upper].date.timeIntervalSince(point.date) <= halfWidth {
+                sum += points[upper].value
+                upper += 1
+            }
+            while point.date.timeIntervalSince(points[lower].date) > halfWidth {
+                sum -= points[lower].value
+                lower += 1
+            }
+            return BodyTrendPoint(date: point.date, value: sum / Double(upper - lower))
+        }
+    }
+
+    /// Rebuilds every derived series from the loaded rows. Called once per
+    /// load, never from a render.
+    private func rebuildDerived() {
+        let window = loadedRange
+        let weekly = window.granularity == .week
+
+        nutritionBars = weekly ? Self.weekly(nutrition) : nutrition
+        exerciseBars = weekly ? Self.weekly(exercise) : exercise
+        activeExerciseDays = exercise.reduce(0) { $0 + ($1.workoutCount > 0 ? 1 : 0) }
+
+        // Body: one date parse per row, then every field it carries.
+        var series: [BodyField: [BodyTrendPoint]] = [:]
+        for row in bodyRows {
+            guard let date = dayFormatter.date(from: row.entryDate) else { continue }
+            for field in BodyField.allCases {
+                if let value = row.measurements.value(for: field) {
+                    series[field, default: []].append(BodyTrendPoint(date: date, value: value))
+                }
+            }
+        }
+        for field in series.keys { series[field]?.sort { $0.date < $1.date } }
+        bodySeries = series
+        weightPoints = series[.weight] ?? []
+        weightTrend = Self.weightTrend(weightPoints, over: window)
+        populatedBodyFields = BodyField.allCases.filter { $0 != .weight && !(series[$0]?.isEmpty ?? true) }
+        // The default selection is a field this account may never have
+        // logged, and a new range can take the selected field's data away.
+        // Either way, land on something there is a chart for.
+        if let first = populatedBodyFields.first, !populatedBodyFields.contains(selectedBodyField) {
+            selectedBodyField = first
+        }
+
+        // Goals: one date parse per key, then one lookup per day per series.
+        var byDate: [Date: NutritionGoals] = [:]
+        for (key, goals) in goalsByDay {
+            guard let date = dayFormatter.date(from: key) else { continue }
+            byDate[Calendar.current.startOfDay(for: date)] = goals
+        }
+        goalsByDate = byDate
+        let days = window.allDays
+        var lines: [MacroSeries: [(date: Date, value: Double)]] = [:]
+        var means: [MacroSeries: Double] = [:]
+        for series in MacroSeries.allCases {
+            lines[series] = days.compactMap { day in goal(on: day, for: series).map { (day, $0) } }
+            if !nutrition.isEmpty {
+                means[series] = nutrition.reduce(0) { $0 + $1.value(for: series) } / Double(nutrition.count)
+            }
+        }
+        goalLines = lines
+        averages = means
+    }
+
     // MARK: - Derived series
 
     /// The goal for one day, or nil when none is usefully set.
@@ -280,7 +557,7 @@ final class ProgressViewModel: ObservableObject {
     /// than 404 for an account that never set a goal, so "has a goal" means
     /// "calories > 0", not "a row came back".
     func goal(on day: Date, for series: MacroSeries) -> Double? {
-        guard let goals = goalsByDay[dayFormatter.string(from: day)], goals.isSet else { return nil }
+        guard let goals = goalsByDate[Calendar.current.startOfDay(for: day)], goals.isSet else { return nil }
         return series.goal(from: goals).flatMap { $0 > 0 ? $0 : nil }
     }
 
@@ -288,9 +565,7 @@ final class ProgressViewModel: ObservableObject {
     /// goals are date-versioned and the server carries each one forward
     /// until a later row supersedes it.
     var goalLine: [(date: Date, value: Double)] {
-        range.allDays.compactMap { day in
-            goal(on: day, for: selectedSeries).map { (day, $0) }
-        }
+        goalLines[selectedSeries] ?? []
     }
 
     var hasGoalLine: Bool { !goalLine.isEmpty }
@@ -311,27 +586,8 @@ final class ProgressViewModel: ObservableObject {
         return values.allSatisfy { $0 == first } ? first : nil
     }
 
-    /// Weight over the range. One point per day at most, by schema.
-    var weightPoints: [BodyTrendPoint] {
-        points(for: .weight)
-    }
-
     func points(for field: BodyField) -> [BodyTrendPoint] {
-        bodyRows.compactMap { row in
-            guard
-                let date = dayFormatter.date(from: row.entryDate),
-                let value = row.measurements.value(for: field)
-            else { return nil }
-            return BodyTrendPoint(date: date, value: value)
-        }
-        .sorted { $0.date < $1.date }
-    }
-
-    /// Body fields other than weight that actually carry data in this range,
-    /// so the measurements card offers only what there is something to draw
-    /// for rather than ten mostly-empty charts.
-    var populatedBodyFields: [BodyField] {
-        BodyField.allCases.filter { $0 != .weight && !points(for: $0).isEmpty }
+        bodySeries[field] ?? []
     }
 
     /// Net change across the range — last minus first — for a body field.
@@ -346,8 +602,7 @@ final class ProgressViewModel: ObservableObject {
     /// Mean over the days that have entries, not over the range: averaging in
     /// unlogged days would report a deficit nobody ate.
     func average(for series: MacroSeries) -> Double? {
-        guard !nutrition.isEmpty else { return nil }
-        return nutrition.reduce(0) { $0 + $1.value(for: series) } / Double(nutrition.count)
+        averages[series]
     }
 
     var loggedDayCount: Int { nutrition.count }
@@ -356,8 +611,32 @@ final class ProgressViewModel: ObservableObject {
         !nutrition.isEmpty || !bodyRows.isEmpty || (exerciseTotals?.workoutCount ?? 0) > 0
     }
 
+    /// Today's check-in row, if one is in range — what the log sheets open
+    /// on, so saving a weight can't blank this morning's waist.
+    var todaysMeasurements: BodyMeasurements {
+        let key = dayFormatter.string(from: maxDate)
+        return bodyRows.first { $0.entryDate == key }?.measurements ?? .none
+    }
+
+    /// "24 Sep", or "2 Oct 2025" outside the current year — on a year's
+    /// range, "down 4.5 kg since 2 Oct" read on 1 Oct sounds like tomorrow.
     func formattedDay(_ date: Date) -> String {
-        date.formatted(.dateTime.day().month(.abbreviated))
+        isThisYear(date)
+            ? date.formatted(.dateTime.day().month(.abbreviated))
+            : date.formatted(.dateTime.day().month(.abbreviated).year())
+    }
+
+    /// A chart bucket's name: the day with its weekday ("Tue 24 Sep"), or on
+    /// the weekly ranges the week it starts ("Week of 2 Jun").
+    func formattedBucket(_ date: Date) -> String {
+        if loadedRange.granularity == .week { return "Week of \(formattedDay(date))" }
+        return isThisYear(date)
+            ? date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated))
+            : date.formatted(.dateTime.weekday(.abbreviated).day().month(.abbreviated).year())
+    }
+
+    private func isThisYear(_ date: Date) -> Bool {
+        Calendar.current.isDate(date, equalTo: maxDate, toGranularity: .year)
     }
 
     #if DEBUG
@@ -380,6 +659,7 @@ final class ProgressViewModel: ObservableObject {
             createdAt: Calendar.current.date(byAdding: .day, value: -400, to: Date())
         )
         let model = ProgressViewModel(user: user, apiClient: APIClient.shared)
+        model.isPreviewSeeded = true
         model.preset = preset
         model.nutrition = nutrition
         model.goalsByDay = goals
@@ -388,8 +668,9 @@ final class ProgressViewModel: ObservableObject {
             model.exerciseTotals = exercise.totals
             model.exercise = Self.daily(from: exercise, over: model.range, formatter: model.dayFormatter)
         }
+        model.loadedRange = model.range
+        model.rebuildDerived()
         model.hasLoadedOnce = true
-        model.isPreviewSeeded = true
         return model
     }
 
@@ -470,10 +751,15 @@ final class ProgressViewModel: ObservableObject {
     }
     #endif
 
+    /// "25 Sep – 1 Oct 2026", with the start's year too when the range
+    /// crosses one: a year's range read "2 Oct – 1 Oct 2026", backwards.
     var rangeDescription: String {
         let window = range
-        let start = window.start.formatted(.dateTime.day().month(.abbreviated))
+        let crossesYear = !Calendar.current.isDate(window.start, equalTo: window.end, toGranularity: .year)
+        let start = crossesYear
+            ? window.start.formatted(.dateTime.day().month(.abbreviated).year())
+            : window.start.formatted(.dateTime.day().month(.abbreviated))
         let end = window.end.formatted(.dateTime.day().month(.abbreviated).year())
-        return "\(start) – \(end)"
+        return window.dayCount == 1 ? end : "\(start) – \(end)"
     }
 }

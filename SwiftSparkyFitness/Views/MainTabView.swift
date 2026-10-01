@@ -57,7 +57,7 @@ struct MainTabView: View {
             }
 
             Tab(value: AppTab.progress) {
-                ProgressTabView(user: user).offlineBanner(serverSync)
+                ProgressTabView(user: user, onOpenToday: { selection = .today }).offlineBanner(serverSync)
             } label: {
                 Label(AppTab.progress.label, systemImage: AppTab.progress.symbol)
             }

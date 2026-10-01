@@ -51,10 +51,15 @@ import Foundation
 /// The presets are day counts rather than calendar units on purpose: "last
 /// 30 days" is a fixed window a chart can size its axis to, where "this
 /// month" changes width as the month goes on.
+///
+/// Six months and a year exist for weight, which is read over seasons, not
+/// weeks. Both stay inside `ProgressDateRange.maximumDays`.
 enum ProgressRangePreset: String, CaseIterable, Identifiable, Hashable {
     case week
     case month
     case threeMonths
+    case sixMonths
+    case year
     case custom
 
     var id: String { rawValue }
@@ -64,8 +69,28 @@ enum ProgressRangePreset: String, CaseIterable, Identifiable, Hashable {
         case .week: return "Week"
         case .month: return "Month"
         case .threeMonths: return "3 months"
+        case .sixMonths: return "6 months"
+        case .year: return "Year"
         case .custom: return "Custom"
         }
+    }
+
+    /// The segment text. Rolling windows, so the Stocks app's "1W 1M 3M"
+    /// vocabulary rather than Health's "W M", which reads as calendar units.
+    var shortLabel: String {
+        switch self {
+        case .week: return "1W"
+        case .month: return "1M"
+        case .threeMonths: return "3M"
+        case .sixMonths: return "6M"
+        case .year: return "1Y"
+        case .custom: return "Custom"
+        }
+    }
+
+    /// What VoiceOver says for a segment — "1W" read aloud is "1 W".
+    var spokenLabel: String {
+        days.map { "Last \($0) days" } ?? "Custom range"
     }
 
     /// How many days back from today the preset spans, inclusive of today.
@@ -75,9 +100,28 @@ enum ProgressRangePreset: String, CaseIterable, Identifiable, Hashable {
         case .week: return 7
         case .month: return 30
         case .threeMonths: return 90
+        case .sixMonths: return 180
+        case .year: return 365
         case .custom: return nil
         }
     }
+}
+
+/// How finely the bar charts bucket a range.
+///
+/// Past three months a daily bar is under two points wide — a year of them
+/// is a texture, not a chart — so long ranges bar by week instead, the way
+/// Health's 6M and Y views do. Line charts (weight, measurements) always
+/// plot the real readings; only the bars are bucketed.
+enum TrendGranularity: Equatable {
+    case day
+    case week
+
+    /// Ranges longer than this bucket by week. 92 keeps every "3 months"
+    /// span (90 days, or a custom quarter) daily.
+    static let dailyLimit = 92
+
+    var component: Calendar.Component { self == .day ? .day : .weekOfYear }
 }
 
 /// A resolved, clamped start/end pair.
@@ -96,6 +140,10 @@ struct ProgressDateRange: Equatable {
     var dayCount: Int {
         let days = Calendar.current.dateComponents([.day], from: start, to: end).day ?? 0
         return days + 1
+    }
+
+    var granularity: TrendGranularity {
+        dayCount > TrendGranularity.dailyLimit ? .week : .day
     }
 
     /// Every calendar day in the range, ascending. Charts that must show a
@@ -129,6 +177,9 @@ struct DailyNutrition: Identifiable, Equatable {
     let protein: Double
     let carbs: Double
     let fat: Double
+    /// 1 for a day. For a week bucket, how many of its days had entries —
+    /// the values are then the mean over those days, not a sum.
+    var loggedDays: Int = 1
 
     var id: Date { date }
 

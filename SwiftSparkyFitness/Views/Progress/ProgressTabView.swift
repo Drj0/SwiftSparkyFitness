@@ -6,23 +6,39 @@
 //
 //  Named `ProgressTabView` rather than `ProgressView` because SwiftUI
 //  already owns that name and this file imports SwiftUI — shadowing it would
-//  break every spinner in the app, including the one below.
+//  break every spinner in the app.
 //
 //  Follows Today's scaffold (ScrollView → VStack → screen padding, title in
-//  the serif display face, `.task` to load and `.refreshable` to reload) and
-//  Diary's error rule: once data is on screen a failure appears as a banner
-//  above it rather than replacing it, because a failed reload must not take
-//  away the charts the user is already reading.
+//  the serif display face at Today's size, `.task` to load and
+//  `.refreshable` to reload) and Diary's error rule: once data is on screen a
+//  failure appears as a banner above it rather than replacing it, because a
+//  failed reload must not take away the charts the user is already reading.
+//
+//  THE RANGE CONTROL
+//  -----------------
+//  The range is this screen's one real question — "over what period?" — so
+//  it is a segmented row under the title, one tap from any range, the way
+//  Health and Stocks do it. It used to be a pill that opened a menu: two
+//  taps to change, and the options were invisible until you asked, so the
+//  longer ranges went undiscovered.
 //
 
 import SwiftUI
 
 struct ProgressTabView: View {
     @StateObject private var viewModel: ProgressViewModel
+    /// Switches to Today, for the empty state's "log something" — logging
+    /// food lives there, not here.
+    private let onOpenToday: (() -> Void)?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
-    init(user: SessionUser) {
+    /// Which body sheet is up, if any: logging a weight or measurements
+    /// straight from their chart.
+    @State private var bodySheet: LogBodyViewModel.Kind?
+
+    init(user: SessionUser, onOpenToday: (() -> Void)? = nil) {
         _viewModel = StateObject(wrappedValue: ProgressViewModel(user: user))
+        self.onOpenToday = onOpenToday
     }
 
     #if DEBUG
@@ -30,6 +46,7 @@ struct ProgressTabView: View {
     /// loading from the server.
     init(previewing viewModel: ProgressViewModel) {
         _viewModel = StateObject(wrappedValue: viewModel)
+        onOpenToday = nil
     }
     #endif
 
@@ -37,27 +54,36 @@ struct ProgressTabView: View {
         ScrollView {
             VStack(alignment: .leading, spacing: 14) {
                 header
+                RangeControl(selection: presetSelection)
                 if viewModel.preset == .custom { customRangeFields }
 
-                if viewModel.isLoading && !viewModel.hasLoadedOnce {
-                    ProgressView()
-                        .frame(maxWidth: .infinity)
-                        .padding(.top, 40)
-                } else if viewModel.hasAnyData {
-                    cards
-                } else if viewModel.hasLoadedOnce {
-                    emptyState
-                }
+                content
+                    // A reload over existing charts dims them rather than
+                    // blanking the screen, the same way Diary handles paging
+                    // to a new day. Only the charts: the range control you
+                    // just tapped stays at full strength.
+                    .opacity(viewModel.isLoading && viewModel.hasLoadedOnce ? 0.5 : 1)
+                    .allowsHitTesting(!(viewModel.isLoading && viewModel.hasLoadedOnce))
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: viewModel.isLoading)
             }
             .padding(AppSpacing.screenPad)
-            // A reload over existing charts dims them rather than blanking
-            // the screen, the same way Diary handles paging to a new day.
-            .opacity(viewModel.isLoading && viewModel.hasLoadedOnce ? 0.5 : 1)
-            .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: viewModel.isLoading)
         }
         .background(AppColor.background)
-        .task { await viewModel.load() }
-        .refreshable { await viewModel.load() }
+        // `.task` re-runs every time the tab reappears (measured), and it
+        // used to reload — dimmed — on each of those. Now it only makes the
+        // first load; coming back re-reads quietly instead, in an
+        // unstructured task so leaving again mid-read can't cancel it.
+        .task {
+            guard !viewModel.hasLoadedOnce else { return }
+            await viewModel.load()
+        }
+        .onAppear {
+            guard viewModel.hasLoadedOnce else { return }
+            Task { await viewModel.refresh() }
+        }
+        // The system spinner already says a pull is in flight; dimming the
+        // charts under it as well would be saying it twice.
+        .refreshable { await viewModel.refresh() }
         .safeAreaInset(edge: .top) { errorBanner }
         .onChange(of: viewModel.errorMessage) { _, message in
             // The banner appears without moving VoiceOver focus, so it has to
@@ -65,58 +91,43 @@ struct ProgressTabView: View {
             guard let message else { return }
             AccessibilityNotification.Announcement(message).post()
         }
+        .sheet(item: $bodySheet) { kind in
+            // Opens on today with today's row, so saving a weight can't blank
+            // this morning's waist; the sheet's own date picker reloads the
+            // row for any other day.
+            LogBodyView(
+                kind: kind,
+                date: viewModel.maxDate,
+                existing: viewModel.todaysMeasurements,
+                preferences: viewModel.preferences,
+                minDate: viewModel.minDate,
+                maxDate: viewModel.maxDate,
+                suggestedWeight: viewModel.weightPoints.last?.value
+            ) {
+                Task { await viewModel.refresh() }
+            }
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack(alignment: .center, spacing: 12) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text("Progress")
-                    .appDisplay(26)
-                    .foregroundStyle(AppColor.ink)
-                Text(viewModel.rangeDescription)
-                    .appBody(13)
-                    .foregroundStyle(AppColor.secondaryText)
-                    .contentTransition(.numericText())
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .accessibilityElement(children: .combine)
-
-            rangeSelector
+        VStack(alignment: .leading, spacing: 2) {
+            Text("Progress")
+                .appDisplay(32)
+                .foregroundStyle(AppColor.ink)
+                .accessibilityAddTraits(.isHeader)
+            Text(viewModel.rangeDescription)
+                .appBody(14)
+                .foregroundStyle(AppColor.secondaryText)
+                .contentTransition(.numericText())
+                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.rangeDescription)
         }
     }
 
     // MARK: - Range
-
-    /// One pill showing the current range; tapping it opens the choices,
-    /// like Reddit's sort control. Four equal buttons spent a whole row on a
-    /// setting that changes rarely.
-    private var rangeSelector: some View {
-        Menu {
-            Picker("Time range", selection: presetSelection) {
-                ForEach(ProgressRangePreset.allCases) { option in
-                    Text(option.label).tag(option)
-                }
-            }
-        } label: {
-            HStack(spacing: 4) {
-                Text(viewModel.preset.label)
-                    .appBody(13, weight: .semibold)
-                Image(systemName: "chevron.down")
-                    .font(.system(size: 10, weight: .bold))
-            }
-            .foregroundStyle(AppColor.ink)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 8)
-            .background(AppColor.inputBackground)
-            .clipShape(Capsule())
-            .frame(minHeight: 44)
-            .contentShape(Rectangle())
-        }
-        .accessibilityLabel("Time range")
-        .accessibilityValue(viewModel.preset.label)
-    }
 
     private var presetSelection: Binding<ProgressRangePreset> {
         Binding(
@@ -143,37 +154,154 @@ struct ProgressTabView: View {
 
     // MARK: - Content
 
-    private var cards: some View {
-        VStack(spacing: 14) {
-            WeightTrendCard(viewModel: viewModel)
-            NutritionTrendCard(viewModel: viewModel)
-            ExerciseSummaryCard(viewModel: viewModel)
-            MeasurementsTrendCard(viewModel: viewModel)
+    @ViewBuilder
+    private var content: some View {
+        if !viewModel.hasLoadedOnce {
+            loadingPlaceholders
+        } else if viewModel.didFailToLoad {
+            failureState
+        } else if viewModel.hasAnyData {
+            cards
+        } else {
+            emptyState
         }
     }
 
+    private enum Slot: Hashable, CaseIterable { case weight, nutrition, exercise, measurements }
+
+    /// A fixed order, except that cards with something to chart come first:
+    /// an account that never logs measurements shouldn't have to scroll past
+    /// an empty card to reach the exercise it does log.
+    private var slots: [Slot] {
+        let filled = Slot.allCases.filter(hasData)
+        return filled + Slot.allCases.filter { !hasData($0) }
+    }
+
+    private func hasData(_ slot: Slot) -> Bool {
+        switch slot {
+        case .weight: return !viewModel.weightPoints.isEmpty
+        case .nutrition: return !viewModel.nutrition.isEmpty
+        case .exercise: return (viewModel.exerciseTotals?.workoutCount ?? 0) > 0
+        case .measurements: return !viewModel.populatedBodyFields.isEmpty
+        }
+    }
+
+    private var cards: some View {
+        VStack(spacing: 14) {
+            ForEach(slots, id: \.self) { slot in
+                switch slot {
+                case .weight:
+                    WeightTrendCard(viewModel: viewModel) { bodySheet = .weight }
+                case .nutrition:
+                    NutritionTrendCard(viewModel: viewModel)
+                case .exercise:
+                    ExerciseSummaryCard(viewModel: viewModel)
+                case .measurements:
+                    MeasurementsTrendCard(viewModel: viewModel) { bodySheet = .measurements }
+                }
+            }
+        }
+    }
+
+    private var loadingPlaceholders: some View {
+        VStack(spacing: 14) {
+            TrendCardPlaceholder(chartHeight: 180)
+            TrendCardPlaceholder(chartHeight: 150)
+        }
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Loading your progress")
+    }
+
+    /// Nothing loaded at all. Not the empty state — that would tell someone
+    /// with a year of history that they've logged nothing.
+    private var failureState: some View {
+        VStack(spacing: 14) {
+            ErrorBanner(message: "Couldn't load your progress. Check your connection, then try again.")
+            PrimaryButton(title: "Retry") {
+                Task { await viewModel.load() }
+            }
+        }
+        .padding(.top, 12)
+    }
+
+    /// A blank slate and a break read differently. An account with nothing
+    /// in the year before this range is told where trends come from and
+    /// sent to Today; one that took a break is told when it last logged and
+    /// offered the shortest range that reaches it — one tap to something,
+    /// not a chain of empty ranges.
     private var emptyState: some View {
-        VStack(spacing: 10) {
-            Text("📈")
-                .font(.system(size: 40))
+        let history = viewModel.earlierHistory
+        let title: String
+        let message: String
+        var suggestion: ProgressRangePreset?
+        switch history {
+        case .none:
+            title = "Your trends start here"
+            message = "Log a meal, a workout or your weight on Today, and this is where it adds up over the days."
+        case .lastLogged(let date):
+            title = viewModel.preset.days.map { "Nothing logged in the last \($0) days" } ?? "Nothing logged in this range"
+            message = "Your last entry was on \(date.formatted(.dateTime.weekday(.wide).day().month(.wide)))."
+            suggestion = viewModel.shortestPreset(reaching: date)
+        case .unknown:
+            title = viewModel.preset.days.map { "Nothing logged in the last \($0) days" } ?? "Nothing logged in this range"
+            message = "Your charts appear as soon as there's something in this range."
+        }
+
+        return VStack(spacing: 12) {
+            Image(systemName: "chart.line.uptrend.xyaxis")
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(AppColor.accent)
+                .frame(width: 64, height: 64)
+                .background(AppColor.accentSoft, in: Circle())
                 .accessibilityHidden(true)
-            Text("Nothing to chart yet")
-                .appDisplay(18)
+            Text(title)
+                .appDisplay(20)
                 .foregroundStyle(AppColor.ink)
-            Text("Log food, exercise or a weight and your trends will build up here.")
-                .appBody(13)
+                .multilineTextAlignment(.center)
+                .accessibilityAddTraits(.isHeader)
+            Text(message)
+                .appBody(14)
                 .foregroundStyle(AppColor.secondaryText)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let suggestion, let days = suggestion.days {
+                Button {
+                    presetSelection.wrappedValue = suggestion
+                } label: {
+                    Text(days == 365 ? "Show the last year" : "Show the last \(days) days")
+                        .appBody(15, weight: .semibold)
+                        .foregroundStyle(AppColor.accent)
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 10)
+                        .background(AppColor.accentSoft, in: Capsule())
+                        .frame(minHeight: 44)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.pressable)
+                .padding(.top, 6)
+            } else if history == .none, let onOpenToday {
+                PrimaryButton(title: "Go to Today", action: onOpenToday)
+                    .padding(.top, 6)
+            }
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 44)
-        .padding(.top, 60)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 32)
+        .background(AppColor.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: AppRadius.lg)
+                .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                .foregroundStyle(AppColor.dashedBorder)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg))
+        .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: history)
     }
 
     @ViewBuilder
     private var errorBanner: some View {
         VStack(spacing: 0) {
-            if let message = viewModel.errorMessage, viewModel.hasLoadedOnce {
+            if let message = viewModel.errorMessage, viewModel.hasLoadedOnce, !viewModel.didFailToLoad {
                 ErrorBanner(message: message)
                     .padding(.horizontal, AppSpacing.screenPad)
                     .padding(.bottom, 8)
@@ -181,6 +309,105 @@ struct ProgressTabView: View {
             }
         }
         .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.errorMessage)
+    }
+}
+
+// MARK: - Range control
+
+/// Five rolling windows and Custom, one tap each. Accent thumb on the input
+/// track, sliding between segments like the week strip's selected day.
+private struct RangeControl: View {
+    @Binding var selection: ProgressRangePreset
+    @Namespace private var thumb
+
+    var body: some View {
+        HStack(spacing: 2) {
+            ForEach(ProgressRangePreset.allCases) { option in
+                segment(option)
+            }
+        }
+        .padding(3)
+        .background(AppColor.inputBackground, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        // Six fixed columns: past this the labels stop fitting their segment.
+        .dynamicTypeSize(...DynamicTypeSize.accessibility2)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Time range")
+    }
+
+    private func segment(_ option: ProgressRangePreset) -> some View {
+        let isSelected = option == selection
+        return Button {
+            selection = option
+        } label: {
+            Group {
+                if option == .custom {
+                    Image(systemName: "calendar")
+                        .font(.system(size: 14, weight: .semibold))
+                } else {
+                    Text(option.shortLabel)
+                        .appBody(13, weight: .semibold)
+                        .monospacedDigit()
+                }
+            }
+            .foregroundStyle(isSelected ? .white : AppColor.secondaryText)
+            .lineLimit(1)
+            .minimumScaleFactor(0.7)
+            .frame(maxWidth: .infinity, minHeight: 38)
+            .background {
+                if isSelected {
+                    RoundedRectangle(cornerRadius: 9, style: .continuous)
+                        .fill(AppColor.accent)
+                        .matchedGeometryEffect(id: "thumb", in: thumb)
+                }
+            }
+            // The track's 3pt inset is still this segment's to tap, so the
+            // target reaches the full 44pt of the control.
+            .padding(.vertical, 3)
+            .contentShape(Rectangle())
+            .padding(.vertical, -3)
+        }
+        .buttonStyle(.pressable)
+        .accessibilityLabel(option.spokenLabel)
+        .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+}
+
+// MARK: - Loading
+
+/// The shape of a card, while the first load is in flight — so the screen
+/// arrives in place instead of a spinner giving way to a page of charts.
+private struct TrendCardPlaceholder: View {
+    var chartHeight: CGFloat
+    @State private var isDimmed = false
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            block(width: 96, height: 10)
+            block(width: 150, height: 28)
+            RoundedRectangle(cornerRadius: 8)
+                .fill(AppColor.ringTrack.opacity(0.6))
+                .frame(height: chartHeight)
+        }
+        .padding(AppSpacing.cardPad)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(AppColor.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: AppRadius.md)
+                .stroke(AppColor.hairline, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
+        .opacity(isDimmed ? 0.55 : 1)
+        .onAppear {
+            guard !reduceMotion else { return }
+            withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { isDimmed = true }
+        }
+    }
+
+    private func block(width: CGFloat, height: CGFloat) -> some View {
+        RoundedRectangle(cornerRadius: height / 2.5)
+            .fill(AppColor.ringTrack)
+            .frame(width: width, height: height)
     }
 }
 

@@ -27,44 +27,62 @@ import Charts
 
 struct WeightTrendCard: View {
     @ObservedObject var viewModel: ProgressViewModel
+    /// Opens the weight sheet. Every tracker worth the name lets you add a
+    /// weigh-in from the chart of them, not only from the day screen.
+    var onLog: (() -> Void)?
+
+    /// The raw position under the finger while scrubbing; `selected` snaps
+    /// it to a real weigh-in. Card-local, so scrubbing re-renders this card
+    /// only.
+    @State private var rawSelection: Date?
 
     private var points: [BodyTrendPoint] { viewModel.weightPoints }
     private var unit: String { viewModel.preferences.weightUnitLabel }
+    private var selected: BodyTrendPoint? { rawSelection.flatMap { nearestPoint(points, to: $0) } }
+    private var logAction: TrendCardAction? { onLog.map { TrendCardAction(label: "Log weight", perform: $0) } }
 
     var body: some View {
-        TrendCard(
-            title: "Weight",
-            subtitle: subtitle,
-            accessory: changeStat
-        ) {
+        TrendCard(kind: .weight, action: points.isEmpty ? nil : logAction) {
             if points.isEmpty {
-                TrendEmptyState(message: "No weight logged in this range. Log one from Today or Diary and it'll chart here.")
-            } else if points.count == 1, let only = points.first {
-                TrendSinglePoint(
-                    value: "\(viewModel.preferences.formatted(only.value)) \(unit)",
-                    caption: "One weigh-in on \(viewModel.formattedDay(only.date)) — log another to see a trend."
-                )
+                TrendEmptyState(message: "No weigh-ins in this range.", action: logAction)
             } else {
-                chart
+                headline
+                if points.count > 1 { chart }
             }
         }
+        .onChange(of: viewModel.loadedRange) { _, _ in rawSelection = nil }
     }
 
-    private var subtitle: String? {
-        points.isEmpty ? nil : "\(points.count) weigh-\(points.count == 1 ? "in" : "ins")"
+    private func formatted(_ value: Double) -> String {
+        viewModel.preferences.formatted(value)
     }
 
-    private var changeStat: AnyView? {
-        guard let change = viewModel.change(for: .weight) else { return nil }
-        // Down is not universally "good" — someone can be gaining on
-        // purpose — so the tint marks direction, not approval: the app's
-        // ink for a loss, and the same neutral ink for a gain. Only the
-        // arrow carries the direction.
-        let sign = change > 0 ? "+" : (change < 0 ? "−" : "")
-        let magnitude = viewModel.preferences.formatted(abs(change))
-        return AnyView(
-            TrendStat(value: "\(sign)\(magnitude) \(unit)", label: "over range")
-        )
+    @ViewBuilder
+    private var headline: some View {
+        if let first = points.first, let last = points.last {
+            if let selected {
+                TrendHeadline(
+                    eyebrow: viewModel.formattedBucket(selected.date),
+                    value: formatted(selected.value),
+                    unit: unit,
+                    detail: selected.date == first.date
+                        ? Text("First weigh-in in this range")
+                        : changeDetail(selected.value - first.value, unit: unit, since: viewModel.formattedDay(first.date), format: formatted)
+                )
+            } else {
+                TrendHeadline(
+                    eyebrow: Calendar.current.isDateInToday(last.date) ? "Today" : "Latest · \(viewModel.formattedDay(last.date))",
+                    value: formatted(last.value),
+                    unit: unit,
+                    // A single reading can't be a trend line, so it is
+                    // reported as a value, not drawn as a one-point chart —
+                    // which renders as an empty plot and reads as a bug.
+                    detail: points.count == 1
+                        ? Text("One weigh-in so far. Log another to see your trend.")
+                        : changeDetail(last.value - first.value, unit: unit, since: viewModel.formattedDay(first.date), format: formatted)
+                )
+            }
+        }
     }
 
     private var chart: some View {
@@ -75,48 +93,122 @@ struct WeightTrendCard: View {
         let low = values.min() ?? 0
         let high = values.max() ?? 1
         let pad = max((high - low) * 0.15, 0.5)
+        let floor = low - pad
+        // Only mark the actual weigh-ins when there are few enough for the
+        // dots to mean something; past that they turn the line into a
+        // dotted mess.
+        let showsPoints = points.count <= 31
+        let trend = viewModel.weightTrend
+        let hasTrend = !trend.isEmpty
+        let selected = selected
 
-        return Chart(points) { point in
-            AreaMark(
-                x: .value("Day", point.date, unit: .day),
-                y: .value("Weight", point.value)
-            )
-            .foregroundStyle(
-                .linearGradient(
-                    colors: [AppColor.accent.opacity(0.22), AppColor.accent.opacity(0.01)],
-                    startPoint: .top,
-                    endPoint: .bottom
-                )
-            )
-            .interpolationMethod(.monotone)
-            .accessibilityHidden(true)
+        return VStack(alignment: .leading, spacing: 8) {
+            Chart {
+                // The fill sits under the trend when there is one, so the
+                // shape the eye reads is the direction, not the noise.
+                ForEach(hasTrend ? trend : points) { point in
+                    AreaMark(
+                        x: .value("Day", point.date, unit: .day),
+                        yStart: .value("Floor", floor),
+                        yEnd: .value("Weight", point.value)
+                    )
+                    .foregroundStyle(
+                        .linearGradient(
+                            colors: [AppColor.accent.opacity(0.22), AppColor.accent.opacity(0.01)],
+                            startPoint: .top,
+                            endPoint: .bottom
+                        )
+                    )
+                    .interpolationMethod(.monotone)
+                    .accessibilityHidden(true)
+                }
 
-            LineMark(
-                x: .value("Day", point.date, unit: .day),
-                y: .value("Weight", point.value)
-            )
-            .foregroundStyle(AppColor.accent)
-            .lineStyle(StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
-            .interpolationMethod(.monotone)
-            .accessibilityLabel(viewModel.formattedDay(point.date))
-            .accessibilityValue("\(viewModel.preferences.formatted(point.value)) \(unit)")
+                ForEach(points) { point in
+                    LineMark(
+                        x: .value("Day", point.date, unit: .day),
+                        y: .value("Weight", point.value),
+                        series: .value("Series", "Weigh-ins")
+                    )
+                    .foregroundStyle(hasTrend ? AppColor.accent.opacity(0.35) : AppColor.accent)
+                    .lineStyle(StrokeStyle(lineWidth: hasTrend ? 1.25 : 2.5, lineCap: .round, lineJoin: .round))
+                    .interpolationMethod(.monotone)
+                    .accessibilityLabel(viewModel.formattedDay(point.date))
+                    .accessibilityValue("\(formatted(point.value)) \(unit)")
 
-            // Only mark the actual weigh-ins when there are few enough for
-            // the dots to mean something; past that they turn the line into
-            // a dotted mess.
-            if points.count <= 31 {
-                PointMark(
-                    x: .value("Day", point.date, unit: .day),
-                    y: .value("Weight", point.value)
-                )
-                .foregroundStyle(AppColor.accent)
-                .symbolSize(28)
-                .accessibilityHidden(true)
+                    if showsPoints {
+                        PointMark(
+                            x: .value("Day", point.date, unit: .day),
+                            y: .value("Weight", point.value)
+                        )
+                        .foregroundStyle(AppColor.accent)
+                        .symbolSize(24)
+                        .accessibilityHidden(true)
+                    }
+                }
+
+                ForEach(trend) { point in
+                    LineMark(
+                        x: .value("Day", point.date, unit: .day),
+                        y: .value("Weight", point.value),
+                        series: .value("Series", "Trend")
+                    )
+                    .foregroundStyle(AppColor.accent)
+                    .lineStyle(StrokeStyle(lineWidth: 2.5, lineCap: .round, lineJoin: .round))
+                    .interpolationMethod(.monotone)
+                    .accessibilityHidden(true)
+                }
+
+                if let selected {
+                    RuleMark(x: .value("Selected", selected.date, unit: .day))
+                        .foregroundStyle(AppColor.ink.opacity(0.25))
+                        .lineStyle(StrokeStyle(lineWidth: 1))
+                        .accessibilityHidden(true)
+                    PointMark(
+                        x: .value("Day", selected.date, unit: .day),
+                        y: .value("Weight", selected.value)
+                    )
+                    .symbol {
+                        Circle()
+                            .fill(AppColor.accent)
+                            .stroke(AppColor.surface, lineWidth: 2.5)
+                            .frame(width: 13, height: 13)
+                    }
+                    .accessibilityHidden(true)
+                }
             }
+            .chartYScale(domain: floor...(high + pad))
+            .progressChartAxes(range: viewModel.loadedRange)
+            .chartScrubbing($rawSelection)
+            .sensoryFeedback(.selection, trigger: selected?.date)
+            .frame(height: 180)
+            .accessibilityLabel(hasTrend ? "Weight, with a smoothed trend line" : "Weight trend")
+
+            if hasTrend { legend }
         }
-        .chartYScale(domain: (low - pad)...(high + pad))
-        .progressChartAxes(range: viewModel.range)
-        .frame(height: 180)
-        .accessibilityLabel("Weight trend")
+    }
+
+    /// Only when the trend is drawn: two lines need telling apart.
+    private var legend: some View {
+        HStack(spacing: 14) {
+            legendItem("Trend", lineWidth: 2.5, opacity: 1)
+            legendItem("Weigh-ins", lineWidth: 1.25, opacity: 0.35)
+            Spacer(minLength: 0)
+        }
+        // A key to the chart, so it stops growing where the chart's own
+        // axis labels do — past that it outgrew the lines it labels.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+        .accessibilityHidden(true)
+    }
+
+    private func legendItem(_ label: String, lineWidth: CGFloat, opacity: Double) -> some View {
+        HStack(spacing: 6) {
+            Capsule()
+                .fill(AppColor.accent.opacity(opacity))
+                .frame(width: 16, height: lineWidth)
+            Text(label)
+                .appBody(11)
+                .foregroundStyle(AppColor.secondaryText)
+                .fixedSize()
+        }
     }
 }
