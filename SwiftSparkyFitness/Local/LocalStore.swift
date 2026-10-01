@@ -22,7 +22,9 @@ import SwiftData
 final class LocalStore {
     static let shared = LocalStore()
 
-    let container: ModelContainer
+    /// Replaced only by `eraseThisDeviceCopy()`, which reopens the store
+    /// afresh after destroying its files.
+    private(set) var container: ModelContainer
     var context: ModelContext { container.mainContext }
 
     /// Set when the store could not be opened at all. The app stays usable in
@@ -296,6 +298,33 @@ final class LocalStore {
     }
 
     // MARK: - Destroying
+
+    /// Removes the diary from this device only — Settings' "Delete all local
+    /// data".
+    ///
+    /// Not `deleteEverything()`. This store mirrors to the user's private
+    /// iCloud database, and a row deleted here is a row deleted there: the
+    /// wipe went row by row, so it erased the iCloud copy — and with it every
+    /// other device's — while the alert said "on this iPhone". Destroying the
+    /// store's files instead (`deleteAllData()`) leaves the mirror nothing to
+    /// send: iCloud keeps its copy, and choosing this diary again brings it
+    /// back down. A store nothing mirrors (CloudKit didn't open, or the
+    /// in-memory fallback) has no copy anywhere else, so deleting its rows
+    /// touches only this device and stays the simpler path.
+    func eraseThisDeviceCopy() throws {
+        guard isCloudKitEnabled else {
+            try deleteEverything()
+            return
+        }
+        if self === LocalStore.shared { AutoBackup.removeAll() }
+        let configurations = Array(container.configurations)
+        container.deleteAllData()
+        // A container whose files were just destroyed isn't one to keep
+        // writing through; the same configuration, reopened, is an empty
+        // store that re-imports whatever iCloud holds.
+        container = try ModelContainer(for: Self.schema, configurations: configurations)
+        prepareContext()
+    }
 
     /// Wipes every local row. Used by the "delete local data" control in
     /// Settings, which exists because local mode has no server copy to fall

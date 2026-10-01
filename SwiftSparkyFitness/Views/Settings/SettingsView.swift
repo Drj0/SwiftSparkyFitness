@@ -176,21 +176,21 @@ struct SettingsView: View {
         // as the only escape — discoverable with a finger, not with VoiceOver
         // or Switch Control. An alert always draws both.
         .alert("Delete all local data?", isPresented: $isConfirmingWipe) {
-            // Offered only when nothing else holds a copy: this is the one
-            // irreversible control, and a file is the last way to keep one.
-            if !sync.state.backsUpTheDiary {
+            // Offered only when nothing else holds a full copy: a file is then
+            // the last way to keep one.
+            if !iCloudHoldsTheDiary {
                 Button("Export first", action: exportDiary)
             }
             Button("Cancel", role: .cancel) {}
-            Button("Delete everything", role: .destructive, action: wipeLocalData)
+            Button("Delete from this iPhone", role: .destructive, action: wipeLocalData)
         } message: {
-            // Says settings too, because the wipe does reset them: naming only
-            // the entries and then silently returning units to kg is the kind
-            // of small dishonesty that makes the rest of the warning suspect.
-            if sync.state.backsUpTheDiary {
-                Text("Every food, exercise, water, weight and measurement entry on this iPhone is erased, and your meal categories and unit settings go back to their defaults. This can't be undone.")
+            // Only this iPhone's copy goes — iCloud's is never touched (see
+            // LocalStore.eraseThisDeviceCopy) — so the message says which
+            // case this is: whether there is a copy to come back to.
+            if iCloudHoldsTheDiary {
+                Text("Your diary is removed from this iPhone only. Your iCloud copy stays as it is: choose “Use on this device” again to bring it back. You'll return to the start screen.")
             } else {
-                Text("Every food, exercise, water, weight and measurement entry on this iPhone is erased, and your meal categories and unit settings go back to their defaults. Nothing is backed up to iCloud, so this can't be undone unless you export a copy first.")
+                Text("Your diary is removed from this iPhone. It isn't fully backed up to iCloud, so anything not yet there can't be recovered unless you export a copy first. You'll return to the start screen.")
             }
         }
         .fileExporter(
@@ -861,14 +861,30 @@ struct SettingsView: View {
         switchMode(to: .local)
     }
 
-    /// Erases the store and tells the day screens to re-read, so Today and
-    /// Diary don't keep rendering rows that no longer exist.
+    /// True only once iCloud has confirmed it has everything: an upload in
+    /// flight, or not yet started, can still be holding the newest entries.
+    private var iCloudHoldsTheDiary: Bool {
+        if case .synced = sync.state { return true }
+        return false
+    }
+
+    /// Erases this iPhone's copy and goes back to the start screen, where the
+    /// choice is made again — this device (which brings an iCloud copy back
+    /// down) or a server. Staying in an emptied local mode left the user in
+    /// Settings with no sign anything had happened.
     private func wipeLocalData() {
+        let keepsCloudCopy = iCloudHoldsTheDiary
         do {
-            try LocalStore.shared.deleteEverything()
+            try LocalStore.shared.eraseThisDeviceCopy()
             wipeError = nil
             Haptics.success()
             NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+            // The first-use date floors day navigation; an iCloud diary that
+            // comes back keeps its history reachable only if it stays.
+            if !keepsCloudCopy {
+                UserDefaults.standard.removeObject(forKey: LocalAPIClient.firstUseKey)
+            }
+            AppMode.current = nil
         } catch {
             // Reported rather than swallowed: a wipe that silently half-ran
             // would leave the user believing their data is gone when it isn't.
