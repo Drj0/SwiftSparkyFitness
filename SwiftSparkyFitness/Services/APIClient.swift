@@ -48,6 +48,9 @@ protocol APIClientProtocol {
     func deleteMealType(id: String) async throws
     func searchFoods(query: String) async throws -> [Food]
     func foodSuggestions() async throws -> FoodSuggestions
+    /// Foods logged since `start` (the diary on this device, in both modes),
+    /// keyed by `FoodLogStat.key`; `timesThisWeek` counts the last 7 days.
+    func foodLogStats(since start: Date) async -> [String: FoodLogStat]
     func searchExternalFoods(query: String) async throws -> [Food]
     /// Empty when this server has no USDA provider configured — that's a
     /// deployment choice, not an error.
@@ -117,6 +120,12 @@ struct CustomFoodInput {
     /// yields one server food.
     var providerExternalId: String? = nil
     var providerType: String? = nil
+}
+
+extension APIClientProtocol {
+    /// Nothing known: the plain server client has no such endpoint, and in
+    /// server mode ServerModeClient answers from the on-device diary.
+    func foodLogStats(since start: Date) async -> [String: FoodLogStat] { [:] }
 }
 
 struct FoodEntryInput {

@@ -403,6 +403,27 @@ final class LocalModeTests: XCTestCase {
         XCTAssertEqual(local.store.all(LocalFood.self).count, 1)
     }
 
+    /// The Log Food sheet's "5× this week" and one-tap re-log amount, read
+    /// from the diary on this device (server mode reads the same store).
+    func testFoodLogStatsCountTheWeekAndRememberTheLastAmount() async throws {
+        let local = makeLocal()
+        let roti = try await seedFood(local, id: "roti")
+        let calendar = Calendar.current
+        let today = Date()
+        let daysAgo = { (n: Int) in calendar.date(byAdding: .day, value: -n, to: today)! }
+        try await local.createFoodEntry(FoodEntryInput(food: roti, mealTypeId: "lunch", quantity: 3, entryDate: daysAgo(20)))
+        try await local.createFoodEntry(FoodEntryInput(food: roti, mealTypeId: "lunch", quantity: 2, entryDate: daysAgo(3)))
+        try await local.createFoodEntry(FoodEntryInput(food: roti, mealTypeId: "dinner", quantity: 4, entryDate: daysAgo(1)))
+
+        let stats = await local.foodLogStats(since: daysAgo(30))
+        let stat = stats[FoodLogStat.key(for: roti)]
+        XCTAssertEqual(stat?.timesThisWeek, 2, "the entry 20 days ago is outside the week")
+        XCTAssertEqual(stat?.lastQuantity, 4, "the latest entry's amount")
+
+        let recent = await local.foodLogStats(since: daysAgo(2))
+        XCTAssertEqual(recent[FoodLogStat.key(for: roti)]?.timesThisWeek, 1, "only reads from `since`")
+    }
+
     /// **Regression.** `syncActiveEnergy` has to create an activity row to
     /// hang the day's Health figure off, and that row used to show up in
     /// activity search — so "Active Calories" could be logged as a workout,

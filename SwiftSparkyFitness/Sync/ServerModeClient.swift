@@ -229,6 +229,11 @@ final class ServerModeClient: APIClientProtocol {
     func foodSuggestions() async throws -> FoodSuggestions {
         try await remoteFirst({ try await remote.foodSuggestions() }, fallback: { try await local.foodSuggestions() })
     }
+    /// The on-device diary, which in this mode holds everything logged here
+    /// and what the last pull brought in: no request, same as iCloud mode.
+    func foodLogStats(since start: Date) async -> [String: FoodLogStat] {
+        await local.foodLogStats(since: start)
+    }
     /// Straight to Open Food Facts: the server isn't in this path, so a
     /// remote-then-local fallback would only send the same request twice.
     func searchExternalFoods(query: String) async throws -> [Food] {

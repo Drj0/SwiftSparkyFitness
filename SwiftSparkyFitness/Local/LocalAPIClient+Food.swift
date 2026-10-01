@@ -68,6 +68,24 @@ extension LocalAPIClient {
         return FoodSuggestions(recentFoods: Array(recents), topFoods: Array(top))
     }
 
+    func foodLogStats(since start: Date) async -> [String: FoodLogStat] {
+        let startKey = LocalDay.key(start)
+        let weekKey = LocalDay.key(Calendar.current.date(byAdding: .day, value: -6, to: Date()) ?? Date())
+        var stats: [String: FoodLogStat] = [:]
+        var lastLogged: [String: Date] = [:]
+        for entry in store.fetch(LocalFoodEntry.self, where: #Predicate { $0.dayKey >= startKey }, sortBy: [SortDescriptor(\.dayKey)]) {
+            let key = FoodLogStat.key(name: entry.foodName, brand: entry.brandName)
+            var stat = stats[key] ?? FoodLogStat(timesThisWeek: 0, lastQuantity: entry.quantity)
+            if entry.dayKey >= weekKey { stat.timesThisWeek += 1 }
+            if entry.entryDate >= lastLogged[key, default: .distantPast] {
+                stat.lastQuantity = entry.quantity
+                lastLogged[key] = entry.entryDate
+            }
+            stats[key] = stat
+        }
+        return stats
+    }
+
     /// Called straight from the device — same as server mode; see
     /// OpenFoodFactsSearch.
     func searchExternalFoods(query: String) async throws -> [Food] {

@@ -51,7 +51,7 @@ struct FoodSearchView: View {
          onLogged: (() -> Void)? = nil) {
         self.entryDate = entryDate
         self.onLogged = onLogged
-        _viewModel = StateObject(wrappedValue: FoodSearchViewModel(mealTypes: mealTypes, initialMealType: initialMealType))
+        _viewModel = StateObject(wrappedValue: FoodSearchViewModel(mealTypes: mealTypes, initialMealType: initialMealType, entryDate: entryDate))
     }
 
     // Picking a food slides its detail in *inside* this sheet (the detail
@@ -68,7 +68,9 @@ struct FoodSearchView: View {
                 .toolbar(.hidden, for: .navigationBar)
                 .navigationDestination(item: $pushedFood) { food in
                     if let mealType = viewModel.selectedMealType {
+                        // A food logged before opens at the amount last used.
                         FoodDetailView(food: food, mealTypes: viewModel.mealTypes, initialMealType: mealType,
+                                       initialQuantity: viewModel.logStat(for: food)?.lastQuantity,
                                        entryDate: entryDate, dismissesOnSave: false) {
                             if let onLogged { onLogged() } else { dismiss() }
                         }
@@ -108,6 +110,14 @@ struct FoodSearchView: View {
         .background(AppColor.surface)
         .scrollDismissesKeyboard(.interactively)
         .task { await viewModel.loadRecents() }
+        .alert("Not logged", isPresented: Binding(
+            get: { viewModel.quickLogError != nil },
+            set: { if !$0 { viewModel.quickLogError = nil } }
+        )) {
+            Button("OK", role: .cancel) {}
+        } message: {
+            Text(viewModel.quickLogError ?? "")
+        }
         .sheet(isPresented: $isPresentingCustomFood) {
             CustomFoodView { dismiss() }
                 .presentationDetents([.medium, .large])
@@ -183,7 +193,7 @@ struct FoodSearchView: View {
                 idlePrompt
                     .transition(entrance)
             case .results(let foods):
-                resultsListContent(foods)
+                resultsListContent(foods, heading: viewModel.resultsAreClosestMatches ? "CLOSEST MATCHES" : "RESULTS")
                     // A refinement is in flight: the previous list is still
                     // the best answer available, so it recedes rather than
                     // being replaced by a spinner on every keystroke.
@@ -222,7 +232,7 @@ struct FoodSearchView: View {
     @ViewBuilder
     private var idlePrompt: some View {
         if !viewModel.recentFoods.isEmpty {
-            resultsListContent(viewModel.recentFoods, heading: "RECENT")
+            resultsListContent(viewModel.recentFoods, heading: "RECENT", quickLog: true)
         } else if viewModel.isLoadingRecents {
             // Nothing has been typed and nothing is known yet; a spinner here
             // would be the only thing on screen, so stay quiet and let the
@@ -290,7 +300,12 @@ struct FoodSearchView: View {
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
     }
 
-    private func resultsListContent(_ foods: [Food], heading: String = "RESULTS") -> some View {
+    /// `quickLog`: Recents only. There the "+" logs the food straight away at
+    /// the amount its subtitle shows (the last one used) — re-logging is what
+    /// the list is for — while tapping the row still opens the detail to
+    /// change it. In search results the "+" stays a cue for the row's tap:
+    /// a new food deserves a look at its amount first.
+    private func resultsListContent(_ foods: [Food], heading: String = "RESULTS", quickLog: Bool = false) -> some View {
         VStack(spacing: 0) {
             Text(heading)
                 .appBody(11, weight: .semibold)
@@ -301,40 +316,103 @@ struct FoodSearchView: View {
                 .accessibilityAddTraits(.isHeader)
 
             ForEach(foods) { food in
-                Button {
-                    pushedFood = food
-                } label: {
-                    HStack {
-                        VStack(alignment: .leading, spacing: 2) {
-                            Text(food.name).appBody(15, weight: .semibold).foregroundStyle(AppColor.ink)
-                            Text(subtitle(for: food)).appBody(12).foregroundStyle(AppColor.secondaryText)
+                HStack(spacing: 0) {
+                    Button {
+                        pushedFood = food
+                    } label: {
+                        HStack {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(food.name).appBody(15, weight: .semibold).foregroundStyle(AppColor.ink)
+                                HStack(spacing: 6) {
+                                    Text(subtitle(for: food, quantity: quickLog ? viewModel.quickLogQuantity(for: food) : nil))
+                                        .appBody(12).foregroundStyle(AppColor.secondaryText)
+                                        .lineLimit(1)
+                                    frequencyCue(for: food)
+                                }
+                            }
+                            Spacer(minLength: 8)
+                            if !quickLog { plusMark(done: false) }
                         }
-                        Spacer()
-                        Image(systemName: "plus")
-                            .font(.system(size: 14, weight: .semibold))
-                            .foregroundStyle(AppColor.accent)
-                            .frame(width: 26, height: 26)
-                            .background(AppColor.accentSoft, in: Circle())
+                        .padding(.vertical, 11)
+                        .contentShape(Rectangle())
                     }
-                    .padding(.vertical, 11)
-                    .contentShape(Rectangle())
+                    .buttonStyle(.pressable)
+
+                    if quickLog { quickLogButton(for: food) }
                 }
-                .buttonStyle(.pressable)
                 .overlay(Rectangle().fill(AppColor.inputBackground).frame(height: 1), alignment: .bottom)
             }
         }
         .padding(.horizontal, 20)
     }
 
-    private func subtitle(for food: Food) -> String {
+    private func plusMark(done: Bool) -> some View {
+        Image(systemName: done ? "checkmark" : "plus")
+            .font(.system(size: 14, weight: .semibold))
+            .foregroundStyle(done ? .white : AppColor.accent)
+            .frame(width: 26, height: 26)
+            .background(done ? AppColor.accent : AppColor.accentSoft, in: Circle())
+            .contentTransition(.symbolEffect(.replace))
+    }
+
+    private func quickLogButton(for food: Food) -> some View {
+        let done = viewModel.justLogged.contains(food.id)
+        let amount = FoodVariant.amountText(viewModel.quickLogQuantity(for: food), unit: food.defaultVariant?.servingUnit ?? "g")
+        let meal = viewModel.selectedMealType?.name.capitalized ?? "your meal"
+        return Button {
+            Task { await viewModel.quickLog(food) }
+        } label: {
+            plusMark(done: done)
+                // The painted circle stays 26pt; the target is 44.
+                .frame(width: 44, height: 44)
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable)
+        // No meal to log into (none loaded): a "+" that did nothing would
+        // read as broken, so it dims rather than pretending.
+        .disabled(viewModel.selectedMealType == nil)
+        .opacity(viewModel.selectedMealType == nil ? 0.4 : 1)
+        .padding(.trailing, -9)
+        .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: done)
+        .accessibilityLabel(done ? "Logged \(food.name)" : "Log \(amount) of \(food.name) to \(meal)")
+    }
+
+    /// "↻ 5× this week", only from the second time: once is just Recents.
+    /// Accent-coloured on the subtitle line, so it costs no height.
+    @ViewBuilder
+    private func frequencyCue(for food: Food) -> some View {
+        if let times = viewModel.logStat(for: food)?.timesThisWeek, times >= 2 {
+            HStack(spacing: 2) {
+                Image(systemName: "arrow.counterclockwise")
+                    .font(.system(size: 9, weight: .bold))
+                Text("\(times)× this week")
+                    .appBody(12, weight: .semibold)
+            }
+            .foregroundStyle(AppColor.accent)
+            .fixedSize()
+            .layoutPriority(1)
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel("Logged \(times) times this week")
+        }
+    }
+
+    /// `quantity`: show that amount and its calories (a recent food at the
+    /// amount last logged) rather than one default serving.
+    private func subtitle(for food: Food, quantity: Double? = nil) -> String {
         let variant = food.defaultVariant
         var parts: [String] = []
         if let brand = food.brand { parts.append(brand) }
-        if let size = variant?.servingSize, let unit = variant?.servingUnit {
-            parts.append(FoodVariant.amountText(size, unit: unit))
+        let serving = variant?.servingSize ?? 0
+        let amount = quantity ?? serving
+        if let unit = variant?.servingUnit, variant?.servingSize != nil {
+            parts.append(FoodVariant.amountText(amount, unit: unit))
         }
         if let calories = variant?.calories {
-            parts.append("\(Int(calories)) kcal")
+            if quantity != nil, serving > 0 {
+                parts.append("\(Int((calories * amount / serving).rounded())) kcal")
+            } else {
+                parts.append("\(Int(calories)) kcal")
+            }
         }
         // Where the data came from, appended to the line that's already a
         // "·"-joined list rather than given its own badge — results from three

@@ -60,9 +60,26 @@ actor IndianFoodDB {
         let queryWords = FoodSearchText.words(query)
         guard !queryWords.isEmpty else { return [] }
         let squashedQuery = queryWords.map(FoodSearchText.squash)
-        return loaded().filter { entry in
+        func holds(_ entry: Indexed, _ index: Int) -> Bool {
+            entry.words.contains { $0.hasPrefix(queryWords[index]) }
+                || entry.squashed.contains { $0.hasPrefix(squashedQuery[index]) }
+        }
+        let all = loaded()
+        let full = all.filter { entry in
             queryWords.allSatisfy { q in entry.words.contains { $0.hasPrefix(q) } }
                 || squashedQuery.allSatisfy { q in entry.squashed.contains { $0.hasPrefix(q) } }
+        }
+        guard full.isEmpty, queryWords.count > 1 else { return full.map(\.row) }
+        // Nothing holds every word ("paneer butter masala"): the dishes that
+        // hold all but one, for the ranker to offer as closest matches.
+        let needed = queryWords.count - 1
+        return all.filter { entry in
+            var held = 0
+            for index in queryWords.indices where holds(entry, index) {
+                held += 1
+                if held >= needed { return true }
+            }
+            return false
         }.map(\.row)
     }
 
