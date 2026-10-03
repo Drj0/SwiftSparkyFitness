@@ -265,15 +265,25 @@ final class LocalStore {
         guard !isApplyingRemote else { return }
         let now = Date()
         var inserted: Set<String> = []
+        // Tombstones read once per save, not once per inserted row: a restore
+        // inserts thousands of rows in one save, and a fetch each held the
+        // main thread for 16 s on a two-year diary. There are few tombstones;
+        // read only when a tracked row is inserted.
+        var tombstones: [String: [LocalTombstone]]?
         for model in context.insertedModelsArray {
             guard let row = model as? any SyncTracked else { continue }
             if !isPreservingStamps { row.updatedAt = now }
-            let kind = type(of: row).syncKind
-            let key = row.syncKey
-            inserted.insert("\(kind)|\(key)")
-            for stale in fetch(LocalTombstone.self, where: #Predicate { $0.kind == kind && $0.localKey == key }) {
+            let key = "\(type(of: row).syncKind)|\(row.syncKey)"
+            inserted.insert(key)
+            if tombstones == nil {
+                tombstones = Dictionary(grouping: all(LocalTombstone.self)) { "\($0.kind)|\($0.localKey)" }
+            }
+            for stale in tombstones?[key] ?? [] {
                 context.delete(stale)
             }
+            // Deleted once, as a fetch per row would: it no longer finds one
+            // already deleted in this save.
+            tombstones?[key] = nil
         }
         for model in context.changedModelsArray where !isPreservingStamps {
             (model as? any SyncTracked)?.updatedAt = now

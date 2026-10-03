@@ -202,6 +202,35 @@ final class DiaryArchiveTests: XCTestCase {
         XCTAssertEqual(local.store.tombstones(kind: LocalFoodEntry.syncKind).map(\.localKey), [entryId])
     }
 
+    /// A restore ends in one save, and that save once read the tombstones
+    /// once per restored row: a two-year diary (~4,900 rows) held the main
+    /// thread for 16 s in a release build, in Settings' restore and in
+    /// moving a server diary to this iPhone. Now one read per save. On disk,
+    /// like the real store: in memory each read is too cheap to show it.
+    func testRestoringALargeDiaryIsQuick() async throws {
+        let source = makeLocal()
+        try await seedDiary(source)
+        var archive = DiaryArchive(from: source.store)
+        let entry = try XCTUnwrap(archive.foodEntries.first)
+        archive.foodEntries = (0..<3000).map { index in
+            var copy = entry
+            copy.id = "bulk-\(index)"
+            return copy
+        }
+
+        let directory = URL.temporaryDirectory.appending(path: "restore-\(UUID().uuidString)", directoryHint: .isDirectory)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let destination = LocalAPIClient(store: try LocalStore(url: directory.appending(path: "diary.store")))
+        let start = Date()
+        let result = try archive.restore(into: destination.store)
+        let elapsed = Date().timeIntervalSince(start)
+
+        XCTAssertGreaterThanOrEqual(result.added, 3000)
+        XCTAssertEqual(destination.store.all(LocalFoodEntry.self).count, 3000)
+        XCTAssertLessThan(elapsed, 1.5, "restoring 3,000 entries took \(Int(elapsed * 1000)) ms")
+    }
+
     // MARK: - Bad files
 
     func testAFileThatIsntADiaryIsRefused() {
