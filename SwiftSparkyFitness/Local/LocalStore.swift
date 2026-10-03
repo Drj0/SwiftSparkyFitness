@@ -44,12 +44,12 @@ final class LocalStore {
     /// The one place this identifier is written down. It must match the
     /// entitlements file exactly; a mismatch fails at code-signing rather
     /// than at runtime, which is the good outcome.
-    static let cloudKitContainerIdentifier = "iCloud.drj.SwiftSparkyFitness"
+    nonisolated static let cloudKitContainerIdentifier = "iCloud.drj.SwiftSparkyFitness"
 
     /// Every model in the store. Additions here are automatic lightweight
     /// migrations as long as they follow LocalModels' CloudKit rules — and
     /// must be deployed to the Production CloudKit schema before release.
-    static let schema = Schema([
+    nonisolated static let schema = Schema([
         LocalFood.self,
         LocalFoodEntry.self,
         LocalExercise.self,
@@ -71,6 +71,42 @@ final class LocalStore {
     private(set) var lastSaveError: Error?
 
     private init() {
+        Self.didCreateShared = true
+        let opened = Self.preopened ?? Self.open()
+        Self.preopened = nil
+        container = opened.container
+        loadFailure = opened.loadFailure
+        cloudKitSetupFailure = opened.cloudKitSetupFailure
+        prepareContext()
+    }
+
+    /// What opening the store produced. `Sendable` so it can be built off the
+    /// main thread and handed back.
+    private struct Opened: Sendable {
+        var container: ModelContainer
+        var loadFailure: Error?
+        var cloudKitSetupFailure: Error?
+    }
+
+    private static var preopened: Opened?
+    private static var didCreateShared = false
+
+    /// Opens the store on a background thread, ahead of first use. Opening a
+    /// SQLite store (and setting up CloudKit mirroring) on the main thread
+    /// can hang launch, and Xcode flags it. Call once at launch and wait for
+    /// it before touching `shared`; touching `shared` first still works, it
+    /// just opens the store on the calling thread as before.
+    static func prepare() async {
+        guard preopened == nil, !didCreateShared else { return }
+        let opened = await Task.detached(priority: .userInitiated) { open() }.value
+        // `shared` may have been created while this ran; it keeps its own.
+        if !didCreateShared { preopened = opened }
+    }
+
+    nonisolated private static func open() -> Opened {
+        var loadFailure: Error?
+        var cloudKitSetupFailure: Error?
+        let container: ModelContainer
         let schema = Self.schema
 
         // Module 11: the store now mirrors to CloudKit. The container is
@@ -121,7 +157,7 @@ final class LocalStore {
                 )
             }
         }
-        prepareContext()
+        return Opened(container: container, loadFailure: loadFailure, cloudKitSetupFailure: cloudKitSetupFailure)
     }
 
     /// Test seam: an isolated in-memory store, so local-repository tests never

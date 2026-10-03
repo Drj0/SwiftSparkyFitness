@@ -8,11 +8,13 @@ cd "$(dirname "$0")"
 # test target's MARKETING_VERSION first.
 VERSION=$(xcodebuild -project SwiftSparkyFitness.xcodeproj -target SwiftSparkyFitness -showBuildSettings 2>/dev/null | awk '$1 == "MARKETING_VERSION" { print $3; exit }')
 [ -n "$VERSION" ] || { echo "Couldn't read MARKETING_VERSION" >&2; exit 1; }
+notes=(); [ -n "$1" ] && notes=(--test-notes "$1" --locale en-US)
+submit=(); [ -n "$ASC_SUBMIT" ] && submit=(--submit --confirm)
 asc publish testflight \
   --app 6817818115 \
   --project SwiftSparkyFitness.xcodeproj \
   --scheme SwiftSparkyFitness \
   --version "$VERSION" \
   --group "PersonalTester" \
-  ${1:+--test-notes "$1" --locale en-US} \
-  --wait --notify ${ASC_SUBMIT:+--submit --confirm}
+  "${notes[@]}" \
+  --wait --notify "${submit[@]}"

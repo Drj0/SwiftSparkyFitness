@@ -16,9 +16,6 @@ struct SwiftSparkyFitnessApp: App {
     /// rather than in the one screen that currently has a stack.
     init() {
         AppNavigationBar.apply()
-        #if DEBUG
-        LocalStore.shared.runCloudKitSchemaSeedIfRequested()
-        #endif
     }
 
     var body: some Scene {

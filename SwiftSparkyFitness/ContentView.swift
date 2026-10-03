@@ -19,10 +19,15 @@ struct ContentView: View {
     /// Read as the raw string rather than `AppMode.current` so the view
     /// re-renders when the choice is made.
     @AppStorage(AppMode.defaultsKey) private var modeRaw = ""
+    /// The on-device store is opened off the main thread before anything
+    /// reads it; until then the screen is just the background.
+    @State private var storeReady = false
 
     var body: some View {
         Group {
-            if modeRaw.isEmpty {
+            if !storeReady {
+                AppColor.background.ignoresSafeArea()
+            } else if modeRaw.isEmpty {
                 ModeChoiceView()
                     .transition(.opacity)
             } else {
@@ -43,7 +48,16 @@ struct ContentView: View {
         // Gated on a mode being chosen: before that there is nothing to
         // restore, and in server mode this would fire a request at whatever
         // placeholder address is configured.
-        .task { if !modeRaw.isEmpty { await authViewModel.restoreSession() } }
+        .task {
+            await LocalStore.prepare()
+            #if DEBUG
+            // Here rather than in App.init: touching the store there would
+            // open it on the main thread before `prepare` could.
+            LocalStore.shared.runCloudKitSchemaSeedIfRequested()
+            #endif
+            storeReady = true
+            if !modeRaw.isEmpty { await authViewModel.restoreSession() }
+        }
         // Switching mode in Settings swaps which client every view model
         // resolves, so the session has to be re-established against the new
         // one: local mode hands back its synthetic user, server mode falls to
