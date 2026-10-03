@@ -108,10 +108,11 @@ struct OpenFoodFactsProduct: Decodable {
     }
 
     /// nil when the product has no usable name or calorie data — OpenFoodFacts
-    /// is user-submitted and routinely has entries too sparse to log against.
+    /// is user-submitted and routinely has entries too sparse to log against —
+    /// or numbers that can't be true (`isPlausible`).
     var asFood: Food? {
         let name = [productNameEn, productName].compactMap { $0 }.first { !$0.isEmpty }
-        guard let name, let calories = nutriments?.energyKcal100g else { return nil }
+        guard let name, let calories = nutriments?.energyKcal100g, isPlausible(calories) else { return nil }
         let variant = FoodVariant(
             id: "off-variant-\(code ?? UUID().uuidString)",
             servingSize: 100, servingUnit: "g",
@@ -119,5 +120,17 @@ struct OpenFoodFactsProduct: Decodable {
             carbs: nutriments?.carbohydrates100g, fat: nutriments?.fat100g
         )
         return Food(id: "off-\(code ?? UUID().uuidString)", name: name, brand: brands, defaultVariant: variant, source: .openFoodFacts)
+    }
+
+    /// Per 100 g nothing passes 900 kcal (pure fat), and with all three
+    /// macros known they must roughly make the energy (4 kcal/g protein and
+    /// carbs, 9 fat). Loose — fibre, polyols and rounding all move it — but
+    /// it catches the typed-in-the-wrong-box entries: "Chole with rice" at
+    /// 300 kcal with 74 g protein.
+    private func isPlausible(_ calories: Double) -> Bool {
+        guard calories > 0, calories <= 900 else { return false }
+        guard calories >= 50, let n = nutriments, let protein = n.proteins100g,
+              let carbs = n.carbohydrates100g, let fat = n.fat100g else { return true }
+        return abs(4 * protein + 4 * carbs + 9 * fat - calories) <= 0.4 * calories
     }
 }

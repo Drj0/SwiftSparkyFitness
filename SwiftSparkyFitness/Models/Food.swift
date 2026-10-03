@@ -29,8 +29,10 @@ enum FoodSource: String, Hashable {
     /// Already in this server's own `foods` table.
     case local
     case openFoodFacts
+    /// USDA FoodData Central: the server's search, and the everyday foods
+    /// bundled with the app (BundledFoodDB.everyday).
     case usda
-    /// Indian Nutrient Databank, bundled with the app — see IndianFoodDB.
+    /// Indian Nutrient Databank, bundled with the app — see BundledFoodDB.
     case indb
 
     /// Shown in the result row. Local foods aren't labelled — the absence of

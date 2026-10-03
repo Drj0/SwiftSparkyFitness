@@ -6,12 +6,13 @@
 //  and "network error" states the design specifies as distinct outcomes
 //  (not just "results.isEmpty" collapsing both into one look).
 //
-//  Four sources, queried together: the user's own foods, INDB (bundled
-//  Indian dishes, answers in milliseconds), USDA (generic foods, server
-//  mode) and Open Food Facts (packaged products sold in India). The list is
-//  re-ranked by FoodSearchRanker as each source answers, so INDB and local
-//  matches show at once and slower network results slot in — the list stays
-//  dimmed until the last source is in.
+//  Five sources, queried together: the user's own foods, the two bundled
+//  datasets (INDB's Indian dishes and USDA's everyday basics — bread, fruit,
+//  milk, eggs — answering in milliseconds), USDA's API (server mode, when
+//  configured) and Open Food Facts (packaged products sold in India). The
+//  list is re-ranked by FoodSearchRanker as each source answers, so bundled
+//  and local matches show at once and slower network results slot in — the
+//  list stays dimmed until the last source is in.
 //
 //  The idle state (before anything is typed) shows the design's "RECENT"
 //  section. That needs its own request: `GET /api/foods` has two mutually
@@ -50,6 +51,10 @@ final class FoodSearchViewModel: ObservableObject {
     /// No result holds every word of the query; the list is the closest
     /// ones, and says so.
     @Published private(set) var resultsAreClosestMatches = false
+    /// A source failed while others answered: the list is short of what it
+    /// should be (Open Food Facts allows ~10 searches a minute), and says so
+    /// with a Retry rather than passing for everything there is.
+    @Published private(set) var someSourcesFailed = false
     @Published var selectedMealType: MealType?
 
     /// Recently logged foods, shown in the idle state. A failure here is
@@ -70,7 +75,8 @@ final class FoodSearchViewModel: ObservableObject {
 
     let mealTypes: [MealType]
     private let apiClient: APIClientProtocol
-    private let indianFoods: IndianFoodDB
+    private let indianFoods: BundledFoodDB
+    private let everydayFoods: BundledFoodDB
     private let entryDate: Date
 
     /// Network answers for this sheet, by source and query: backspacing to
@@ -98,13 +104,15 @@ final class FoodSearchViewModel: ObservableObject {
     init(
         mealTypes: [MealType], initialMealType: MealType? = nil,
         entryDate: Date = Date(),
-        apiClient: APIClientProtocol = AppServices.client, indianFoods: IndianFoodDB = .shared
+        apiClient: APIClientProtocol = AppServices.client,
+        indianFoods: BundledFoodDB = .indian, everydayFoods: BundledFoodDB = .everyday
     ) {
         self.entryDate = entryDate
         self.mealTypes = mealTypes.sorted { $0.sortOrder < $1.sortOrder }
         self.selectedMealType = initialMealType ?? Self.defaultMealType(from: mealTypes)
         self.apiClient = apiClient
         self.indianFoods = indianFoods
+        self.everydayFoods = everydayFoods
     }
 
     /// Picks a sensible starting meal chip from the time of day, matching
@@ -122,9 +130,10 @@ final class FoodSearchViewModel: ObservableObject {
     }
 
     func loadRecents() async {
-        // The sheet just opened: decode INDB now, off the main actor, so the
-        // first keystroke doesn't pay for it.
+        // The sheet just opened: decode the bundled datasets now, off the
+        // main actor, so the first keystroke doesn't pay for it.
         Task { await indianFoods.prepare() }
+        Task { await everydayFoods.prepare() }
         guard recentFoods.isEmpty else { return }
         isLoadingRecents = true
         defer { isLoadingRecents = false }
@@ -188,37 +197,43 @@ final class FoodSearchViewModel: ObservableObject {
         // stays the identity of this search for the stale-query checks.
         let text = FoodSearchText.searchText(trimmed)
 
-        var lists: [FoodSource: [Food]] = [:]
+        // By lane, not source: bundled and server USDA are both `.usda`.
+        var lists: [Lane: [Food]] = [:]
         var anyFailed = false
         // Whether *this* search put anything on screen. Sources can answer
         // with items the ranker drops (no word of the query in them), so
         // "some source returned something" isn't the same thing — and the
         // previous query's list must not be left standing.
         var showedResults = false
-        await withTaskGroup(of: (FoodSource, [Food], Bool).self) { group in
+        await withTaskGroup(of: (Lane, [Food], Bool).self) { group in
             group.addTask { @MainActor in
                 let result = await self.fetch(text, self.apiClient.searchFoods)
                 return (.local, result.foods, result.failed)
             }
             group.addTask { @MainActor in
-                (.indb, await self.indianFoods.search(text).map(\.asFood), false)
+                (.indb, await self.indianFoods.foods(matching: text), false)
             }
-            // USDA is what makes generic foods findable ("Apple, raw"). It
-            // returns nothing when the server has no USDA provider configured,
-            // which is a deployment choice rather than a failure.
+            group.addTask { @MainActor in
+                (.everyday, await self.everydayFoods.foods(matching: text), false)
+            }
+            // The server's USDA search: more of FoodData Central than is
+            // bundled. It returns nothing when the server has no USDA
+            // provider configured, which is a deployment choice rather than
+            // a failure.
             group.addTask { @MainActor in
                 await self.cachedFetch(.usda, text, self.apiClient.searchUsdaFoods)
             }
-            // Too short to be worth one of OFF's few searches a minute;
-            // INDB and the user's own foods cover one- and two-letter queries.
+            // Too short to be worth one of OFF's few searches a minute; the
+            // bundled datasets and the user's own foods cover one- and
+            // two-letter queries.
             if text.count >= OpenFoodFactsSearch.minimumQueryLength {
                 group.addTask { @MainActor in
                     await self.cachedFetch(.openFoodFacts, text, self.apiClient.searchExternalFoods)
                 }
             }
 
-            for await (source, foods, failed) in group {
-                lists[source] = foods
+            for await (lane, foods, failed) in group {
+                lists[lane] = foods
                 anyFailed = anyFailed || failed
                 // A newer keystroke may have started (and awaited) another
                 // search while this one was in flight; don't let a slower,
@@ -243,6 +258,7 @@ final class FoodSearchViewModel: ObservableObject {
         }
 
         guard !Task.isCancelled, trimmed == query.trimmingCharacters(in: .whitespacesAndNewlines) else { return }
+        someSourcesFailed = showedResults && anyFailed
         if showedResults { return }
         if anyFailed {
             // Nothing found *and* a source didn't answer: "no results" would
@@ -255,14 +271,19 @@ final class FoodSearchViewModel: ObservableObject {
         }
     }
 
+    /// Where one search's results come from.
+    private enum Lane: String {
+        case local, indb, everyday, usda, openFoodFacts
+    }
+
     /// `fetch`, answered from this sheet's cache when the same source was
     /// already asked the same query.
-    private func cachedFetch(_ source: FoodSource, _ query: String, _ call: (String) async throws -> [Food]) async -> (FoodSource, [Food], Bool) {
-        let key = "\(source.rawValue)|\(query.lowercased())"
-        if let cached = networkCache[key] { return (source, cached, false) }
+    private func cachedFetch(_ lane: Lane, _ query: String, _ call: (String) async throws -> [Food]) async -> (Lane, [Food], Bool) {
+        let key = "\(lane.rawValue)|\(query.lowercased())"
+        if let cached = networkCache[key] { return (lane, cached, false) }
         let result = await fetch(query, call)
         if !result.failed, !Task.isCancelled { networkCache[key] = result.foods }
-        return (source, result.foods, result.failed)
+        return (lane, result.foods, result.failed)
     }
 
     /// Runs one source and reports whether it genuinely failed. Cancellation

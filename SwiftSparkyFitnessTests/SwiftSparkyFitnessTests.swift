@@ -1540,7 +1540,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
     @MainActor
     func testBlankQueryStaysIdleAndAsksTheNetworkNothing() async {
         let stub = StubAPIClient()
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none, everydayFoods: .none)
 
         viewModel.query = "   "
         await viewModel.search()
@@ -1557,7 +1557,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         let stub = StubAPIClient()
         stub.localFoodsToReturn = [makeFood("local-1", "My Porridge")]
         stub.externalFoodsToReturn = [makeFood("off-1", "Porridge Oats")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none, everydayFoods: .none)
 
         viewModel.query = "porridge"
         await viewModel.search()
@@ -1580,7 +1580,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         stub.localSearchError = down
         stub.externalSearchError = down
         stub.usdaSearchError = down
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none, everydayFoods: .none)
         viewModel.query = "porridge"
         await viewModel.search()
         XCTAssertEqual(viewModel.outcome.kindID, "networkError")
@@ -1590,13 +1590,13 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         // be a false answer. Retry is what the user can actually act on.
         let partial = StubAPIClient()
         partial.externalSearchError = APIError.server(message: "down", code: nil)
-        let partialViewModel = FoodSearchViewModel(mealTypes: [], apiClient: partial, indianFoods: .none)
+        let partialViewModel = FoodSearchViewModel(mealTypes: [], apiClient: partial, indianFoods: .none, everydayFoods: .none)
         partialViewModel.query = "porridge"
         await partialViewModel.search()
         XCTAssertEqual(partialViewModel.outcome.kindID, "networkError")
 
         // Every source answering with nothing is a genuine "no results".
-        let empty = FoodSearchViewModel(mealTypes: [], apiClient: StubAPIClient(), indianFoods: .none)
+        let empty = FoodSearchViewModel(mealTypes: [], apiClient: StubAPIClient(), indianFoods: .none, everydayFoods: .none)
         empty.query = "porridge"
         await empty.search()
         XCTAssertEqual(empty.outcome.kindID, "noResults")
@@ -1608,7 +1608,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         let stub = StubAPIClient()
         stub.externalSearchError = APIError.server(message: "off is down", code: nil)
         stub.localFoodsToReturn = [makeFood("local-1", "My Porridge")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none, everydayFoods: .none)
 
         viewModel.query = "porridge"
         await viewModel.search()
@@ -1648,7 +1648,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
             recentFoods: [makeFood("r1", "Greek Yoghurt")],
             topFoods: [makeFood("t1", "Porridge Oats")]
         )
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none, everydayFoods: .none)
 
         await viewModel.loadRecents()
         XCTAssertEqual(viewModel.recentFoods.map(\.id), ["r1"])
@@ -1666,7 +1666,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
     func testFailingToLoadRecentsIsSilent() async {
         let stub = StubAPIClient()
         stub.suggestionsError = APIError.server(message: "down", code: nil)
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none, everydayFoods: .none)
 
         await viewModel.loadRecents()
 
@@ -1680,7 +1680,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
     func testSearchingDoesNotRefetchSuggestions() async {
         let stub = StubAPIClient()
         stub.localFoodsToReturn = [makeFood("local-1", "Porridge")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none, everydayFoods: .none)
 
         viewModel.query = "porridge"
         await viewModel.search()
@@ -1832,7 +1832,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         stub.localFoodsToReturn = [makeFood("local-1", "My Apple")]
         stub.externalFoodsToReturn = [makeFood("off-1", "Apple Juice Carton")]
         stub.usdaFoodsToReturn = [makeFood("usda-1", "Apple, raw")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none, everydayFoods: .none)
 
         viewModel.query = "apple"
         await viewModel.search()
@@ -1855,7 +1855,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         let stub = StubAPIClient()
         stub.usdaFoodsToReturn = (1...8).map { makeFood("generic-\($0)", "Cereal, O's variant \($0)") }
         stub.externalFoodsToReturn = [makeFood("off-cheerios", "Cheerios")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none, everydayFoods: .none)
 
         viewModel.query = "cheerios"
         await viewModel.search()
@@ -1875,7 +1875,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         let stub = StubAPIClient()
         stub.usdaSearchError = APIError.server(message: "no provider", code: nil)
         stub.externalFoodsToReturn = [makeFood("off-1", "Cheerios")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none, everydayFoods: .none)
 
         viewModel.query = "cheerios"
         await viewModel.search()
@@ -3401,17 +3401,19 @@ final class SwiftSparkyFitnessTests: XCTestCase {
 
 // MARK: - Indian food search (INDB, Open Food Facts India, ranking)
 
-extension IndianFoodDB {
-    /// An empty databank, for tests that assert exact result lists.
-    static var none: IndianFoodDB { IndianFoodDB(source: { [] }) }
+extension BundledFoodDB {
+    /// An empty dataset, for tests that assert exact result lists.
+    static var none: BundledFoodDB { BundledFoodDB(rows: { [] }) }
 
-    static func with(_ rows: [IndianFoodDB.Row]) -> IndianFoodDB { IndianFoodDB(source: { rows }) }
+    static func with(_ rows: [BundledFoodDB.Row], source: FoodSource = .indb) -> BundledFoodDB {
+        BundledFoodDB(source: source, rows: { rows })
+    }
 }
 
 extension SwiftSparkyFitnessTests {
 
-    private func indbRow(_ id: String, _ name: String, unit: String = "bowl", kcal: Double = 150) -> IndianFoodDB.Row {
-        IndianFoodDB.Row(id: id, name: name, unit: unit, kcal: kcal, protein: 4, carbs: 20, fat: 5)
+    private func indbRow(_ id: String, _ name: String, unit: String = "bowl", kcal: Double = 150) -> BundledFoodDB.Row {
+        BundledFoodDB.Row(id: id, name: name, unit: unit, kcal: kcal, protein: 4, carbs: 20, fat: 5)
     }
 
     private func food(_ id: String, _ name: String, _ source: FoodSource, brand: String? = nil, complete: Bool = true) -> Food {
@@ -3435,7 +3437,7 @@ extension SwiftSparkyFitnessTests {
     }
 
     func testBundledIndbLoadsWithUsableRows() throws {
-        let rows = try IndianFoodDB.bundled()
+        let rows = try BundledFoodDB.bundled("indb")
         XCTAssertGreaterThan(rows.count, 700)
         XCTAssertTrue(rows.allSatisfy { $0.kcal > 0 && !$0.unit.isEmpty && !$0.name.isEmpty })
         // Whole-recipe totals posing as one unit ("1 poori 921 kcal") are
@@ -3450,7 +3452,7 @@ extension SwiftSparkyFitnessTests {
     /// Word-prefix matching, not substring: "lassi" must not find "Classic
     /// club sandwich", but "dal" finds "Moong dal" and "rajma" finds "Rajmah".
     func testIndbMatchesWordStartsAndSpellingVariants() async {
-        let db = IndianFoodDB.with([
+        let db = BundledFoodDB.with([
             indbRow("1", "Sweet Lassi (Meethi lassi)"),
             indbRow("2", "Classic club sandwich"),
             indbRow("3", "Moong dal"),
@@ -3605,7 +3607,7 @@ extension SwiftSparkyFitnessTests {
     /// the everyday dish must be the top INDB answer, not a dish that only
     /// contains the word.
     func testEverydayIndianSearchesPutTheEverydayDishFirst() async {
-        let db = IndianFoodDB()
+        let db = BundledFoodDB.indian
         let expected: [String: String] = [
             "roti": "Roti",
             "chapati": "Chapati",
@@ -3705,7 +3707,7 @@ extension SwiftSparkyFitnessTests {
         let stub = StubAPIClient()
         stub.externalSearchDelay = 1_500_000_000
         stub.externalFoodsToReturn = [makeFood("off-1", "Poha Mix")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("P", "Poha")]))
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("P", "Poha")]), everydayFoods: .none)
         viewModel.query = "poha"
 
         let search = Task { await viewModel.search() }
@@ -3728,7 +3730,7 @@ extension SwiftSparkyFitnessTests {
     func testRepeatQueriesAreAnsweredFromTheSheetCache() async {
         let stub = StubAPIClient()
         stub.externalFoodsToReturn = [makeFood("off-1", "Idli Rava")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none, everydayFoods: .none)
 
         for query in ["idli", "idli r", "idli"] {
             viewModel.query = query
@@ -3743,7 +3745,7 @@ extension SwiftSparkyFitnessTests {
     func testAFailedAnswerIsNotCached() async {
         let stub = StubAPIClient()
         stub.externalSearchError = APIError.server(message: "busy", code: nil)
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none, everydayFoods: .none)
         viewModel.query = "dosa"
         await viewModel.search()
         stub.externalSearchError = nil
@@ -3756,7 +3758,7 @@ extension SwiftSparkyFitnessTests {
     @MainActor
     func testShortQueriesDoNotSpendAnOpenFoodFactsSearch() async {
         let stub = StubAPIClient()
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("I", "Idli")]))
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("I", "Idli")]), everydayFoods: .none)
         viewModel.query = "id"
         await viewModel.search()
         XCTAssertTrue(stub.externalSearchQueries.isEmpty)
@@ -3799,7 +3801,7 @@ extension SwiftSparkyFitnessTests {
     @MainActor
     func testSearchingWithAnAmountFindsTheFood() async {
         let stub = StubAPIClient()
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("R", "Chapati/Roti", unit: "chapati", kcal: 73)]))
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("R", "Chapati/Roti", unit: "chapati", kcal: 73)]), everydayFoods: .none)
         viewModel.query = "2 roti"
         await viewModel.search()
         XCTAssertEqual(stub.localSearchQueries, ["roti"])
@@ -3859,7 +3861,7 @@ extension SwiftSparkyFitnessTests {
     @MainActor
     func testANewQueryWhoseResultsAllDropDoesNotKeepTheOldList() async {
         let stub = StubAPIClient()
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("P", "Poha")]))
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("P", "Poha")]), everydayFoods: .none)
         viewModel.query = "poha"
         await viewModel.search()
         XCTAssertEqual(viewModel.outcome.kindID, "results")
@@ -3911,7 +3913,7 @@ extension SwiftSparkyFitnessTests {
     }
 
     func testIndbOffersAllButOneWordWhenNothingHoldsEvery() async {
-        let db = IndianFoodDB.with([indbRow("B", "Paneer in butter sauce"), indbRow("P", "Poha")])
+        let db = BundledFoodDB.with([indbRow("B", "Paneer in butter sauce"), indbRow("P", "Poha")])
         let names = await db.search("paneer butter masala").map(\.name)
         XCTAssertEqual(names, ["Paneer in butter sauce"])
         let exact = await db.search("poha").map(\.name)
@@ -3921,7 +3923,7 @@ extension SwiftSparkyFitnessTests {
     @MainActor
     func testTheSheetSaysWhenResultsAreOnlyClose() async {
         let stub = StubAPIClient()
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("B", "Paneer in butter sauce")]))
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .with([indbRow("B", "Paneer in butter sauce")]), everydayFoods: .none)
         viewModel.query = "paneer butter masala"
         await viewModel.search()
         XCTAssertTrue(viewModel.resultsAreClosestMatches)
@@ -3988,7 +3990,7 @@ extension SwiftSparkyFitnessTests {
             recentFoods: [], topFoods: [food("mine-curd", "Curd", .local, brand: "Milky Mist")])
         stub.externalFoodsToReturn = [food("off-amul", "Paneer", .openFoodFacts, brand: "Amul"),
                                       food("off-mm", "Paneer", .openFoodFacts, brand: "Milky Mist")]
-        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub, indianFoods: .none, everydayFoods: .none)
         await viewModel.loadRecents()
         viewModel.query = "paneer"
         await viewModel.search()
@@ -4006,7 +4008,7 @@ extension SwiftSparkyFitnessTests {
         stub.suggestionsToReturn = FoodSuggestions(recentFoods: [roti], topFoods: [roti])
         stub.logStatsToReturn = [key: FoodLogStat(timesThisWeek: 4, lastQuantity: 2)]
         let lunch = MealType(id: "lunch", name: "lunch", sortOrder: 20)
-        let viewModel = FoodSearchViewModel(mealTypes: [lunch], initialMealType: lunch, apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [lunch], initialMealType: lunch, apiClient: stub, indianFoods: .none, everydayFoods: .none)
         await viewModel.loadRecents()
         XCTAssertEqual(viewModel.logStat(for: roti)?.timesThisWeek, 4)
         XCTAssertEqual(viewModel.quickLogQuantity(for: roti), 2)
@@ -4023,7 +4025,7 @@ extension SwiftSparkyFitnessTests {
     func testAQuickLogWithNoHistoryUsesOneServing() async {
         let stub = StubAPIClient()
         let lunch = MealType(id: "lunch", name: "lunch", sortOrder: 20)
-        let viewModel = FoodSearchViewModel(mealTypes: [lunch], initialMealType: lunch, apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [lunch], initialMealType: lunch, apiClient: stub, indianFoods: .none, everydayFoods: .none)
         let dal = food("mine-dal", "Dal", .local)
         XCTAssertEqual(viewModel.quickLogQuantity(for: dal), 100)
         await viewModel.quickLog(dal)
@@ -4036,7 +4038,7 @@ extension SwiftSparkyFitnessTests {
         let stub = StubAPIClient()
         stub.createFoodEntryError = APIError.invalidResponse
         let lunch = MealType(id: "lunch", name: "lunch", sortOrder: 20)
-        let viewModel = FoodSearchViewModel(mealTypes: [lunch], initialMealType: lunch, apiClient: stub, indianFoods: .none)
+        let viewModel = FoodSearchViewModel(mealTypes: [lunch], initialMealType: lunch, apiClient: stub, indianFoods: .none, everydayFoods: .none)
         let dal = food("mine-dal", "Dal", .local)
         await viewModel.quickLog(dal)
         XCTAssertNotNil(viewModel.quickLogError)
@@ -4060,7 +4062,7 @@ extension SwiftSparkyFitnessTests {
     }
 
     func testSearchingTheWholeBundledIndbIsCheap() async {
-        let db = IndianFoodDB()
+        let db = BundledFoodDB.indian
         await db.prepare()
         let start = Date()
         for query in ["roti", "dal", "paneer", "poha", "idli", "dosa", "biryani", "rajma", "curd", "rice"] {
@@ -4068,6 +4070,162 @@ extension SwiftSparkyFitnessTests {
         }
         let perSearch = Date().timeIntervalSince(start) / 10
         XCTAssertLessThan(perSearch, 0.01, "one INDB search took \(Int(perSearch * 1_000_000))µs")
+    }
+}
+
+// MARK: - Everyday foods (USDA FNDDS, bundled), synonyms and typos
+
+extension SwiftSparkyFitnessTests {
+
+    private func usdaRow(_ id: String, _ name: String, unit: String, size: Double? = nil, kcal: Double) -> BundledFoodDB.Row {
+        BundledFoodDB.Row(id: id, name: name, unit: unit, kcal: kcal, protein: 1, carbs: 1, fat: 1, size: size)
+    }
+
+    /// The basics INDB never had: "bread" was Bread upma and shortbread.
+    func testTheBundledEverydayFoodsHaveTheBasicsInHouseholdUnits() async {
+        let db = BundledFoodDB.everyday
+        for (query, name, unit) in [("bread", "Bread, white", "slice"), ("banana", "Banana, raw", "banana"),
+                                    ("milk", "Milk, whole", "cup"), ("ghee", "Ghee, clarified butter", "tbsp")] {
+            let foods = await db.foods(matching: query)
+            let food = foods.first { $0.name == name }
+            XCTAssertNotNil(food, query)
+            XCTAssertEqual(food?.defaultVariant?.servingUnit, unit, query)
+            XCTAssertEqual(food?.defaultVariant?.servingSize, 1, query)
+            XCTAssertEqual(food?.source, .usda, query)
+        }
+        let ranked = FoodSearchRanker.rank([await db.foods(matching: "bread")], query: "bread")
+        XCTAssertEqual(ranked.first?.name, "Bread, white")
+    }
+
+    /// Listed under the server's own USDA ids, so a food found both ways is
+    /// one row; a food in grams starts at its usual amount.
+    func testAnEverydayRowIsAUsdaFoodInItsOwnUnit() {
+        let slice = usdaRow("2707598", "Bread, white", unit: "slice", kcal: 75).food(source: .usda)
+        XCTAssertEqual(slice.id, "usda-2707598")
+        XCTAssertEqual(slice.defaultVariant?.servingSize, 1)
+        let paneer = usdaRow("2705740", "Cheese, paneer", unit: "g", size: 123, kcal: 368).food(source: .usda)
+        XCTAssertEqual(paneer.defaultVariant?.servingSize, 123)
+        XCTAssertEqual(paneer.defaultVariant?.servingUnit, "g")
+        XCTAssertEqual(FoodSearchRanker.rank([[slice], [slice]], query: "bread").count, 1)
+    }
+
+    /// INDB's own spreadsheet has dishes whose macros can't make their
+    /// energy ("Egg drop soup", 85 kcal with 43 g fat); the build drops them.
+    func testBundledIndbMacrosMakeTheirEnergy() throws {
+        for row in try BundledFoodDB.bundled("indb") {
+            let atwater = 4 * row.protein + 4 * row.carbs + 9 * row.fat
+            XCTAssertLessThanOrEqual(abs(atwater - row.kcal), 0.25 * row.kcal + 1, row.name)
+        }
+    }
+
+    func testOneTypoIsOneTypo() {
+        XCTAssertTrue(FoodSearchText.isOneTypoAway("omelette", "omlette"), "a letter missed")
+        XCTAssertTrue(FoodSearchText.isOneTypoAway("banana", "bananna"), "a letter added")
+        XCTAssertTrue(FoodSearchText.isOneTypoAway("biryani", "biriani"), "a letter changed")
+        XCTAssertTrue(FoodSearchText.isOneTypoAway("paneer", "panere"), "two swapped")
+        XCTAssertFalse(FoodSearchText.isOneTypoAway("rice", "mice"), "short words are left alone")
+        XCTAssertFalse(FoodSearchText.isOneTypoAway("omelette", "omelette"), "the same word isn't a typo")
+        XCTAssertFalse(FoodSearchText.isOneTypoAway("pakora", "korma"))
+    }
+
+    /// "dahi", "chole", "anda", "omlette": the names people type for foods
+    /// the datasets call curd, chickpeas, egg and omelette.
+    func testSynonymsAndTyposFindTheFood() async {
+        let db = BundledFoodDB.with([
+            indbRow("C", "Curd rice (Dahi bhaat)"), indbRow("K", "Chickpeas curry (Safed channa curry)"),
+            indbRow("O", "Plain omelette"), indbRow("B", "Boiled egg (Ubla anda)"), indbRow("P", "Poha"),
+        ])
+        for (query, id) in [("dahi", "C"), ("curd", "C"), ("chole", "K"), ("omlette", "O"), ("omlet", "O"),
+                            ("omelet", "O"), ("anda", "B"), ("eggs", "B")] {
+            let rows = await db.search(query)
+            XCTAssertEqual(rows.map(\.id), [id], query)
+            let ranked = FoodSearchRanker.rank([rows.map(\.asFood)], query: query)
+            XCTAssertEqual(ranked.map(\.id), ["indb-\(id)"], query)
+        }
+        let typo = await db.search("omeltte")
+        XCTAssertEqual(typo.map(\.id), ["O"], "one typo away from omelette")
+    }
+
+    /// A synonym never outranks the word itself: "dal" is the dals, not
+    /// USDA's "Lentils, NFS" reached through "lentil".
+    func testASynonymMatchStaysBelowARealOne() {
+        let ids = ranked("dal",
+            [food("usda-lentils", "Lentils, NFS", .usda)],
+            [food("indb-mixed", "Mixed dal", .indb)])
+        XCTAssertEqual(ids, ["indb-mixed", "usda-lentils"])
+    }
+
+    /// One packaged roasted-chana snack held both words of "chana masala"
+    /// and hid every chickpea curry; when only products match in full the
+    /// closest follow, and a curry leads them for a "masala" query.
+    func testClosestMatchesFollowWhenOnlyAProductMatches() {
+        let ids = ranked("chana masala",
+            [food("off-snack", "Masala Roasted Chana", .openFoodFacts, brand: "Bam Bam")],
+            [food("indb-pulao", "Green chickpeas pulao (Hare chane ka pulao)", .indb),
+             food("indb-curry", "Chickpeas curry (Safed channa curry)", .indb)])
+        XCTAssertEqual(ids, ["off-snack", "indb-curry", "indb-pulao"])
+    }
+
+    func testAPortionWordAfterTheFoodIsNotSearchedFor() {
+        XCTAssertEqual(FoodSearchText.searchText("bread slice"), "bread")
+        XCTAssertEqual(FoodSearchText.searchText("2 slices of bread"), "bread")
+        XCTAssertEqual(FoodSearchText.searchText("glass noodles"), "glass noodles", "a leading word is the food")
+    }
+
+    /// Open Food Facts is typed in by hand: "Chole with rice" at 300 kcal
+    /// with 74 g protein can't be true, and logging it would be worse than
+    /// not offering it.
+    func testOffDropsProductsWhoseNumbersCannotBeTrue() throws {
+        let json = """
+        {"hits":[
+          {"code":"1","product_name":"Chole with rice","brands":[],"nutriments":{"energy-kcal_100g":300,"proteins_100g":74,"carbohydrates_100g":40,"fat_100g":7}},
+          {"code":"2","product_name":"Impossible","brands":[],"nutriments":{"energy-kcal_100g":1500}},
+          {"code":"3","product_name":"Toned Milk","brands":["Amul"],"nutriments":{"energy-kcal_100g":58,"proteins_100g":3,"carbohydrates_100g":4.8,"fat_100g":3}},
+          {"code":"4","product_name":"Water","brands":[],"nutriments":{"energy-kcal_100g":0}}
+        ],"count":4}
+        """
+        XCTAssertEqual(try OpenFoodFactsSearch.foods(from: Data(json.utf8)).map(\.name), ["Toned Milk"])
+    }
+
+    /// A source failing under a list that still showed: the list says it's
+    /// short rather than passing for everything there is.
+    @MainActor
+    func testAListMissingASourceSaysSo() async {
+        let stub = StubAPIClient()
+        stub.externalSearchError = APIError.server(message: "busy", code: "OFF_503")
+        let viewModel = FoodSearchViewModel(mealTypes: [], apiClient: stub,
+                                            indianFoods: .with([indbRow("U", "Bread upma")]), everydayFoods: .none)
+        viewModel.query = "bread"
+        await viewModel.search()
+        XCTAssertTrue(viewModel.hasResults)
+        XCTAssertTrue(viewModel.someSourcesFailed)
+
+        stub.externalSearchError = nil
+        await viewModel.search()
+        XCTAssertFalse(viewModel.someSourcesFailed)
+    }
+
+    @MainActor
+    func testEverydayFoodsAreSearchedAlongsideTheRest() async {
+        let viewModel = FoodSearchViewModel(
+            mealTypes: [], apiClient: StubAPIClient(), indianFoods: .none,
+            everydayFoods: .with([usdaRow("1", "Banana, raw", unit: "banana", kcal: 122)], source: .usda))
+        viewModel.query = "banana"
+        await viewModel.search()
+        guard case .results(let foods) = viewModel.outcome else { return XCTFail("no results") }
+        XCTAssertEqual(foods.map(\.id), ["usda-1"])
+    }
+
+    func testSearchingTheWholeBundledEverydayFoodsIsCheap() async {
+        let db = BundledFoodDB.everyday
+        await db.prepare()
+        let start = Date()
+        // "omlette" matches nothing as typed, so it pays for the typo pass.
+        for query in ["bread", "milk", "egg", "chicken", "rice", "banana", "omlette", "paneer", "chole", "coffee"] {
+            _ = await db.search(query)
+        }
+        let perSearch = Date().timeIntervalSince(start) / 10
+        XCTAssertLessThan(perSearch, 0.05, "one everyday-foods search took \(Int(perSearch * 1_000_000))µs")
     }
 }
 

@@ -11,7 +11,8 @@
 //
 //  - name match      how well the query matches the name (the big one):
 //                    exact > plain ("Boiled rice") > head noun ("Moong dal")
-//                    > all words > word prefixes > spelling variant
+//                    > all words > word prefixes > spelling variant > typo;
+//                    a synonym ("dahi" for Curd) a little below the word
 //  - personal        the user's own foods — they've logged them before
 //  - Indian          INDB dishes, and OFF products (searched India-only)
 //  - source quality  curated datasets over user-submitted barcodes
@@ -23,6 +24,10 @@
 //                    name matches, never above a better one
 //  - history         foods this user logs often or lately (History), so the
 //                    order learns from the diary
+//
+//  When nothing holds every query word, the results holding most of them
+//  are offered as closest matches; when only packaged products do, the
+//  closest follow them.
 //
 //  Ties break on source, provider position, then id, so the same inputs
 //  always give the same list no matter which source answered first.
@@ -106,9 +111,100 @@ nonisolated enum FoodSearchText {
         byte == 97 || byte == 101 || byte == 105 || byte == 111 || byte == 117  // a e i o u
     }
 
+    /// Words that name the same food, as `words` leaves them (lowercased,
+    /// singular): the Hindi and English names, and the commonest spellings
+    /// squash doesn't already meet. "dahi" finds Curd rice and Amul's Curd,
+    /// "chole" Chickpeas curry, "omlette" an omelette, "anda" an egg.
+    /// Whole words only — a word still being typed matches as itself.
+    private static let synonymGroups: [[String]] = [
+        ["omelette", "omelet", "omlet", "omlette", "omelete", "amlet", "aamlet"],
+        ["curd", "dahi", "yogurt", "yoghurt"],
+        ["chana", "chole", "chhole", "channa", "chickpea"],
+        ["egg", "anda", "ande", "anday"],
+        ["potato", "aloo", "alu"],
+        ["rice", "chawal"],
+        ["chicken", "murgh", "murg"],
+        ["milk", "doodh", "dudh"],
+        ["tea", "chai"],
+        ["lentil", "dal", "daal", "dhal"],
+        ["banana", "kela", "kele"],
+        ["mango", "aam"],
+        ["spinach", "palak"],
+        ["pea", "matar", "mutter"],
+        ["cauliflower", "gobi", "gobhi"],
+        ["okra", "bhindi", "ladyfinger"],
+        ["eggplant", "brinjal", "baingan", "aubergine"],
+        ["onion", "pyaz", "pyaaz", "kanda"],
+        ["tomato", "tamatar"],
+        ["cucumber", "kheera", "kakdi"],
+        ["peanut", "groundnut", "moongphali", "mungfali"],
+        ["laddu", "ladoo", "laddoo", "ladu"],
+    ]
+
+    /// Words that say how a dish is made rather than what it is: "chana
+    /// masala" and "aloo sabzi" are chana and aloo dishes.
+    static let dishStyleWords: Set<String> = [
+        "masala", "curry", "sabzi", "sabji", "subzi", "fry", "gravy", "tadka", "tarka", "bhaji", "recipe",
+    ]
+
+    private static let synonymIndex: [String: [String]] = {
+        var index: [String: [String]] = [:]
+        for group in synonymGroups {
+            for word in group { index[word] = group }
+        }
+        return index
+    }()
+
+    /// `word` and every word that names the same food, `word` first.
+    static func synonyms(of word: String) -> [String] {
+        guard let group = synonymIndex[word] else { return [word] }
+        return [word] + group.filter { $0 != word }
+    }
+
+    /// The query as typed, then with each synonym in turn: "chole bhature" is
+    /// also "chana bhature", "chickpea bhature"... Capped: a query is a few
+    /// words, and at most one or two of them have synonyms.
+    static func queryVariants(_ words: [String]) -> [[String]] {
+        var variants = [words]
+        for (index, word) in words.enumerated() {
+            for synonym in synonyms(of: word).dropFirst() {
+                for variant in variants where variant[index] == word {
+                    var replaced = variant
+                    replaced[index] = synonym
+                    variants.append(replaced)
+                    if variants.count >= 16 { return variants }
+                }
+            }
+        }
+        return variants
+    }
+
+    /// One slip of the finger apart — a letter missed, added, changed or two
+    /// swapped — for words of five letters or more, where that can't turn
+    /// one food into another ("omlette" is "omelette"; "rice" is not "mice").
+    static func isOneTypoAway(_ word: String, _ typed: String) -> Bool {
+        // Lengths first, without copying: most words are rejected here.
+        let typedCount = typed.utf8.count
+        guard typedCount >= 5, abs(word.utf8.count - typedCount) <= 1 else { return false }
+        let a = Array(word.utf8), b = Array(typed.utf8)
+        guard a != b else { return false }
+        var i = 0
+        while i < a.count, i < b.count, a[i] == b[i] { i += 1 }
+        if a.count == b.count {
+            // A changed letter, or two swapped.
+            if a[(i + 1)...] == b[(i + 1)...] { return true }
+            return i + 1 < a.count && a[i] == b[i + 1] && a[i + 1] == b[i] && a[(i + 2)...] == b[(i + 2)...]
+        }
+        // A letter missed or added.
+        let (longer, shorter) = a.count > b.count ? (a, b) : (b, a)
+        return longer[(i + 1)...] == shorter[i...]
+    }
+
     /// The query without the amount typed along with the food: "2 roti",
-    /// "100g rice", "1 cup of dal" search for roti, rice, dal. Kept whole
-    /// when that would leave almost nothing ("7 up", "123").
+    /// "100g rice", "1 cup of dal" search for roti, rice, dal — and "bread
+    /// slice", "pizza piece": a portion word after the food names how much,
+    /// not what. Kept whole when that would leave almost nothing ("7 up",
+    /// "123").
     static func searchText(_ query: String) -> String {
         var kept: [Substring] = []
         var afterAmount = false
@@ -121,6 +217,9 @@ nonisolated enum FoodSearchText {
                 continue
             }
             if afterAmount, quantityUnits.contains(lower) || portionWords.contains(lower) || lower == "of" {
+                continue
+            }
+            if !kept.isEmpty, lower != "x", portionWords.contains(lower) {
                 continue
             }
             afterAmount = false
@@ -285,6 +384,13 @@ nonisolated enum FoodSearchRanker {
         var allWordsExact: Double = 45
         var allWordsPrefix: Double = 30
         var spellingVariant: Double = 25
+        /// One typo in a long word ("omlette"), below every real match.
+        var typo: Double = 22
+        /// The same tiers through a synonym ("dahi" → Curd), a little below
+        /// the word itself, so Amul's Dahi still leads for "dahi" — and never
+        /// above `allWordsExact`, so "dal" lists the dals before USDA's
+        /// "Lentils, NFS".
+        var synonymPenalty: Double = 3
         /// The same tiers again on spelling-squashed words ("dhal" is "Mixed
         /// dal"'s head noun), a little below the real thing.
         var spellingPenalty: Double = 5
@@ -380,41 +486,66 @@ nonisolated enum FoodSearchRanker {
     static func ranking(_ lists: [[Food]], query: String, history: History = .none, weights: Weights = .standard, perSourceLimit: Int = 20) -> Ranking {
         let queryWords = FoodSearchText.words(query)
         guard !queryWords.isEmpty else { return Ranking(foods: lists.flatMap { $0 }) }
+        let variants = FoodSearchText.queryVariants(queryWords)
 
         // Each name is folded and split once here, and reused for both the
         // score and the duplicate key.
         typealias Entry = (food: Food, score: Double, source: Int, position: Int, names: Names)
         var scored: [Entry] = []
         var closest: [Entry] = []
+        var unmatched: [Entry] = []
+        // Full matches that are dishes or foods, not packaged products.
+        var foodMatches = 0
         // Most of a multi-word query: all but one word, at least one.
         let closestNeeds = max(1, queryWords.count - 1)
+        // The last word is usually the dish ("chicken biryani"): with only
+        // two words, it's the one that must be there — unless it only says
+        // how the dish is made ("chana masala" is a chana dish).
+        let dishWord = queryWords.count == 2 && FoodSearchText.dishStyleWords.contains(queryWords[1]) ? 0 : queryWords.count - 1
         for list in lists {
             for (position, food) in list.enumerated() {
                 let names = Names(food)
-                let (base, matched) = self.score(food, names: names, queryWords: queryWords, position: position, weights: weights)
+                let (base, matched) = self.score(food, names: names, variants: variants, position: position, weights: weights)
                 let bonus = personalBonus(food, brandKeys: names.brandKeys, history: history, weights: weights)
                 if matched || food.source == .local {
                     scored.append((food, base + bonus, sourceOrder(food.source), position, names))
-                } else if queryWords.count > 1, scored.isEmpty {
-                    let (held, holdsLast) = wordsHeld(names, queryWords: queryWords)
-                    // The last word is usually the dish ("chicken biryani"):
-                    // with only two words, it's the one that must be there.
-                    if held >= closestNeeds, holdsLast || queryWords.count > 2 {
-                        var share = weights.closestMatch * Double(held) / Double(queryWords.count)
-                        if names.alternatives.contains(where: { $0.head == queryWords.last }) { share += weights.closestMatch / 2 }
-                        closest.append((food, base + share + bonus, sourceOrder(food.source), position, names))
-                    }
+                    if matched, food.source != .openFoodFacts { foodMatches += 1 }
+                } else if queryWords.count > 1 {
+                    unmatched.append((food, base + bonus, sourceOrder(food.source), position, names))
                 }
             }
         }
-        let closestOnly = scored.isEmpty && !closest.isEmpty
-        if closestOnly { scored = closest }
-        scored.sort {
+        // Closest matches never pad a list that has real ones — unless every
+        // full match is a packaged product: one roasted-chana snack holding
+        // "chana masala" mustn't hide the chickpea curries. Only worked out
+        // when they'll be shown: it's the costly part of a ranking.
+        if scored.isEmpty || foodMatches == 0 {
+            // The dish word as the head ("chicken biryani" → Mutton
+            // biryani), or for "chana masala" a curry.
+            let styleOnly = dishWord != queryWords.count - 1
+            let forms = queryWords.map { FoodSearchText.synonyms(of: $0) }
+            let squashedForms = forms.map { $0.map(FoodSearchText.squash) }
+            for entry in unmatched {
+                let (held, holdsDish) = wordsHeld(entry.names, queryWords: queryWords, forms: forms,
+                                                  squashedForms: squashedForms, dishWord: dishWord)
+                guard held >= closestNeeds, holdsDish || queryWords.count > 2 else { continue }
+                var share = weights.closestMatch * Double(held) / Double(queryWords.count)
+                if entry.names.alternatives.contains(where: {
+                    $0.head == queryWords[dishWord] || (styleOnly && FoodSearchText.dishStyleWords.contains($0.head))
+                }) { share += weights.closestMatch / 2 }
+                closest.append((entry.food, entry.score + share, entry.source, entry.position, entry.names))
+            }
+        }
+        let order: (Entry, Entry) -> Bool = {
             if $0.score != $1.score { return $0.score > $1.score }
             if $0.source != $1.source { return $0.source < $1.source }
             if $0.position != $1.position { return $0.position < $1.position }
             return $0.food.id < $1.food.id
         }
+        scored.sort(by: order)
+        closest.sort(by: order)
+        let closestOnly = scored.isEmpty && !closest.isEmpty
+        scored += closest
 
         var seen = Set<String>()
         var seenNames: [String: FoodSource] = [:]
@@ -442,33 +573,36 @@ nonisolated enum FoodSearchRanker {
             let count = perSource[food.source, default: 0]
             guard food.source == .local || count < perSourceLimit else { continue }
             perSource[food.source] = count + 1
-            ranked.append(entry.names.shown(for: food, queryWords: queryWords, weights: weights))
+            ranked.append(entry.names.shown(for: food, variants: variants, weights: weights))
         }
         return Ranking(foods: ranked, closestOnly: closestOnly)
     }
 
-    /// How many query words the name or brand holds, as a word or its start,
-    /// spelt either way.
-    private static func wordsHeld(_ names: Names, queryWords: [String]) -> (count: Int, holdsLast: Bool) {
+    /// How many query words the name or brand holds, as a word or its start
+    /// — spelt either way, as a synonym, or with one typo — and whether it
+    /// holds the one at `dishWord`. `forms`: each query word's synonyms,
+    /// worked out once per ranking.
+    private static func wordsHeld(_ names: Names, queryWords: [String], forms: [[String]], squashedForms: [[String]],
+                                  dishWord: Int) -> (count: Int, holdsDish: Bool) {
         let words = names.alternatives.flatMap(\.words) + names.brandKeys.flatMap { $0.split(separator: " ").map(String.init) }
         // Squashed only when a plain prefix misses, which is rare.
         var squashed: [String]?
         var count = 0
-        var holdsLast = false
+        var holdsDish = false
         for (index, q) in queryWords.enumerated() {
-            var held = words.contains { $0.hasPrefix(q) }
+            var held = forms[index].contains { form in words.contains { $0.hasPrefix(form) } }
             if !held {
                 let spelt = squashed ?? words.map(FoodSearchText.squash)
                 squashed = spelt
-                let squashedQuery = FoodSearchText.squash(q)
-                held = spelt.contains { $0.hasPrefix(squashedQuery) }
+                held = squashedForms[index].contains { form in spelt.contains { $0.hasPrefix(form) } }
+                    || words.contains { FoodSearchText.isOneTypoAway($0, q) }
             }
             if held {
                 count += 1
-                if index == queryWords.count - 1 { holdsLast = true }
+                if index == dishWord { holdsDish = true }
             }
         }
-        return (count, holdsLast)
+        return (count, holdsDish)
     }
 
     /// `rank`, on the global executor: results arrive on the main actor, and
@@ -493,7 +627,7 @@ nonisolated enum FoodSearchRanker {
     }
 
     static func score(_ food: Food, queryWords: [String], position: Int = 0, weights: Weights = .standard) -> Double {
-        score(food, names: Names(food), queryWords: queryWords, position: position, weights: weights).score
+        score(food, names: Names(food), variants: FoodSearchText.queryVariants(queryWords), position: position, weights: weights).score
     }
 
     /// A food's name split into the names it goes by. Only INDB packs several
@@ -539,16 +673,17 @@ nonisolated enum FoodSearchRanker {
         /// name: INDB puts the Indian one in brackets, so "paneer" shows
         /// "Palak paneer" rather than "Spinach paneer". Logging saves the name
         /// shown, so the diary reads the same.
-        func shown(for food: Food, queryWords: [String], weights: Weights) -> Food {
+        func shown(for food: Food, variants: [[String]], weights: Weights) -> Food {
             guard written.count > 1 || written.first != food.name else { return food }
+            let queryWords = variants[0]
             var best = 0
             var bestScore = -Double.infinity
             for (index, alternatives) in parsed.enumerated() {
-                var score = nameMatch(alternatives, queryWords: queryWords, weights: weights).score
+                var score = nameMatch(alternatives, variants: variants, weights: weights).score
                 // A closest match holds no name for the whole query; name it
                 // by the dish word, the last one ("masala paneer" → Matar paneer).
                 if score <= weights.noNameMatch, queryWords.count > 1, let last = queryWords.last {
-                    score = nameMatch(alternatives, queryWords: [last], weights: weights).score
+                    score = nameMatch(alternatives, variants: FoodSearchText.queryVariants([last]), weights: weights).score
                 }
                 if score > bestScore || (score == bestScore && score > weights.noNameMatch) {
                     (best, bestScore) = (index, score)
@@ -559,8 +694,9 @@ nonisolated enum FoodSearchRanker {
         }
     }
 
-    private static func score(_ food: Food, names: Names, queryWords: [String], position: Int, weights: Weights) -> (score: Double, matched: Bool) {
-        var (match, extraWords) = nameMatch(names.alternatives, queryWords: queryWords, weights: weights)
+    private static func score(_ food: Food, names: Names, variants: [[String]], position: Int, weights: Weights) -> (score: Double, matched: Bool) {
+        let queryWords = variants[0]
+        var (match, extraWords) = nameMatch(names.alternatives, variants: variants, weights: weights)
         // Query words the brand accounts for: "amul butter" is Butter, Amul.
         if !names.brandKeys.isEmpty {
             let brandWords = Set(names.brandKeys.flatMap { $0.split(separator: " ").map(String.init) })
@@ -589,16 +725,36 @@ nonisolated enum FoodSearchRanker {
         return (score, matched)
     }
 
+    /// `nameMatch` for the query as typed or through a synonym, whichever
+    /// matches best; a synonym's a little below the word itself.
+    private static func nameMatch(_ alternatives: [FoodSearchText.Alternative], variants: [[String]], weights: Weights) -> (score: Double, extraWords: Int) {
+        var best = nameMatch(alternatives, queryWords: variants[0], weights: weights)
+        for queryWords in variants.dropFirst() {
+            // Literal tiers only: a synonym spelt differently or mistyped
+            // costs a pass per variant over every name, and buys nothing.
+            // Most names hold no word of a variant at all; skip those first.
+            guard queryWords.allSatisfy({ q in alternatives.contains { $0.words.contains { $0.hasPrefix(q) } } }) else { continue }
+            var found = nameMatch(alternatives, queryWords: queryWords, weights: weights, fuzzy: false)
+            guard found.score > weights.noNameMatch else { continue }
+            found.score = max(min(found.score - weights.synonymPenalty, weights.allWordsExact), weights.typo)
+            if found.score > best.score || (found.score == best.score && found.extraWords < best.extraWords) {
+                best = found
+            }
+        }
+        return best
+    }
+
     /// The best match tier across the name's alternatives, and how many words
     /// that alternative has beyond the query's.
-    private static func nameMatch(_ alternatives: [FoodSearchText.Alternative], queryWords: [String], weights: Weights) -> (score: Double, extraWords: Int) {
+    private static func nameMatch(_ alternatives: [FoodSearchText.Alternative], queryWords: [String], weights: Weights,
+                                  fuzzy: Bool = true) -> (score: Double, extraWords: Int) {
         var best: (score: Double, extraWords: Int) = (weights.noNameMatch, 0)
         var squashedQuery: [String]?
         for alternative in alternatives {
             let words = alternative.words
             let extra = max(0, alternative.headLength - queryWords.count)
             var found = tier(words, head: alternative.head, query: queryWords, plainWords: weights.plainWords, weights: weights)
-            if found == nil {
+            if found == nil, fuzzy {
                 // Spelling: the same tiers on squashed words, so "dhal" meets
                 // "Mixed dal" as its head noun rather than "Meetha daliya" by
                 // prefix.
@@ -608,6 +764,9 @@ nonisolated enum FoodSearchRanker {
                                     query: query, plainWords: squashedPlainWords(weights), weights: weights) {
                     found = (max(spelt.score - weights.spellingPenalty, weights.spellingVariant), spelt.plain)
                 }
+            }
+            if found == nil, fuzzy, isTypoMatch(words, query: queryWords) {
+                found = (weights.typo, false)
             }
             guard let (score, plain) = found else { continue }
             // Plain qualifiers aren't "extra": "Rice, white, cooked" is rice.
@@ -628,6 +787,18 @@ nonisolated enum FoodSearchRanker {
         if query.allSatisfy(words.contains) { return (query.last == head ? weights.headNoun : weights.allWordsExact, false) }
         if query.allSatisfy({ q in words.contains { $0.hasPrefix(q) } }) { return (weights.allWordsPrefix, false) }
         return nil
+    }
+
+    /// Every query word is a word of the name or its start, or one typo away
+    /// from a word ("omlette" → Omelette), and at least one is the typo.
+    private static func isTypoMatch(_ words: [String], query: [String]) -> Bool {
+        var typos = 0
+        for q in query {
+            if words.contains(where: { $0.hasPrefix(q) }) { continue }
+            guard words.contains(where: { FoodSearchText.isOneTypoAway($0, q) }) else { return false }
+            typos += 1
+        }
+        return typos > 0
     }
 
     private static let standardSquashedPlainWords = Set(Weights.standard.plainWords.map(FoodSearchText.squash))

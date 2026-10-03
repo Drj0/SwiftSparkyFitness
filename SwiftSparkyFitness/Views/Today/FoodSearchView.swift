@@ -193,12 +193,15 @@ struct FoodSearchView: View {
                 idlePrompt
                     .transition(entrance)
             case .results(let foods):
-                resultsListContent(foods, heading: viewModel.resultsAreClosestMatches ? "CLOSEST MATCHES" : "RESULTS")
-                    // A refinement is in flight: the previous list is still
-                    // the best answer available, so it recedes rather than
-                    // being replaced by a spinner on every keystroke.
-                    .opacity(viewModel.isSearching ? 0.45 : 1)
-                    .transition(entrance)
+                VStack(spacing: 0) {
+                    if viewModel.someSourcesFailed && !viewModel.isSearching { partialResultsNotice }
+                    resultsListContent(foods, heading: viewModel.resultsAreClosestMatches ? "CLOSEST MATCHES" : "RESULTS")
+                }
+                // A refinement is in flight: the previous list is still
+                // the best answer available, so it recedes rather than
+                // being replaced by a spinner on every keystroke.
+                .opacity(viewModel.isSearching ? 0.45 : 1)
+                .transition(entrance)
             case .noResults(let query):
                 NoResultsView(query: query) { isPresentingCustomFood = true }
                     .padding(.top, 48)
@@ -212,6 +215,30 @@ struct FoodSearchView: View {
                 .transition(entrance)
             }
         }
+    }
+
+    /// A source didn't answer but others did. Without this the list passes
+    /// for everything there is — "bread" showed only Bread upma whenever
+    /// Open Food Facts was busy, and read as "this app has no bread".
+    private var partialResultsNotice: some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.circle")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(AppColor.secondaryText)
+                .accessibilityHidden(true)
+            Text("Some results didn't load.")
+                .appBody(13)
+                .foregroundStyle(AppColor.secondaryText)
+            Spacer(minLength: 8)
+            Button("Retry") { Task { await viewModel.search() } }
+                .appBody(13, weight: .semibold)
+                .foregroundStyle(AppColor.accent)
+                .frame(minHeight: 44)
+                .contentShape(Rectangle())
+                .buttonStyle(.pressable)
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 4)
     }
 
     private var entrance: AnyTransition {
