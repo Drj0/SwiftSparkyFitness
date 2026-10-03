@@ -204,10 +204,11 @@ final class LocalAPIClient: APIClientProtocol {
     /// Two of its numbers are the ones the server actually computes, and both
     /// are reproduced deliberately:
     ///
-    /// - `burned` is `max(active energy, logged exercise)`, not their sum. The
-    ///   server takes the larger because active energy from Health already
-    ///   includes workouts; adding them would count a logged run twice on any
-    ///   day that also has Health data.
+    /// - `burned` is Health's active energy plus the exercise you logged that
+    ///   it doesn't already contain (`dayBurn`). Active energy includes every
+    ///   Health workout, so imported workouts, and hand-logged entries that
+    ///   match one by time, aren't added on top. The server itself takes
+    ///   `max(active, logged)`; this app shows its own, finer figure.
     /// - `goal` falls back to 2000 when no goal row exists, which is what the
     ///   server substitutes. It is kept distinct from `goals.calories`, which
     ///   stays nil — the goal-not-set card reads the latter, and collapsing the
@@ -220,11 +221,8 @@ final class LocalAPIClient: APIClientProtocol {
 
         let goals = try await goals(date: date)
         let entries = foodRows.map(Self.foodEntrySummary)
-        let sessions = exerciseRows.map(Self.exerciseSummary)
-
-        let active = sessions.healthActiveEnergy ?? 0
-        let logged = sessions.userLogged.reduce(0.0) { $0 + ($1.caloriesBurned ?? 0) }
-        let burned = max(active, logged)
+        let sessions = exerciseRows.map(Self.exerciseSummary).markingHealthDuplicates()
+        let burned = sessions.dayBurn
 
         let eaten = entries.reduce(0.0) { $0 + $1.calories }
         let goalCalories = goals.calories.flatMap { $0 > 0 ? $0 : nil } ?? 2000

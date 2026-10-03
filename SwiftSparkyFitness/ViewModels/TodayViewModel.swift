@@ -155,7 +155,7 @@ final class TodayViewModel: ObservableObject {
     /// sentinel out of, so the card can't show a workout the user never
     /// logged.
     private var loggedExerciseSessions: [ExerciseSessionSummary] {
-        summary?.exerciseSessions.userLogged ?? []
+        (summary?.exerciseSessions.userLogged ?? []).filter { !$0.isHealthDuplicate }
     }
 
     var hasLoggedExercise: Bool { !loggedExerciseSessions.isEmpty }
@@ -199,6 +199,41 @@ final class TodayViewModel: ObservableObject {
         try? await apiClient.syncActiveEnergy(kilocalories: kilocalories, date: today)
     }
 
+    /// The day's steps from Health, for the Steps card. Read only; nothing
+    /// here is written anywhere. Nil when Health is off or has none.
+    @Published private(set) var healthSteps: Int?
+
+    var showsHealthActivity: Bool { HealthSync.isEnabled && health.isAvailable }
+
+    /// Health's active energy as *stored* for the day, not a live read: it is
+    /// the figure the balance actually uses, so the card can't disagree with
+    /// the ring (a live read on a past day could, since only today is synced).
+    var healthActiveKilocalories: Double? { summary?.exerciseSessions.healthActiveEnergy }
+
+    /// Logged exercise on top of Health's active energy in the day's burn:
+    /// what Health doesn't already contain (see `dayBurn`).
+    var extraLoggedKilocalories: Double { summary?.exerciseSessions.handLoggedKilocalories ?? 0 }
+
+    private static let stepsAuthorizationKey = "healthStepsAuthorizationRequested"
+
+    private func loadHealthSteps() async {
+        guard showsHealthActivity else {
+            healthSteps = nil
+            return
+        }
+        // Anyone who connected Health before steps were read needs one more
+        // answer; HealthKit shows the sheet only for types not yet asked.
+        let defaults = UserDefaults.standard
+        if !defaults.bool(forKey: Self.stepsAuthorizationKey) {
+            _ = try? await health.requestAuthorization()
+            defaults.set(true, forKey: Self.stepsAuthorizationKey)
+        }
+        let day = today
+        let steps = try? await health.steps(on: day)
+        guard day == today else { return }
+        healthSteps = steps ?? nil
+    }
+
     func load() async {
         isLoading = true
         errorMessage = nil
@@ -216,12 +251,15 @@ final class TodayViewModel: ObservableObject {
             // confirmed live), so they're fetched alongside it rather than
             // serially.
             async let bodyTask = apiClient.bodyMeasurements(date: today)
+            // Steps come from Health, not the server, so they load alongside.
+            async let stepsTask: Void = loadHealthSteps()
             async let preferencesTask = apiClient.userPreferences()
 
             let loadedSummary = try await summaryTask
             let loadedMealTypes = try await mealTypesTask
             let loadedBody = try await bodyTask
             let loadedPreferences = try await preferencesTask
+            await stepsTask
             // Tapping through the week strip overlaps loads; a slower one for
             // a day the user already left must not paint over the newer day.
             guard day == today else { return }

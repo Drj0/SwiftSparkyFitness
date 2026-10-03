@@ -71,17 +71,19 @@ struct ServerAddressSheet: View {
     /// there closed.
     @State private var probe: Task<Void, Never>?
     @FocusState private var isFocused: Bool
+    @State private var confirmingDiscard = false
+    @State private var opened = ""
 
     private var offersOverride: Bool { problem?.allowsOverride == true }
     private var trimmedDraft: String { draft.trimmingCharacters(in: .whitespaces) }
+    private var isDirty: Bool { trimmedDraft != opened }
 
     var body: some View {
         VStack(spacing: 0) {
             SheetHeader(
                 title: title,
                 onCancel: {
-                    probe?.cancel()
-                    dismiss()
+                    if isDirty { confirmingDiscard = true } else { probe?.cancel(); dismiss() }
                 },
                 action: SheetAction(
                     saveTitle,
@@ -148,12 +150,14 @@ struct ServerAddressSheet: View {
         .background(AppColor.surface)
         .task {
             draft = ServerConfig.isUnconfigured ? "" : ServerConfig.urlString
+            opened = trimmedDraft
             isFocused = true
         }
         // Editing after a failed check is a new address, so it earns a fresh
         // check rather than inheriting the previous one's "Save anyway".
         .onChange(of: draft) { _, _ in problem = nil }
         .onDisappear { probe?.cancel() }
+        .discardGuard(isDirty: isDirty, isPresented: $confirmingDiscard) { probe?.cancel(); dismiss() }
     }
 
     /// Checks the address reaches a SparkyFitness server before saving it,

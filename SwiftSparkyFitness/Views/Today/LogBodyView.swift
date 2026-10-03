@@ -28,6 +28,7 @@ struct LogBodyView: View {
     /// already up on its first field. No return-key chaining between the
     /// rest: they're all decimal pads, which have no return key to chain.
     @FocusState private var focusedField: BodyField?
+    @State private var confirmingDiscard = false
 
     init(
         kind: LogBodyViewModel.Kind,
@@ -54,7 +55,7 @@ struct LogBodyView: View {
             // to 2 so the row keeps the height it had.
             SheetHeader(
                 title: viewModel.kind.title,
-                onCancel: { dismiss() },
+                onCancel: { if viewModel.isDirty { confirmingDiscard = true } else { dismiss() } },
                 action: SheetAction("Save", isBusy: viewModel.isSaving) {
                     Task {
                         if await viewModel.save() {
@@ -86,6 +87,7 @@ struct LogBodyView: View {
         }
         .background(AppColor.surface)
         .task { focusedField = viewModel.fields.first }
+        .discardGuard(isDirty: viewModel.isDirty, isPresented: $confirmingDiscard) { dismiss() }
     }
 
     @ViewBuilder

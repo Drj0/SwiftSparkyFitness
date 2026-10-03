@@ -32,6 +32,7 @@ struct CustomFoodView: View {
     /// they're also what the return key chains between.
     @FocusState private var nameFocused: Bool
     @FocusState private var caloriesFocused: Bool
+    @State private var confirmingDiscard = false
 
     var body: some View {
         VStack(spacing: 0) {
@@ -86,12 +87,13 @@ struct CustomFoodView: View {
         }
         .background(AppColor.surface)
         .task { nameFocused = true }
+        .discardGuard(isDirty: viewModel.isDirty, isPresented: $confirmingDiscard) { dismiss() }
     }
 
     private var header: some View {
         SheetHeader(
             title: "Custom Food",
-            onCancel: { dismiss() },
+            onCancel: { if viewModel.isDirty { confirmingDiscard = true } else { dismiss() } },
             // isSaving was published but never rendered, so a double-tap
             // during the round trip created a duplicate custom food.
             action: SheetAction("Save", isBusy: viewModel.isSaving) {

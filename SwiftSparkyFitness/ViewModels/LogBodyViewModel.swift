@@ -83,7 +83,17 @@ final class LogBodyViewModel: ObservableObject {
         self.minDate = minDate
         self.maxDate = maxDate
         self.apiClient = apiClient
-        self.text = Self.prefill(existing, fields: kind.fields, preferences: preferences)
+        let prefilled = Self.prefill(existing, fields: kind.fields, preferences: preferences)
+        self.text = prefilled
+        self.initialText = prefilled
+        self.initialDate = date
+    }
+
+    private let initialText: [String: String]
+    private let initialDate: Date
+
+    var isDirty: Bool {
+        text.filter { !$0.value.isEmpty } != initialText.filter { !$0.value.isEmpty } || date != initialDate
     }
 
     private static func prefill(_ existing: BodyMeasurements, fields: [BodyField], preferences: UserPreferences) -> [String: String] {

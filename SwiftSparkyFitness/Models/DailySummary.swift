@@ -147,6 +147,11 @@ struct ExerciseSessionSummary: Decodable, Identifiable {
     /// only carries it inside `exerciseSnapshot`, hence the fallback below.
     var modality: ExerciseModality? = nil
     var exerciseSnapshot: ExerciseSnapshot? = nil
+    /// Set by local assembly of the day (never decoded): this hand-logged
+    /// session is the same one as an Apple Health workout, so the day's
+    /// burn counts it once, as Health's. See `healthDuplicateIDs`.
+    var matchesHealthWorkout: Bool? = nil
+    var isHealthDuplicate: Bool { matchesHealthWorkout == true }
 
     /// What the logging form should branch its editor on when this entry is
     /// reopened — the entry's own modality if present, else the snapshot's.
@@ -202,5 +207,83 @@ extension Array where Element == ExerciseSessionSummary {
     /// The Health-sourced active energy for the day, if any has been synced.
     var healthActiveEnergy: Double? {
         first { $0.isHealthActiveEnergy }?.caloriesBurned
+    }
+}
+
+// MARK: - One session, two sources
+
+extension ExerciseSessionSummary {
+    /// Seconds since midnight for an "HH:mm:ss" entry time.
+    private var startSeconds: Double? {
+        guard let entryTime else { return nil }
+        let parts = entryTime.split(separator: ":").compactMap { Double($0) }
+        guard parts.count >= 2 else { return nil }
+        return parts[0] * 3600 + parts[1] * 60 + (parts.count > 2 ? parts[2] : 0)
+    }
+
+    /// Start and end of the session within its day, or nil when it has no
+    /// time or no length (older hand-logged entries) and so can't be matched.
+    fileprivate var window: ClosedRange<Double>? {
+        guard let start = startSeconds, let minutes = durationMinutes, minutes > 0 else { return nil }
+        return start...(start + minutes * 60)
+    }
+}
+
+extension Array where Element == ExerciseSessionSummary {
+    /// How far apart two sessions' times may sit and still be the same one.
+    /// A hand-logged entry carries when it was *logged*, usually just after
+    /// the workout ended, not when it started.
+    static var healthMatchTolerance: Double { 10 * 60 }
+
+    /// Hand-logged sessions that are the same session as a workout imported
+    /// from Apple Health: their time windows are within ten minutes of each
+    /// other and their lengths within a factor of two (so a long gym session
+    /// logged after a short Watch walk isn't swallowed by it).
+    var healthDuplicateIDs: Set<String> {
+        let health = userLogged.filter(\.isHealthWorkout).compactMap { session in session.window.map { (session, $0) } }
+        var ids: Set<String> = []
+        for session in userLogged where !session.isHealthWorkout {
+            guard let mine = session.window, let minutes = session.durationMinutes else { continue }
+            let matched = health.contains { other, theirs in
+                let longer = Swift.max(minutes, other.durationMinutes ?? 0)
+                let shorter = Swift.min(minutes, other.durationMinutes ?? 0)
+                return shorter / longer >= 0.5
+                    && mine.lowerBound <= theirs.upperBound + Self.healthMatchTolerance
+                    && theirs.lowerBound <= mine.upperBound + Self.healthMatchTolerance
+            }
+            if matched { ids.insert(session.id) }
+        }
+        return ids
+    }
+
+    /// Calories from hand-logged sessions that Health's active energy does
+    /// not already include: everything logged except imported workouts and
+    /// the hand-logged duplicates of them.
+    var handLoggedKilocalories: Double {
+        let duplicates = healthDuplicateIDs
+        return userLogged
+            .filter { !$0.isHealthWorkout && !duplicates.contains($0.id) }
+            .reduce(0) { $0 + ($1.caloriesBurned ?? 0) }
+    }
+
+    /// The day's burn: Health's active energy (which already contains its
+    /// workouts, imported or not) plus whatever was logged that it doesn't.
+    /// With Health off there is no active energy and no imports, so this is
+    /// just the logged total.
+    var dayBurn: Double {
+        let active = healthActiveEnergy ?? 0
+        let imported = userLogged.filter(\.isHealthWorkout).reduce(0.0) { $0 + ($1.caloriesBurned ?? 0) }
+        return Swift.max(active, imported) + handLoggedKilocalories
+    }
+
+    /// Copy with duplicates flagged, for the lists to badge.
+    func markingHealthDuplicates() -> [ExerciseSessionSummary] {
+        let duplicates = healthDuplicateIDs
+        guard !duplicates.isEmpty else { return self }
+        return map { session in
+            var copy = session
+            if duplicates.contains(session.id) { copy.matchesHealthWorkout = true }
+            return copy
+        }
     }
 }

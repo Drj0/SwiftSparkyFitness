@@ -32,6 +32,7 @@ struct ExerciseEntryEditorView: View {
     var onSaved: () -> Void = {}
 
     @State private var isConfirmingDelete = false
+    @State private var confirmingDiscard = false
     @State private var showsMoreDetails = false
 
     /// False when the caller closes the whole sheet itself on save (Log
@@ -111,6 +112,7 @@ struct ExerciseEntryEditorView: View {
         }
         .background(AppColor.surface)
         .task { await viewModel.loadUnits() }
+        .discardGuard(isDirty: viewModel.isDirty, isPresented: $confirmingDiscard) { dismiss() }
         .confirmationDialog("Delete this \(viewModel.exercise.name) session?", isPresented: $isConfirmingDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 Task {
@@ -126,7 +128,7 @@ struct ExerciseEntryEditorView: View {
     private var header: some View {
         SheetHeader(
             title: viewModel.isEditing ? "Edit \(viewModel.exercise.name)" : viewModel.exercise.name,
-            onCancel: { dismiss() },
+            onCancel: { if viewModel.isDirty { confirmingDiscard = true } else { dismiss() } },
             action: SheetAction("Save", isBusy: viewModel.isSaving) {
                 Task {
                     if await viewModel.save() {

@@ -2610,11 +2610,11 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertTrue(range.values.allSatisfy { $0.calories == 2000 })
     }
 
-    /// The server takes the larger of Health's active energy and the workouts
-    /// you logged, never their sum, because active energy already includes
-    /// workouts on a real device. Summing would pay twice for the same run.
+    /// Health's active energy already contains Health's own workouts, but a
+    /// hand-logged entry with no time can't be matched to one, so it adds on
+    /// top: a gym session Health never recorded still counts.
     @MainActor
-    func testLocalBurnedTakesTheLargerOfHealthAndLoggedExercise() async throws {
+    func testLocalBurnedAddsUnmatchedLoggedExerciseToHealthEnergy() async throws {
         let local = makeLocal()
         let exercise = try await local.findOrCreateExercise(named: "Probe Run")
         _ = try await local.createExerciseEntry(
@@ -2624,16 +2624,81 @@ final class SwiftSparkyFitnessTests: XCTestCase {
 
         let summary = try await local.dailySummary(date: day(0))
 
-        XCTAssertEqual(summary.calorieBalance.burned, 500, "max(500 health, 300 logged), not 800")
+        XCTAssertEqual(summary.calorieBalance.burned, 800)
         // And the sentinel must not show up as a workout the user can edit.
         XCTAssertEqual(summary.exerciseSessions.userLogged.count, 1)
         XCTAssertEqual(summary.exerciseSessions.userLogged.first?.name, "Probe Run")
 
-        // The other direction, which is the common one on a phone left on a
-        // desk: a logged workout larger than the day's active energy.
-        try await local.syncActiveEnergy(kilocalories: 100, date: day(0))
-        let quietDay = try await local.dailySummary(date: day(0))
-        XCTAssertEqual(quietDay.calorieBalance.burned, 300, "max(100 health, 300 logged)")
+        // No Health data at all: just what was logged.
+        try await local.syncActiveEnergy(kilocalories: 0, date: day(0))
+        let noHealth = try await local.dailySummary(date: day(0))
+        XCTAssertEqual(noHealth.calorieBalance.burned, 300)
+    }
+
+    /// The same session from two sources counts once, as Health's, and the
+    /// hand-logged copy is flagged so the list can say why.
+    @MainActor
+    func testLocalBurnedCountsAHealthWorkoutAndItsHandLoggedTwinOnce() async throws {
+        let local = makeLocal()
+        let exercise = try await local.findOrCreateExercise(named: "Probe Run")
+        func log(time: String, minutes: Double, kcal: Double, note: String?) async throws {
+            _ = try await local.createExerciseEntry(ExerciseEntryInput(
+                exerciseId: exercise.id, modality: .duration, entryDate: day(0), entryTime: time,
+                durationMinutes: minutes, caloriesBurned: kcal, notes: note
+            ))
+        }
+        try await log(time: "10:00:00", minutes: 30, kcal: 300, note: HealthWorkoutImporter.note)  // Watch, 10:00-10:30
+        try await log(time: "10:35:00", minutes: 28, kcal: 260, note: nil)                          // twin, logged 5 min after
+        try await local.syncActiveEnergy(kilocalories: 500, date: day(0))
+
+        let summary = try await local.dailySummary(date: day(0))
+
+        XCTAssertEqual(summary.calorieBalance.burned, 500, "Health's 500 already contains the run; the twin adds nothing")
+        XCTAssertEqual(summary.exerciseSessions.userLogged.filter(\.isHealthDuplicate).count, 1)
+        XCTAssertEqual(summary.exerciseSessions.handLoggedKilocalories, 0)
+    }
+
+    /// Near in time isn't enough on its own: a different-length session, or
+    /// one logged much later, is its own workout and adds on top.
+    @MainActor
+    func testLocalBurnedDoesNotMergeSessionsThatMerelyNeighbourAHealthWorkout() async throws {
+        let local = makeLocal()
+        let exercise = try await local.findOrCreateExercise(named: "Probe Run")
+        func log(time: String, minutes: Double, kcal: Double, note: String?) async throws {
+            _ = try await local.createExerciseEntry(ExerciseEntryInput(
+                exerciseId: exercise.id, modality: .duration, entryDate: day(0), entryTime: time,
+                durationMinutes: minutes, caloriesBurned: kcal, notes: note
+            ))
+        }
+        try await log(time: "10:00:00", minutes: 20, kcal: 200, note: HealthWorkoutImporter.note)  // 10:00-10:20
+        try await log(time: "10:25:00", minutes: 90, kcal: 500, note: nil)                          // right after, but 4.5x as long
+        try await log(time: "15:00:00", minutes: 20, kcal: 150, note: nil)                          // hours later
+        try await local.syncActiveEnergy(kilocalories: 400, date: day(0))
+
+        let summary = try await local.dailySummary(date: day(0))
+
+        XCTAssertEqual(summary.exerciseSessions.filter(\.isHealthDuplicate).count, 0)
+        XCTAssertEqual(summary.calorieBalance.burned, 400 + 500 + 150)
+    }
+
+    /// The edit sheet must hand an entry's time back on save, or reopening an
+    /// imported workout would stop it matching its twin.
+    @MainActor
+    func testEditingAnEntryKeepsItsTime() async throws {
+        let local = makeLocal()
+        let exercise = try await local.findOrCreateExercise(named: "Probe Run")
+        let created = try await local.createExerciseEntry(ExerciseEntryInput(
+            exerciseId: exercise.id, modality: .duration, entryDate: day(0), entryTime: "10:00:00",
+            durationMinutes: 30, caloriesBurned: 300, notes: HealthWorkoutImporter.note
+        ))
+        let viewModel = ExerciseEntryEditorViewModel(
+            editing: created, exercise: created.asExercise, apiClient: local
+        )
+        let saved = await viewModel.save()
+        XCTAssertTrue(saved)
+
+        let sessions = try await local.dailySummary(date: day(0)).exerciseSessions
+        XCTAssertEqual(sessions.userLogged.first?.entryTime, "10:00:00")
     }
 
     /// Repeating a sync must overwrite the day's figure rather than stacking
@@ -4003,5 +4068,16 @@ extension SwiftSparkyFitnessTests {
         }
         let perSearch = Date().timeIntervalSince(start) / 10
         XCTAssertLessThan(perSearch, 0.01, "one INDB search took \(Int(perSearch * 1_000_000))µs")
+    }
+}
+
+final class EntryTimeStampTests: XCTestCase {
+    func testStampTimeIfToday() {
+        var today = ExerciseEntryInput(exerciseId: "x", modality: .duration, entryDate: Date(), caloriesBurned: 1)
+        today.stampTimeIfToday()
+        XCTAssertNotNil(today.entryTime?.wholeMatch(of: /\d{2}:\d{2}:\d{2}/))
+        var past = ExerciseEntryInput(exerciseId: "x", modality: .duration, entryDate: Date().addingTimeInterval(-3 * 86_400), caloriesBurned: 1)
+        past.stampTimeIfToday()
+        XCTAssertNil(past.entryTime)
     }
 }

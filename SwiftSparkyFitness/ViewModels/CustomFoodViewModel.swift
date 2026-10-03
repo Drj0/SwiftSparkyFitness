@@ -26,6 +26,12 @@ final class CustomFoodViewModel: ObservableObject {
 
     private let apiClient: APIClientProtocol
 
+    /// Anything typed or changed from the form's opening defaults.
+    var isDirty: Bool {
+        !name.isEmpty || !calories.isEmpty || servingSize != "1" || servingUnit != "serving"
+            || protein != "0" || carbs != "0" || fat != "0"
+    }
+
     init(apiClient: APIClientProtocol = AppServices.client) {
         self.apiClient = apiClient
     }

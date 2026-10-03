@@ -41,6 +41,7 @@ struct SetGoalsView: View {
     @StateObject private var viewModel: GoalsViewModel
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var confirmingDiscard = false
 
     /// Set by the sheet presentation (Today) and not by the push (Settings):
     /// a pushed screen already has a back button, and a second way out
@@ -84,10 +85,20 @@ struct SetGoalsView: View {
         }
         .navigationTitle("Goals")
         .navigationBarTitleDisplayMode(.inline)
+        .navigationBarBackButtonHidden(!showsCancel && viewModel.isDirty)
         .toolbar {
+            // Pushed from Settings the system back button would drop edits
+            // silently, so while there are any it's swapped for one that asks.
+            if !showsCancel && viewModel.isDirty {
+                ToolbarItem(placement: .topBarLeading) {
+                    Button { confirmingDiscard = true } label: {
+                        Label("Back", systemImage: "chevron.backward")
+                    }
+                }
+            }
             if showsCancel {
                 ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { dismiss() }
+                    Button("Cancel") { if viewModel.isDirty { confirmingDiscard = true } else { dismiss() } }
                         .tint(AppColor.secondaryText)
                 }
             }
@@ -111,6 +122,7 @@ struct SetGoalsView: View {
             }
         }
         .task { await viewModel.load() }
+        .discardGuard(isDirty: viewModel.isDirty, isPresented: $confirmingDiscard) { dismiss() }
     }
 
     private var form: some View {

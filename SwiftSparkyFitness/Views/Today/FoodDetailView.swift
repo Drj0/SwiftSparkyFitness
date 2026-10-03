@@ -13,6 +13,7 @@ struct FoodDetailView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     let onLogged: () -> Void
+    @State private var confirmingDiscard = false
     /// False when the caller closes the whole sheet itself on save (Log
     /// Food): going Back here first slid the search list in under a sheet
     /// already on its way down.
@@ -73,6 +74,7 @@ struct FoodDetailView: View {
             .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .top)
         }
         .background(AppColor.surface)
+        .discardGuard(isDirty: viewModel.isDirty, isPresented: $confirmingDiscard) { dismiss() }
         .alert("Couldn't log that", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
             set: { isPresented in if !isPresented { viewModel.errorMessage = nil } }
@@ -95,7 +97,7 @@ struct FoodDetailView: View {
     // touch target of its own; the row keeps its measured height.
     private var header: some View {
         HStack {
-            Button { dismiss() } label: {
+            Button { if viewModel.isDirty { confirmingDiscard = true } else { dismiss() } } label: {
                 Text("‹ Back")
                     .appBody(15)
                     .foregroundStyle(AppColor.accent)

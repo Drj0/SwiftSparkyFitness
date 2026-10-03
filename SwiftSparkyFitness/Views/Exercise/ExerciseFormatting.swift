@@ -104,6 +104,17 @@ enum ExerciseFormatting {
 }
 
 extension ExerciseEntryInput {
+    /// When logging for today, records the time of day ("HH:mm:ss", as
+    /// imported workouts have) so a hand-logged session can be matched to a
+    /// Health workout from the same time. A past day has no meaningful "now".
+    mutating func stampTimeIfToday() {
+        guard Calendar.current.isDateInToday(entryDate) else { return }
+        entryTime = Date().formatted(.verbatim(
+            "\(hour: .twoDigits(clock: .twentyFourHour, hourCycle: .zeroBased)):\(minute: .twoDigits):\(second: .twoDigits)",
+            locale: Locale(identifier: "en_US_POSIX"), timeZone: .current, calendar: .current
+        ))
+    }
+
     /// The same session again, on `date` — what one-tap "log again" sends.
     init(repeating last: ExerciseLastSession, exercise: Exercise, on date: Date) {
         self.init(
@@ -113,6 +124,7 @@ extension ExerciseEntryInput {
             durationMinutes: last.durationMinutes,
             caloriesBurned: last.caloriesBurned
         )
+        stampTimeIfToday()
         distance = last.distance
         sets = last.sets.enumerated().map { index, set in
             var copy = set
@@ -130,6 +142,7 @@ extension ExerciseEntryInput {
             durationMinutes: session.durationMinutes,
             caloriesBurned: session.caloriesBurned ?? 0
         )
+        stampTimeIfToday()
         distance = session.distance
         avgHeartRate = session.avgHeartRate
         sets = session.setsList.enumerated().map { index, set in

@@ -18,6 +18,9 @@ struct CustomExerciseView: View {
     let onSaved: (Exercise) -> Void
 
     @FocusState private var nameFocused: Bool
+    @State private var confirmingDiscard = false
+
+    private var isDirty: Bool { viewModel.isDirty(initialName: initialName) }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -61,12 +64,13 @@ struct CustomExerciseView: View {
             if viewModel.name.isEmpty { viewModel.name = initialName.capitalized }
             nameFocused = true
         }
+        .discardGuard(isDirty: isDirty, isPresented: $confirmingDiscard) { dismiss() }
     }
 
     private var header: some View {
         SheetHeader(
             title: "Custom Exercise",
-            onCancel: { dismiss() },
+            onCancel: { if isDirty { confirmingDiscard = true } else { dismiss() } },
             action: SheetAction("Save", isBusy: viewModel.isSaving) {
                 Task {
                     if let exercise = await viewModel.save() {

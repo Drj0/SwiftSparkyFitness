@@ -42,6 +42,42 @@ struct ExerciseTodayCard: View {
     }
 }
 
+/// Today's steps from Apple Health, full width under Weight and Exercise.
+/// Display only: steps never reach the server (see HealthKitService). The
+/// caption explains the calorie figure: the balance counts Health's active
+/// energy plus any logged exercise Health doesn't already contain.
+struct StepsTodayCard: View {
+    let steps: Int?
+    /// Health's active energy as stored for the day, and the logged exercise
+    /// that adds to it.
+    let healthKilocalories: Double?
+    let extraLoggedKilocalories: Double
+
+    private var caption: String {
+        guard let healthKilocalories else {
+            return steps == nil ? "No steps from Health yet" : "From Apple Health"
+        }
+        let health = Int(healthKilocalories.rounded())
+        guard extraLoggedKilocalories > 0 else { return "\(health) kcal active energy from Health" }
+        return "Health \(health) kcal + \(Int(extraLoggedKilocalories.rounded())) kcal you logged"
+    }
+
+    var body: some View {
+        TodayStatTile(
+            title: "Steps", symbol: "figure.walk", tint: AppColor.energy,
+            value: steps.map { $0.formatted() } ?? "—",
+            valueIsEmpty: steps == nil,
+            unit: "steps",
+            caption: caption
+        )
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Steps")
+        .accessibilityValue(
+            [steps.map { "\($0) steps" }, caption].compactMap { $0 }.joined(separator: ", ")
+        )
+    }
+}
+
 #Preview {
     HStack(spacing: 12) {
         ExerciseTodayCard(durationMinutes: 30, caloriesBurned: 180, hasLogged: true) {}

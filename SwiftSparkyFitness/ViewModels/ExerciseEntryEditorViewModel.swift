@@ -88,6 +88,19 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
     private let existingEntryId: String?
     private let entryDate: Date
     var isEditing: Bool { existingEntryId != nil }
+    /// The time the entry already carries when reopened. Saving must send it
+    /// back: an edit used to clear it, which would stop an imported workout
+    /// being matched against a hand-logged one.
+    private var existingEntryTime: String?
+
+    /// The form's content as it opened (including anything prefilled from
+    /// the last session); edits are measured against this.
+    private var baseline = ""
+    private var snapshot: String {
+        let sets = setRows.map { [$0.repsText, $0.weightText, $0.rpeText, $0.notes].joined(separator: "|") }
+        return ([durationMinutesText, caloriesText, distanceText, avgHeartRateText, notes] + sets).joined(separator: "\n")
+    }
+    var isDirty: Bool { snapshot != baseline }
 
     /// True when the form opened pre-filled from `lastSession`: the common
     /// case is then just Save, so nothing grabs focus and raises a keyboard
@@ -132,6 +145,7 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
             distanceText = usable.distance.map(Self.trimmedNumber) ?? ""
         }
         applyEstimateIfNeeded()
+        baseline = snapshot
     }
 
     /// Edit mode: reopens an already-logged session, prefilled from it
@@ -143,6 +157,7 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
         self.modality = entry.effectiveModality
         self.entryDate = ExerciseEntryEditorViewModel.parseEntryDate(entry.entryDate) ?? Date()
         self.existingEntryId = entry.id
+        self.existingEntryTime = entry.entryTime
         self.apiClient = apiClient
         self.lastSession = nil
         self.durationMinutesText = entry.durationMinutes.map { $0 > 0 ? String(Int($0)) : "" } ?? ""
@@ -159,6 +174,7 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
             return row
         }
         self.setRows = modality.usesSets ? (existingSets.isEmpty ? [ExerciseSetRow()] : existingSets) : []
+        baseline = snapshot
     }
 
     /// "100" for a whole weight/distance/RPE, "102.5" for a fractional one —
@@ -345,6 +361,13 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
             durationMinutes: minutes, caloriesBurned: calories,
             notes: notes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : notes
         )
+        // When it was logged, so it can be matched to a Health workout from
+        // the same time. Only for today: a past day has no meaningful "now".
+        if isEditing {
+            input.entryTime = existingEntryTime
+        } else {
+            input.stampTimeIfToday()
+        }
         if modality == .durationDistance {
             input.distance = distance
             input.avgHeartRate = Int(avgHeartRateText)

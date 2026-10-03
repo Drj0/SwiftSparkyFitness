@@ -26,6 +26,11 @@ final class CustomExerciseViewModel: ObservableObject {
 
     private let apiClient: APIClientProtocol
 
+    /// Anything beyond the name the sheet opened with (`initialName`).
+    func isDirty(initialName: String) -> Bool {
+        name != initialName.capitalized || !category.isEmpty || modality != .weightReps
+    }
+
     init(apiClient: APIClientProtocol = AppServices.client) {
         self.apiClient = apiClient
     }

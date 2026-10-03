@@ -83,6 +83,10 @@ final class GoalsViewModel: ObservableObject {
 
     var canSave: Bool { loaded != nil && !isSaving }
 
+    /// Text as the last load left it; edits are measured against this.
+    private var baseline: [String: String] = [:]
+    var isDirty: Bool { loaded != nil && text != baseline }
+
     func unitLabel(for field: Field) -> String {
         switch field {
         case .calories: return "kcal"
@@ -191,6 +195,7 @@ final class GoalsViewModel: ObservableObject {
             if (goals.calories ?? 0) <= 0 {
                 text[Field.calories.rawValue] = String(Int(Self.suggestedCalories))
             }
+            baseline = text
         } catch {
             loadFailed = true
             bannerMessage = error.localizedDescription

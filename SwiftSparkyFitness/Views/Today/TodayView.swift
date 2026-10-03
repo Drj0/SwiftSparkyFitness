@@ -415,6 +415,14 @@ struct TodayView: View {
             }
         }
         .fixedSize(horizontal: false, vertical: true)
+
+        if viewModel.showsHealthActivity {
+            StepsTodayCard(
+                steps: viewModel.healthSteps,
+                healthKilocalories: viewModel.healthActiveKilocalories,
+                extraLoggedKilocalories: viewModel.extraLoggedKilocalories
+            )
+        }
     }
 }
 

@@ -25,6 +25,9 @@ final class FoodDetailViewModel: ObservableObject {
     private let existingEntryId: String?
     private let entryDate: Date
     var isEditing: Bool { existingEntryId != nil }
+    private let initialQuantity: Double
+    private let initialMealTypeId: String
+    var isDirty: Bool { quantity != initialQuantity || selectedMealType.id != initialMealTypeId }
 
     init(
         food: Food, mealTypes: [MealType], initialMealType: MealType,
@@ -38,9 +41,12 @@ final class FoodDetailViewModel: ObservableObject {
         // default for something never logged before). Edit mode must start
         // at what's actually logged — defaulting to the base serving size
         // there would silently rewrite a 100g entry down to 50g on open.
-        self.quantity = initialQuantity ?? food.defaultVariant?.servingSize ?? 100
+        let startQuantity = initialQuantity ?? food.defaultVariant?.servingSize ?? 100
+        self.quantity = startQuantity
         self.existingEntryId = existingEntryId
         self.entryDate = entryDate
+        self.initialQuantity = startQuantity
+        self.initialMealTypeId = initialMealType.id
         self.apiClient = apiClient
     }
 

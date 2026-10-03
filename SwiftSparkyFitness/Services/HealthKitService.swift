@@ -5,8 +5,8 @@
 //  Reads the day's active energy from Health. Read-only — the app never
 //  writes to HealthKit, which is why the entitlement asks for no share types.
 //
-//  WHY ACTIVE ENERGY AND NOT STEPS
-//  -------------------------------
+//  WHY ACTIVE ENERGY AND NOT STEPS (for the server)
+//  ------------------------------------------------
 //  The server can take either, and the difference matters because it decides
 //  whether the figure gets double-counted against exercise the user logged by
 //  hand. Reading `calorieCalculations.ts`:
@@ -26,9 +26,9 @@
 //  and posts it to the endpoint built for exactly this, and the server's
 //  `max()` does the de-duplication.
 //
-//  Steps are deliberately not read or written. They'd be a second, weaker
-//  estimate of the same quantity, and writing them is the branch that can
-//  double-count.
+//  Steps are read for display only (Today's Steps card) and are never sent
+//  to the server. They'd be a second, weaker estimate of the same quantity,
+//  and writing them is the branch that can double-count.
 //
 //  THE PERMISSION MODEL IS NOT SYMMETRIC, AND THAT SHAPES THE UI
 //  ------------------------------------------------------------
@@ -111,10 +111,14 @@ protocol HealthKitReading {
     /// False means "nothing arrived", never "you were refused".
     func hasRecentEnergy(days: Int) async -> Bool
     func workouts(on date: Date) async throws -> [HealthWorkout]
+    /// The day's step count, or nil when Health has none (no samples, or a
+    /// refused read — indistinguishable, see the note at the top).
+    func steps(on date: Date) async throws -> Int?
 }
 
 extension HealthKitReading {
     func workouts(on date: Date) async throws -> [HealthWorkout] { [] }
+    func steps(on date: Date) async throws -> Int? { nil }
 }
 
 /// One workout recorded in Health (Apple Watch, or any app that writes
@@ -140,7 +144,7 @@ final class HealthKitService: HealthKitReading {
     /// workout's calories and distance are read from its statistics, which
     /// needs read access to those quantity types too.
     private var readTypes: Set<HKObjectType> {
-        [energyType, .workoutType(),
+        [energyType, HKQuantityType(.stepCount), .workoutType(),
          HKQuantityType(.distanceWalkingRunning), HKQuantityType(.distanceCycling), HKQuantityType(.distanceSwimming)]
     }
 
@@ -202,6 +206,26 @@ final class HealthKitService: HealthKitReading {
 }
 
 extension HealthKitService {
+    func steps(on date: Date) async throws -> Int? {
+        guard isAvailable else { return nil }
+        let calendar = Calendar(identifier: .gregorian)
+        let start = calendar.startOfDay(for: date)
+        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return nil }
+
+        // Statistics, not raw samples: Health merges iPhone and Watch so the
+        // same steps aren't counted twice.
+        let descriptor = HKStatisticsQueryDescriptor(
+            predicate: .quantitySample(
+                type: HKQuantityType(.stepCount),
+                predicate: HKQuery.predicateForSamples(withStart: start, end: end)
+            ),
+            options: .cumulativeSum
+        )
+        guard let sum = try await descriptor.result(for: store)?.sumQuantity() else { return nil }
+        let count = Int(sum.doubleValue(for: .count()).rounded())
+        return count > 0 ? count : nil
+    }
+
     func workouts(on date: Date) async throws -> [HealthWorkout] {
         guard isAvailable else { return [] }
         let calendar = Calendar(identifier: .gregorian)

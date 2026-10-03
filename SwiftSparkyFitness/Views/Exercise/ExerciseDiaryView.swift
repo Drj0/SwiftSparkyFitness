@@ -236,6 +236,15 @@ struct ExerciseDiaryView: View {
                             .foregroundStyle(AppColor.secondaryText)
                             .lineLimit(1)
                     }
+                    if session.isHealthDuplicate {
+                        // Same time as an imported workout: kept as typed, but
+                        // the day counts Health's version once.
+                        Label("Same as your Apple Health workout, counted once", systemImage: "heart.fill")
+                            .labelStyle(.titleAndIcon)
+                            .appBody(11)
+                            .foregroundStyle(AppColor.secondaryText)
+                            .lineLimit(2)
+                    }
                 }
                 Spacer(minLength: 8)
                 VStack(alignment: .trailing, spacing: 0) {
@@ -267,7 +276,7 @@ struct ExerciseDiaryView: View {
             }
         }
         .accessibilityElement(children: .ignore)
-        .accessibilityLabel("\(name), \(session.isHealthWorkout ? "from Apple Health, " : "")\(detail)")
+        .accessibilityLabel("\(name), \(session.isHealthWorkout ? "from Apple Health, " : "")\(session.isHealthDuplicate ? "same as an Apple Health workout, counted once, " : "")\(detail)")
         .accessibilityValue("\(calories) calories burned")
         .accessibilityHint(session.exerciseId != nil ? "Opens for editing" : "")
         .accessibilityActions {
