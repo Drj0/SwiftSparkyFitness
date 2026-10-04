@@ -174,6 +174,10 @@ extension DiaryArchive {
         var defaultDistanceUnit, activityLevel: String
         var exerciseCaloriePercentage: Double
         var updatedAt: Date
+        /// Onboarding's answers. Optional, so files written before them
+        /// still read.
+        var sex, birthDate, primaryGoal: String?
+        var targetWeight: Double?
     }
 
     struct MealType: Codable, Equatable {
@@ -254,7 +258,8 @@ extension DiaryArchive {
                     waterDisplayUnit: row.waterDisplayUnit, measurementDecimalPlaces: row.measurementDecimalPlaces,
                     itemDisplayLimit: row.itemDisplayLimit, defaultDistanceUnit: row.defaultDistanceUnit,
                     activityLevel: row.activityLevel, exerciseCaloriePercentage: row.exerciseCaloriePercentage,
-                    updatedAt: row.updatedAt)
+                    updatedAt: row.updatedAt, sex: row.sex, birthDate: row.birthDate, primaryGoal: row.primaryGoal,
+                    targetWeight: row.targetWeight)
     }
 
     static func archived(_ row: LocalMealType) -> MealType {
@@ -424,6 +429,9 @@ extension DiaryArchive {
         row.waterDisplayUnit = item.waterDisplayUnit; row.measurementDecimalPlaces = item.measurementDecimalPlaces
         row.itemDisplayLimit = item.itemDisplayLimit; row.defaultDistanceUnit = item.defaultDistanceUnit
         row.activityLevel = item.activityLevel; row.exerciseCaloriePercentage = item.exerciseCaloriePercentage
+        // An older file has no answers; it shouldn't erase newer ones.
+        row.sex = item.sex ?? row.sex; row.birthDate = item.birthDate ?? row.birthDate
+        row.primaryGoal = item.primaryGoal ?? row.primaryGoal; row.targetWeight = item.targetWeight ?? row.targetWeight
     }
 
     private static func apply(_ item: MealType, to row: LocalMealType) {

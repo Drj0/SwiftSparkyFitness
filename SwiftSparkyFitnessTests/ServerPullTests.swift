@@ -54,7 +54,8 @@ final class ServerPullTests: XCTestCase {
         var goals = try await backing.goals(date: day)
         goals.calories = 2100
         try await backing.saveGoals(goals, startingOn: day)
-        _ = try await backing.updateUserPreference(.weight, to: "lbs")
+        // Through the fake, which (like the server) doesn't convert on a switch.
+        _ = try await server.updateUserPreference(.weight, to: "lbs")
     }
 
     private func assertSameDay(_ a: LocalAPIClient, _ b: LocalAPIClient, file: StaticString = #filePath, line: UInt = #line) async throws {
@@ -79,8 +80,9 @@ final class ServerPullTests: XCTestCase {
 
         XCTAssertGreaterThan(report.added, 0)
         try await assertSameDay(device, server.backing)
+        // The server's 72.5 kg, shown in the pulled lb.
         let weight = try await device.bodyMeasurements(date: day).weight
-        XCTAssertEqual(weight, 72.5)
+        XCTAssertEqual(weight, 159.84)
         let calories = try await device.goals(date: day).calories
         XCTAssertEqual(calories, 2100)
         let unit = try await device.userPreferences().defaultWeightUnit

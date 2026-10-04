@@ -41,6 +41,8 @@ struct MainTabView: View {
     /// over first, which can take a while on a long history.
     @State private var deviceMove: Task<Void, Never>?
     @State private var deviceMoveError: String?
+    /// First-run setup, opened on its own while there's no goal yet.
+    @State private var isOnboarding = false
 
     var body: some View {
         TabView(selection: $selection) {
@@ -85,6 +87,21 @@ struct MainTabView: View {
         .task {
             checkOtherDevices()
             if !AppMode.isLocal, PendingServerHandoff.isPending { isOfferingHandoff = true }
+            // Not over the handoff offer: someone bringing a diary along
+            // isn't new.
+            if !isOfferingHandoff, await OnboardingGate.shouldShow(account: serverSync.account) {
+                // No slide up over Today: on a first run it's the next screen
+                // after the start screen, not a sheet over an empty diary.
+                var transaction = Transaction()
+                transaction.disablesAnimations = true
+                withTransaction(transaction) { isOnboarding = true }
+            }
+        }
+        .fullScreenCover(isPresented: $isOnboarding) {
+            OnboardingView(account: serverSync.account) {
+                isOnboarding = false
+                NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+            }
         }
         .alert(moveElsewhereTitle, isPresented: $isShowingMoveElsewhere, presenting: moveElsewhere) { handoff in
             if handoff.toMode == AppMode.server.rawValue {

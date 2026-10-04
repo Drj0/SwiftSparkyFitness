@@ -69,6 +69,7 @@ final class ServerPull {
         var days: [Day] = []
         var mealTypes: [MealType] = []
         var preferences: UserPreferences?
+        var profile: UserProfile?
         var goals: [String: NutritionGoals] = [:]
         var body: [DatedBodyMeasurements] = []
     }
@@ -94,6 +95,7 @@ final class ServerPull {
         var snapshot = Snapshot()
         snapshot.mealTypes = try await server.mealTypes()
         snapshot.preferences = try? await server.userPreferences()
+        snapshot.profile = try? await server.profile()
         snapshot.goals = try await server.goals(from: first, to: last)
         snapshot.body = try await server.bodyMeasurements(from: first, to: last)
 
@@ -152,7 +154,7 @@ final class ServerPull {
 
         try store.applyingRemoteChanges {
             let meals = applyMealTypes(snapshot.mealTypes, now: now, report: &report)
-            if let preferences = snapshot.preferences { applyPreferences(preferences, now: now) }
+            if let preferences = snapshot.preferences { applyPreferences(preferences, profile: snapshot.profile, now: now) }
             applyFoodEntries(snapshot.days, dayKeys: dayKeys, meals: meals, now: now, report: &report)
             applyExerciseEntries(snapshot.days, dayKeys: dayKeys, now: now, report: &report)
             applyWater(snapshot.days, dayKeys: dayKeys, now: now, report: &report)
@@ -270,7 +272,7 @@ final class ServerPull {
 
     // MARK: Preferences
 
-    private func applyPreferences(_ server: UserPreferences, now: Date) {
+    private func applyPreferences(_ server: UserPreferences, profile: UserProfile?, now: Date) {
         let row = store.all(LocalPreferences.self).first ?? {
             let fresh = LocalPreferences()
             store.context.insert(fresh)
@@ -279,8 +281,18 @@ final class ServerPull {
         let isLinked = link(for: row) != nil
         guard isLinked ? !dirty(row) : row.updatedAt == .distantPast else { return }
         let before = DiaryArchive.archived(row)
+        let unitsBefore = LocalAPIClient.preferences(row)
         for setting in UserPreferences.Setting.allCases {
             LocalAPIClient.apply(setting, server.value(for: setting), to: row)
+        }
+        let units = LocalAPIClient.preferences(row)
+        LocalAPIClient.convertStoredUnits(from: unitsBefore, to: units, in: store)
+        // Only fills gaps: the server has no primary goal, and its target
+        // weight only changes when onboarding is submitted.
+        if let profile {
+            row.sex = row.sex ?? profile.sex?.rawValue
+            row.birthDate = row.birthDate ?? profile.birthDate
+            row.targetWeight = row.targetWeight ?? profile.targetWeight.map { units.fromMetric($0, .weight) }
         }
         if DiaryArchive.archived(row) != before || !isLinked { markSynced(row, serverId: row.id, now: now) }
     }
@@ -585,24 +597,27 @@ final class ServerPull {
         var byDay: [String: LocalCheckIn] = [:]
         for row in store.all(LocalCheckIn.self) { byDay[row.dayKey] = row }
         var seenDays: Set<String> = []
+        // The server's metric, in the units this diary shows. Preferences
+        // are applied first, so these are the ones just pulled.
+        let units = LocalAPIClient.preferences(store.all(LocalPreferences.self).first)
 
         for dated in rows {
             let key = String(dated.entryDate.prefix(10))
             seenDays.insert(key)
-            let values = dated.measurements
+            let values = dated.measurements.mapped { units.fromMetric($0, $1.unitKind) }
             let serverId = values.id ?? key
             if isTombstoned(kind, links.localKey(kind, server: serverId)) { continue }
             if let row = byDay[key] {
                 // Unlinked means logged here and not yet sent: newer.
                 guard link(for: row) != nil, !dirty(row) else { continue }
                 if LocalAPIClient.measurements(row) != Self.withId(values, row.id) {
-                    Self.fill(row, values)
+                    LocalAPIClient.fill(row, values)
                     report.updated += 1
                     markSynced(row, serverId: serverId, now: now)
                 }
             } else {
                 let row = LocalCheckIn(id: serverId, dayKey: key)
-                Self.fill(row, values)
+                LocalAPIClient.fill(row, values)
                 store.context.insert(row)
                 markSynced(row, serverId: serverId, now: now)
                 byDay[key] = row
@@ -621,19 +636,6 @@ final class ServerPull {
                          height: values.height, bodyFatPercentage: values.bodyFatPercentage,
                          muscleMassKg: values.muscleMassKg, boneMassKg: values.boneMassKg,
                          bodyWaterPercentage: values.bodyWaterPercentage, bmr: values.bmr)
-    }
-
-    private static func fill(_ row: LocalCheckIn, _ values: BodyMeasurements) {
-        row.weight = values.weight
-        row.neck = values.neck
-        row.waist = values.waist
-        row.hips = values.hips
-        row.height = values.height
-        row.bodyFatPercentage = values.bodyFatPercentage
-        row.muscleMassKg = values.muscleMassKg
-        row.boneMassKg = values.boneMassKg
-        row.bodyWaterPercentage = values.bodyWaterPercentage
-        row.bmr = values.bmr
     }
 
     // MARK: Goals

@@ -53,6 +53,9 @@ protocol SyncServer {
     func deleteBodyMeasurements(id: String) async throws
     func saveGoals(_ goals: NutritionGoals, startingOn date: Date) async throws
     func updateUserPreference(_ setting: UserPreferences.Setting, to value: String) async throws -> UserPreferences
+    func profile() async throws -> UserProfile
+    func saveProfile(_ profile: UserProfile) async throws
+    func completeOnboarding(_ submission: OnboardingSubmission) async throws
 }
 
 extension APIClient: SyncServer {}

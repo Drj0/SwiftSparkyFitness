@@ -369,6 +369,8 @@ final class ServerModeClient: APIClientProtocol {
     func updateUserPreference(_ setting: UserPreferences.Setting, to value: String) async throws -> UserPreferences {
         wrote(try await local.updateUserPreference(setting, to: value))
     }
+    func profile() async throws -> UserProfile { try await local.profile() }
+    func saveProfile(_ profile: UserProfile) async throws { wrote(try await local.saveProfile(profile)) }
     func goals(date: Date) async throws -> NutritionGoals { try await local.goals(date: date) }
     func saveGoals(_ goals: NutritionGoals, startingOn date: Date) async throws {
         wrote(try await local.saveGoals(goals, startingOn: date))

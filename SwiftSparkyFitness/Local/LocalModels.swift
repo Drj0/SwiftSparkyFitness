@@ -339,6 +339,12 @@ final class LocalPreferences {
     var defaultDistanceUnit: String = "km"
     var activityLevel: String = "sedentary"
     var exerciseCaloriePercentage: Double = 100
+    /// Onboarding's answers (see UserProfile). Optional: unanswered until
+    /// onboarding runs, and optional is what CloudKit needs anyway.
+    var sex: String?
+    var birthDate: String?
+    var primaryGoal: String?
+    var targetWeight: Double?
 
     init() {}
 }

@@ -71,6 +71,15 @@ struct BodyMeasurements: Decodable, Equatable, Sendable {
 
     var exists: Bool { id != nil }
 
+    /// Every number passed through `transform` with its field.
+    func mapped(_ transform: (Double, BodyField) -> Double) -> BodyMeasurements {
+        func map(_ field: BodyField) -> Double? { value(for: field).map { transform($0, field) } }
+        return BodyMeasurements(id: id, weight: map(.weight), neck: map(.neck), waist: map(.waist), hips: map(.hips),
+                                height: map(.height), bodyFatPercentage: map(.bodyFatPercentage),
+                                muscleMassKg: map(.muscleMassKg), boneMassKg: map(.boneMassKg),
+                                bodyWaterPercentage: map(.bodyWaterPercentage), bmr: map(.bmr))
+    }
+
     func value(for field: BodyField) -> Double? {
         switch field {
         case .weight: return weight

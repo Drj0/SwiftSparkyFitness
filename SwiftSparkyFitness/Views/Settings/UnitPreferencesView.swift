@@ -2,8 +2,8 @@
 //  UnitPreferencesView.swift
 //  SwiftSparkyFitness
 //
-//  Picks the units the app labels numbers with. See UnitPreferencesViewModel
-//  for why nothing is converted — and why the screen says so.
+//  Picks the units the app shows numbers in. Weights and lengths already
+//  logged are converted (see LocalAPIClient.convertStoredUnits).
 //
 //  Pushed from Settings rather than presented: there is nothing here to
 //  commit, so a sheet's "Done" would only have been a way out of a screen
@@ -41,9 +41,7 @@ struct UnitPreferencesView: View {
                     row(setting)
                 }
             } footer: {
-                // Worth stating plainly: a relabel that leaves the number
-                // alone looks like a bug the first time you hit it.
-                Text("Changing a unit relabels your numbers — it doesn't convert them. A weight stored as 73.5 stays 73.5.")
+                Text("Weights and measurements you've already logged are converted to the new unit.")
                     .appBody(12)
                     .foregroundStyle(AppColor.secondaryText)
                     .fixedSize(horizontal: false, vertical: true)

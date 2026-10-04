@@ -252,6 +252,8 @@ final class SwiftSparkyFitnessTests: XCTestCase {
             if let preferenceWriteError { throw preferenceWriteError }
             return preferencesToReturn
         }
+        func profile() async throws -> UserProfile { UserProfile() }
+        func saveProfile(_ profile: UserProfile) async throws {}
         func goals(date: Date) async throws -> NutritionGoals {
             if let goalsLoadError { throw goalsLoadError }
             return goalsToReturn

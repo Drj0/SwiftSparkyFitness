@@ -8,12 +8,10 @@
 //  default_measurement_unit, water_display_unit), so Settings (Module 5)
 //  only has to PUT it back — there's nothing here to rework later.
 //
-//  Confirmed live + against the reference web client: the stored numbers are
-//  in whatever unit the preference names (the web client writes the typed
-//  value as-is, and check_in_measurements has no unit column), so this app
-//  does no conversion either — read the preference, label the field, store
-//  the number. See PROGRESS.md for the one caveat this leaves behind (the
-//  server's BMR math assumes kg/cm regardless of the preference).
+//  This device stores numbers in the units named here; the server stores
+//  kg and cm, and sync converts (see `metricFactor` below). That was once
+//  "no conversion anywhere", matching the web client of the time; the web
+//  client has converted to metric since v1.7 (March 2026).
 //
 
 import Foundation
@@ -200,5 +198,42 @@ struct UserPreferences: Decodable, Equatable, Sendable {
             }
         }
         return String(format: "%.\(max(decimals, 2))f", value)
+    }
+}
+
+// MARK: - Metric on the server
+
+/// The server keeps body measurements in kg and cm and converts only for
+/// display, as its web app has since v1.7 (March 2026). This app stores the
+/// number as shown, in these units, so sync converts on the way through
+/// (ServerPush, ServerPull) and a unit switch rewrites what's stored.
+extension UserPreferences {
+    /// One unit shown here, in the server's metric.
+    func metricFactor(_ kind: BodyField.UnitKind) -> Double {
+        switch kind {
+        case .weight:
+            switch defaultWeightUnit {
+            case "lbs": return 0.45359237
+            case "st_lbs": return 6.35029318
+            default: return 1
+            }
+        case .length:
+            switch defaultMeasurementUnit {
+            case "inches": return 2.54
+            case "ft_in": return 30.48
+            default: return 1
+            }
+        case .percent, .energy: return 1
+        }
+    }
+
+    func toMetric(_ value: Double, _ kind: BodyField.UnitKind) -> Double {
+        value * metricFactor(kind)
+    }
+
+    /// Two places, so 154.3 lb comes back as 154.3, not 154.29999.
+    func fromMetric(_ value: Double, _ kind: BodyField.UnitKind) -> Double {
+        let factor = metricFactor(kind)
+        return factor == 1 ? value : (value / factor * 100).rounded() / 100
     }
 }

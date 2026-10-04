@@ -63,6 +63,7 @@ struct SettingsView: View {
     @State private var isPresentingServer = false
     @State private var isPresentingConnect = false
     @State private var isConfirmingWipe = false
+    @State private var isRecalculatingGoals = false
     @State private var isConfirmingSignOut = false
     @State private var wipeError: String?
     /// Collapsed by default. See `localDataSection`.
@@ -206,6 +207,12 @@ struct SettingsView: View {
         .sheet(isPresented: $isPresentingHandoff) {
             ServerHandoffSheet(user: user)
                 .presentationDetents([.medium, .large])
+        }
+        .fullScreenCover(isPresented: $isRecalculatingGoals) {
+            OnboardingView(account: serverSync.account, isRerun: true) {
+                isRecalculatingGoals = false
+                NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+            }
         }
         .fileImporter(isPresented: $isRestoringArchive, allowedContentTypes: [.json]) { result in
             switch result {
@@ -523,6 +530,18 @@ struct SettingsView: View {
                     subtitle: "Calories, macros and water"
                 )
             }
+
+            Button {
+                isRecalculatingGoals = true
+            } label: {
+                SettingsRow(
+                    icon: "wand.and.stars",
+                    tint: AppColor.accent,
+                    title: "Recalculate goals",
+                    subtitle: "From your height, weight, activity and goal"
+                )
+            }
+            .buttonStyle(.plain)
 
             NavigationLink {
                 UnitPreferencesView {
@@ -896,6 +915,7 @@ struct SettingsView: View {
             if !keepsCloudCopy {
                 UserDefaults.standard.removeObject(forKey: LocalAPIClient.firstUseKey)
             }
+            UserDefaults.standard.removeObject(forKey: OnboardingGate.localKey)
             AppMode.current = nil
         } catch {
             // Reported rather than swallowed: a wipe that silently half-ran

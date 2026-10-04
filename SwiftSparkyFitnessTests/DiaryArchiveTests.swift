@@ -38,8 +38,9 @@ final class DiaryArchiveTests: XCTestCase {
             sets: [ExerciseSetInput(setNumber: 1, setType: "Working Set", reps: 5, weight: 100, rpe: 8, notes: nil)]
         ))
         _ = try await local.logWaterAmount(date: day, milliliters: 750)
-        _ = try await local.upsertBodyMeasurements(BodyMeasurementsInput(date: day, values: [.weight: 72.5, .waist: 80]))
+        // Unit first: switching after would convert the 72.5.
         _ = try await local.updateUserPreference(.weight, to: "lbs")
+        _ = try await local.upsertBodyMeasurements(BodyMeasurementsInput(date: day, values: [.weight: 72.5, .waist: 80]))
         _ = try await local.createWaterContainer(WaterContainerInput(name: "Bottle", volume: 750, unit: "ml", servingsPerContainer: 1))
     }
 

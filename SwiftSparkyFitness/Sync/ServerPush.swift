@@ -126,6 +126,7 @@ final class ServerPush {
     func run(progress: ((Int) -> Void)? = nil) async throws -> Report {
         report = Report()
         onProgress = progress
+        resendInMetricOnce()
         try await pushMealTypes()
         try await pushFoodEntries()
         try await pushExerciseEntries()
@@ -135,6 +136,31 @@ final class ServerPush {
         try await pushPreferences()
         try await pushDeletes()
         return report
+    }
+
+    /// Before build 1.1 (11) check-ins went up as shown, so a lb or inch
+    /// diary's numbers sit on the server as if they were kg and cm. Once per
+    /// account, every linked check-in and the preferences (for the target
+    /// weight) are marked edited, so this run sends them again in metric —
+    /// and a pull, which runs after and skips edited rows, can't first read
+    /// the old numbers back converted.
+    ///
+    /// ponytail: this device's copy is taken as the truth. Days entered on the
+    /// web in lb before this fix were pulled in unconverted, and go back up
+    /// the same way; only a mixed web-and-app lb diary has those.
+    private func resendInMetricOnce() {
+        let key = "metricResend|\(account)"
+        guard !UserDefaults.standard.bool(forKey: key) else { return }
+        defer { UserDefaults.standard.set(true, forKey: key) }
+        let prefs = store.all(LocalPreferences.self).first
+        let units = LocalAPIClient.preferences(prefs)
+        guard units.metricFactor(.weight) != 1 || units.metricFactor(.length) != 1 else { return }
+        let now = Date()
+        for row in store.all(LocalCheckIn.self) where store.link(for: row, account: account) != nil {
+            row.updatedAt = now
+        }
+        if let prefs, store.link(for: prefs, account: account) != nil { prefs.updatedAt = now }
+        store.save()
     }
 
     /// Runs one row's work. Connectivity and auth failures abort the run;
@@ -494,6 +520,8 @@ final class ServerPush {
 
     private func pushCheckIns() async throws {
         struct Snapshot { let id, dayKey: String; let values: [BodyField: Double?]; let version: Date }
+        // Stored as shown; the server keeps metric.
+        let units = LocalAPIClient.preferences(store.all(LocalPreferences.self).first)
         let checkIns = store.all(LocalCheckIn.self)
             .filter { Self.shouldPush($0) && store.needsPush($0, account: account) }
             .map { row -> Snapshot in
@@ -506,7 +534,7 @@ final class ServerPush {
                 let linked = store.link(for: row, account: account) != nil
                 var values: [BodyField: Double?] = [:]
                 for field in BodyField.allCases {
-                    let value = measurements.value(for: field)
+                    let value = measurements.value(for: field).map { units.toMetric($0, field.unitKind) }
                     if linked || value != nil { values[field] = .some(value) }
                 }
                 return Snapshot(id: row.id, dayKey: row.dayKey, values: values, version: row.updatedAt)
@@ -544,11 +572,26 @@ final class ServerPush {
               Self.shouldPush(prefs), store.needsPush(prefs, account: account) else { return }
         let key = prefs.id
         let version = prefs.updatedAt
+        let profile = LocalAPIClient.profile(prefs)
+        // The latest weight and height logged, for the onboarding answers,
+        // which the server takes in kg and cm like the web app sends.
+        let units = LocalAPIClient.preferences(prefs)
+        let checkIns = store.all(LocalCheckIn.self, sortBy: [SortDescriptor(\.dayKey, order: .reverse)])
+        var metricProfile = profile
+        metricProfile.targetWeight = profile.targetWeight.map { units.toMetric($0, .weight) }
+        let submission = OnboardingSubmission(
+            profile: metricProfile,
+            currentWeight: checkIns.first { $0.weight != nil }?.weight.map { units.toMetric($0, .weight) },
+            height: checkIns.first { $0.height != nil }?.height.map { units.toMetric($0, .length) },
+            activityLevel: prefs.activityLevel
+        )
         try await attempt(LocalPreferences.syncKind, key) {
             let values = try await LocalAPIClient(store: store).userPreferences()
             for setting in UserPreferences.Setting.allCases {
                 _ = try await server.updateUserPreference(setting, to: values.value(for: setting))
             }
+            if !profile.isEmpty { try await server.saveProfile(profile) }
+            if let submission { try await server.completeOnboarding(submission) }
             try record(kind: LocalPreferences.syncKind, key: key, serverId: key, version: version, stillExists: true)
         }
     }

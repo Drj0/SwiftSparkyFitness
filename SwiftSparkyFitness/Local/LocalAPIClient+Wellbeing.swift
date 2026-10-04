@@ -258,6 +258,25 @@ extension LocalAPIClient {
         )
     }
 
+    static func set(_ field: BodyField, _ value: Double?, on row: LocalCheckIn) {
+        switch field {
+        case .weight: row.weight = value
+        case .waist: row.waist = value
+        case .hips: row.hips = value
+        case .neck: row.neck = value
+        case .height: row.height = value
+        case .bodyFatPercentage: row.bodyFatPercentage = value
+        case .muscleMassKg: row.muscleMassKg = value
+        case .boneMassKg: row.boneMassKg = value
+        case .bodyWaterPercentage: row.bodyWaterPercentage = value
+        case .bmr: row.bmr = value
+        }
+    }
+
+    static func fill(_ row: LocalCheckIn, _ values: BodyMeasurements) {
+        for field in BodyField.allCases { set(field, values.value(for: field), on: row) }
+    }
+
     func bodyMeasurements(date: Date) async throws -> BodyMeasurements {
         let key = LocalDay.key(date)
         guard let row = store.fetch(LocalCheckIn.self, where: #Predicate { $0.dayKey == key }).first else {
@@ -284,20 +303,7 @@ extension LocalAPIClient {
             return fresh
         }()
 
-        for (field, value) in input.values {
-            switch field {
-            case .weight: row.weight = value
-            case .waist: row.waist = value
-            case .hips: row.hips = value
-            case .neck: row.neck = value
-            case .height: row.height = value
-            case .bodyFatPercentage: row.bodyFatPercentage = value
-            case .muscleMassKg: row.muscleMassKg = value
-            case .boneMassKg: row.boneMassKg = value
-            case .bodyWaterPercentage: row.bodyWaterPercentage = value
-            case .bmr: row.bmr = value
-            }
-        }
+        for (field, value) in input.values { Self.set(field, value, on: row) }
         store.save()
         return Self.measurements(row)
     }

@@ -24,7 +24,7 @@ final class FakeSyncServer: SyncServer {
     var mutatingCalls: [String] { calls.filter { !Self.reads.contains($0) } }
     private static let reads: Set<String> = [
         "serverVersion", "mealTypes", "dailySummary", "waterLog", "searchExercises",
-        "userPreferences", "goalsRange", "bodyMeasurementsRange"
+        "userPreferences", "goalsRange", "bodyMeasurementsRange", "profile"
     ]
 
     /// Throws this for the next call of that name, before doing anything.
@@ -209,6 +209,27 @@ final class FakeSyncServer: SyncServer {
         try await call("saveGoals") { try await backing.saveGoals(goals, startingOn: date) }
     }
     func updateUserPreference(_ setting: UserPreferences.Setting, to value: String) async throws -> UserPreferences {
-        try await call("updateUserPreference") { try await backing.updateUserPreference(setting, to: value) }
+        // Written straight to the row: the real server keeps metric and never
+        // converts on a unit switch, where the local client does.
+        try await call("updateUserPreference") {
+            let row = backing.store.all(LocalPreferences.self).first ?? {
+                let fresh = LocalPreferences()
+                backing.store.insert(fresh)
+                return fresh
+            }()
+            LocalAPIClient.apply(setting, value, to: row)
+            backing.store.save()
+            return try await backing.userPreferences()
+        }
+    }
+    func profile() async throws -> UserProfile {
+        try await call("profile") { try await backing.profile() }
+    }
+    func saveProfile(_ profile: UserProfile) async throws {
+        try await call("saveProfile") { try await backing.saveProfile(profile) }
+    }
+    private(set) var onboardingSubmissions: [OnboardingSubmission] = []
+    func completeOnboarding(_ submission: OnboardingSubmission) async throws {
+        try await call("completeOnboarding") { onboardingSubmissions.append(submission) }
     }
 }

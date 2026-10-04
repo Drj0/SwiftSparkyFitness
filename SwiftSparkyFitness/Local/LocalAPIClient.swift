@@ -161,8 +161,11 @@ final class LocalAPIClient: APIClientProtocol {
     // MARK: - Preferences
 
     func userPreferences() async throws -> UserPreferences {
-        let row = store.all(LocalPreferences.self).first
-        return UserPreferences(
+        Self.preferences(store.all(LocalPreferences.self).first)
+    }
+
+    static func preferences(_ row: LocalPreferences?) -> UserPreferences {
+        UserPreferences(
             defaultWeightUnit: row?.defaultWeightUnit,
             defaultMeasurementUnit: row?.defaultMeasurementUnit,
             waterDisplayUnit: row?.waterDisplayUnit,
@@ -179,9 +182,56 @@ final class LocalAPIClient: APIClientProtocol {
             store.insert(fresh)
             return fresh
         }()
+        let before = Self.preferences(row)
         Self.apply(setting, value, to: row)
+        Self.convertStoredUnits(from: before, to: Self.preferences(row), in: store)
         store.save()
         return try await userPreferences()
+    }
+
+    func profile() async throws -> UserProfile {
+        Self.profile(store.all(LocalPreferences.self).first)
+    }
+
+    static func profile(_ row: LocalPreferences?) -> UserProfile {
+        UserProfile(
+            sex: row?.sex.flatMap(UserProfile.Sex.init(rawValue:)),
+            birthDate: row?.birthDate,
+            primaryGoal: row?.primaryGoal.flatMap(UserProfile.PrimaryGoal.init(rawValue:)),
+            targetWeight: row?.targetWeight
+        )
+    }
+
+    func saveProfile(_ profile: UserProfile) async throws {
+        let row = store.all(LocalPreferences.self).first ?? {
+            let fresh = LocalPreferences()
+            store.insert(fresh)
+            return fresh
+        }()
+        row.sex = profile.sex?.rawValue
+        row.birthDate = profile.birthDate
+        row.primaryGoal = profile.primaryGoal?.rawValue
+        row.targetWeight = profile.targetWeight
+        store.save()
+    }
+
+    /// A kg/lb or cm/in switch rewrites every stored weight or length in the
+    /// new unit. Relabelling instead would change what they mean to the
+    /// server, which keeps metric (see UserPreferences.metricFactor).
+    /// Shared with the server pull, for a switch made on the web.
+    static func convertStoredUnits(from old: UserPreferences, to new: UserPreferences, in store: LocalStore) {
+        let changed = [BodyField.UnitKind.weight, .length].filter { old.metricFactor($0) != new.metricFactor($0) }
+        guard !changed.isEmpty else { return }
+        for row in store.all(LocalCheckIn.self) {
+            for field in BodyField.allCases where changed.contains(field.unitKind) {
+                if let value = measurements(row).value(for: field) {
+                    set(field, new.fromMetric(old.toMetric(value, field.unitKind), field.unitKind), on: row)
+                }
+            }
+        }
+        if changed.contains(.weight), let prefs = store.all(LocalPreferences.self).first, let target = prefs.targetWeight {
+            prefs.targetWeight = new.fromMetric(old.toMetric(target, .weight), .weight)
+        }
     }
 
     /// Shared with the server pull, which writes preferences it received.

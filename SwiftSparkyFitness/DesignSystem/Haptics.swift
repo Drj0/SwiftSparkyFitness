@@ -3,7 +3,6 @@
 //  SwiftSparkyFitness
 //
 
-
 import UIKit
 
 enum Haptics {

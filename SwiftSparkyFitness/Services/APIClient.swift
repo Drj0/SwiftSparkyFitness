@@ -86,6 +86,8 @@ protocol APIClientProtocol {
     func deleteExerciseEntry(id: String) async throws
     func userPreferences() async throws -> UserPreferences
     func updateUserPreference(_ setting: UserPreferences.Setting, to value: String) async throws -> UserPreferences
+    func profile() async throws -> UserProfile
+    func saveProfile(_ profile: UserProfile) async throws
     func goals(date: Date) async throws -> NutritionGoals
     func saveGoals(_ goals: NutritionGoals, startingOn date: Date) async throws
     func waterTotals(date: Date) async throws -> WaterTotals
@@ -872,6 +874,35 @@ final class APIClient: APIClientProtocol {
         // already-snake_cased key passes through untouched — and the response
         // is an ordinary UserPreferences that needs the usual decoding.
         return try await send("api/user-preferences", method: "PUT", body: body)
+    }
+
+    // MARK: - Profile and onboarding
+
+    /// See UserProfile for where each field lives on the server.
+    func profile() async throws -> UserProfile {
+        try await send("api/identity/profiles", verbatimKeys: true)
+    }
+
+    /// Sex and birth date only; the PUT merges, so absent keys are kept. The
+    /// rest goes up with `completeOnboarding`.
+    func saveProfile(_ profile: UserProfile) async throws {
+        var body: [String: JSONValue] = [:]
+        if let sex = profile.sex { body["gender"] = .string(sex.rawValue) }
+        if let birthDate = profile.birthDate { body["date_of_birth"] = .string(birthDate) }
+        guard !body.isEmpty else { return }
+        _ = try await (send("api/identity/profiles", method: "PUT", body: body, verbatimKeys: true) as MessageResponse)
+    }
+
+    func completeOnboarding(_ submission: OnboardingSubmission) async throws {
+        _ = try await (send("api/onboarding", method: "POST", body: submission, verbatimKeys: true) as MessageResponse)
+    }
+
+    func onboardingStatus() async throws -> OnboardingStatus {
+        try await send("api/onboarding/status", verbatimKeys: true)
+    }
+
+    func skipOnboarding() async throws {
+        _ = try await (send("api/onboarding/skip", method: "POST") as MessageResponse)
     }
 
     // MARK: - Health sync

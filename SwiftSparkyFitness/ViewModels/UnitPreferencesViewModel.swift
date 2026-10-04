@@ -2,17 +2,9 @@
 //  UnitPreferencesViewModel.swift
 //  SwiftSparkyFitness
 //
-//  The units every weight/measurement/water figure is labelled with.
-//
-//  Nothing converts. The stored number is in whatever unit the preference
-//  names — the reference web client writes the typed value as-is and
-//  `check_in_measurements` has no unit column — so switching kg to lb
-//  relabels the field and does NOT rewrite the 73.5 already stored. That's
-//  the web client's behaviour too, and diverging would make the same row mean
-//  different things in the two clients.
-//
-//  The screen says so out loud, because a silent relabel is the kind of thing
-//  that looks like a bug the first time you see it.
+//  The units every weight/measurement/water figure is shown in. Switching
+//  kg/lb or cm/in converts what's stored (LocalAPIClient.convertStoredUnits);
+//  the server keeps metric either way (UserPreferences.metricFactor).
 //
 
 import Foundation
