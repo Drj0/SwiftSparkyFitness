@@ -247,7 +247,7 @@ struct DiaryView: View {
                 }
             }
         } header: {
-            sectionHeader(id: mealType.id, title: "\(mealType.name.capitalized) · \(Int(total)) kcal")
+            sectionHeader(id: mealType.id, title: "\(mealType.name.capitalized) · \(Int(total.rounded())) kcal")
         }
     }
 
@@ -267,7 +267,7 @@ struct DiaryView: View {
                     Text(FoodVariant.amountText(entry.quantity, unit: entry.unit)).appBody(12).foregroundStyle(AppColor.secondaryText)
                 }
                 Spacer()
-                Text("\(Int(entry.calories))").appBody(14, weight: .semibold).foregroundStyle(AppColor.ink)
+                Text("\(Int(entry.calories.rounded()))").appBody(14, weight: .semibold).foregroundStyle(AppColor.ink)
             }
             .padding(.horizontal, 14)
             .padding(.vertical, 10)
@@ -279,7 +279,7 @@ struct DiaryView: View {
         .buttonStyle(.pressable)
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(entry.foodName), \(FoodVariant.amountText(entry.quantity, unit: entry.unit))")
-        .accessibilityValue("\(Int(entry.calories)) calories")
+        .accessibilityValue("\(Int(entry.calories.rounded())) calories")
         .accessibilityHint("Opens for editing")
     }
 

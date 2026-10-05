@@ -189,7 +189,7 @@ struct FoodDetailView: View {
     private var macroCard: some View {
         VStack(alignment: .leading, spacing: 12) {
             HStack(alignment: .lastTextBaseline, spacing: 8) {
-                Text("\(Int(viewModel.scaledCalories))")
+                Text("\(Int(viewModel.scaledCalories.rounded()))")
                     .appDisplay(30)
                     .foregroundStyle(AppColor.ink)
                     .contentTransition(.numericText())

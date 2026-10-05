@@ -442,7 +442,7 @@ struct FoodSearchView: View {
             if quantity != nil, serving > 0 {
                 parts.append("\(Int((calories * amount / serving).rounded())) kcal")
             } else {
-                parts.append("\(Int(calories)) kcal")
+                parts.append("\(Int(calories.rounded())) kcal")
             }
         }
         // Where the data came from, appended to the line that's already a

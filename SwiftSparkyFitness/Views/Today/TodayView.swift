@@ -102,6 +102,10 @@ struct TodayView: View {
                         // day hid the meals you'd log into.
                         if !viewModel.hasGoalSet {
                             GoalNotSetCard { viewModel.isPresentingSetGoals = true }
+                            // Logging works without a goal, so what's logged
+                            // has to show without one too: hiding the meals
+                            // here made every entry look lost.
+                            mealSections
                         } else {
                             populated(summary)
                         }
@@ -254,6 +258,10 @@ struct TodayView: View {
             FirstFoodNudge { viewModel.isPresentingFoodSearch = true }
         }
         MacroGoalsCard(totals: viewModel.macroTotals, goals: summary.goals)
+        mealSections
+    }
+
+    private var mealSections: some View {
         ForEach(viewModel.entriesByMeal, id: \.mealType.id) { group in
             mealSection(group.mealType, group.entries)
         }
@@ -275,7 +283,7 @@ struct TodayView: View {
             HStack {
                 // An empty meal is just its header, quieter and without a
                 // "0 kcal" — no placeholder box taking up a row.
-                Text(entries.isEmpty ? mealType.name.capitalized : "\(mealType.name.capitalized) · \(Int(total)) kcal")
+                Text(entries.isEmpty ? mealType.name.capitalized : "\(mealType.name.capitalized) · \(Int(total.rounded())) kcal")
                     .appBody(13, weight: .semibold)
                     .tracking(0.8)
                     .foregroundStyle(entries.isEmpty ? AppColor.placeholder : AppColor.secondaryText)
@@ -344,7 +352,7 @@ struct TodayView: View {
                     Text(portion(entry)).appBody(13).foregroundStyle(AppColor.secondaryText)
                 }
                 Spacer(minLength: 8)
-                Text("\(Int(entry.calories)) kcal").appBody(14, weight: .semibold).foregroundStyle(AppColor.secondaryText)
+                Text("\(Int(entry.calories.rounded())) kcal").appBody(14, weight: .semibold).foregroundStyle(AppColor.secondaryText)
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 13)
@@ -358,7 +366,7 @@ struct TodayView: View {
         // number with no unit. One stop, one sentence.
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(entry.foodName), \(portion(entry))")
-        .accessibilityValue("\(Int(entry.calories)) calories")
+        .accessibilityValue("\(Int(entry.calories.rounded())) calories")
         .accessibilityHint(canEdit ? "Opens for editing" : "")
         // Long-press for both fixes to a mistaken entry. Not swipe: that
         // needs a List, and this screen is a scroll of cards.

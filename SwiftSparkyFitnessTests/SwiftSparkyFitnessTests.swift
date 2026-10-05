@@ -2060,17 +2060,25 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertNil(sent?.distance)
     }
 
-    /// `durationDistance` — distance is required; heart rate is optional.
+    /// `durationDistance` — distance is optional but must be a distance if
+    /// typed; heart rate is optional.
     @MainActor
-    func testExerciseDurationDistanceRequiresDistance() async {
+    func testExerciseDurationDistanceTakesAnOptionalDistance() async {
         let stub = StubAPIClient()
         let viewModel = ExerciseEntryEditorViewModel(exercise: Exercise.previewRun, apiClient: stub)
         viewModel.durationMinutesText = "30"
         viewModel.caloriesText = "300"
 
+        viewModel.distanceText = "far"
         var saved = await viewModel.save()
         XCTAssertFalse(saved)
         XCTAssertNotNil(viewModel.distanceError)
+
+        viewModel.distanceText = ""
+        saved = await viewModel.save()
+        XCTAssertTrue(saved)
+        XCTAssertNil(stub.createdExerciseEntries.first?.distance)
+        stub.createdExerciseEntries.removeAll()
 
         viewModel.distanceText = "5.2"
         viewModel.avgHeartRateText = "150"

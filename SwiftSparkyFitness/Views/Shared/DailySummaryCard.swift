@@ -59,7 +59,7 @@ struct DailySummaryCard: View {
                 RingLayer(progress: water / waterGoal, color: AppColor.water),
             ], accessibilityDescription: ringDescription(eaten: eaten, goal: goal, water: water, waterGoal: waterGoal)) {
                 VStack(spacing: 2) {
-                    Text("\(abs(Int(remaining)))")
+                    Text("\(abs(Int(remaining.rounded())))")
                         .appDisplay(34)
                         .foregroundStyle(isOver ? AppColor.destructive : AppColor.ink)
                         .lineLimit(1)
@@ -70,7 +70,7 @@ struct DailySummaryCard: View {
                     Text(isOver ? "kcal over" : "kcal left")
                         .appBody(12)
                         .foregroundStyle(isOver ? AppColor.destructive : AppColor.secondaryText)
-                    Text("\(Int(eaten)) eaten")
+                    Text("\(Int(eaten.rounded())) eaten")
                         .appBody(12)
                         .foregroundStyle(AppColor.secondaryText)
                         .padding(.top, 3)
@@ -96,10 +96,10 @@ struct DailySummaryCard: View {
     private func ringDescription(eaten: Double, goal: Double, water: Double, waterGoal: Double) -> String {
         let burned = summary.calorieBalance.burned
         var parts = [
-            "\(Int(eaten)) of \(Int(goal)) calories eaten",
-            remaining < 0 ? "\(Int(abs(remaining))) over" : "\(Int(remaining)) remaining",
+            "\(Int(eaten.rounded())) of \(Int(goal.rounded())) calories eaten",
+            remaining < 0 ? "\(Int(abs(remaining).rounded())) over" : "\(Int(remaining.rounded())) remaining",
         ]
-        if burned > 0 { parts.append("active energy \(Int(burned)) calories") }
+        if burned > 0 { parts.append("active energy \(Int(burned.rounded())) calories") }
         parts.append("water \(Int(water)) of \(Int(waterGoal)) millilitres")
         return parts.joined(separator: ", ") + "."
     }

@@ -344,7 +344,12 @@ final class ExerciseEntryEditorViewModel: ObservableObject {
     private func validate() -> Bool {
         durationError = effectiveMinutes == nil ? "How many minutes?" : nil
         caloriesError = caloriesBurned == nil ? "How many calories?" : nil
-        distanceError = modality == .durationDistance && distance == nil ? "How far?" : nil
+        // Optional: duration alone already estimates the calories, and a
+        // walk nobody measured shouldn't be unsaveable. Only text that isn't
+        // a number is refused; 0 counts as none, the same as stepping to it.
+        let typedDistance = !distanceText.trimmingCharacters(in: .whitespaces).isEmpty
+        distanceError = modality == .durationDistance && typedDistance && distanceText.parsedDecimal == nil
+            ? "Enter a distance, or leave it empty." : nil
         if modality.usesSets {
             let usable = setRows.filter { !$0.isBlank }
             setsError = usable.isEmpty ? "Add at least one set." : nil

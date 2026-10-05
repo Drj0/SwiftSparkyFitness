@@ -142,10 +142,10 @@ struct CalorieRingCard: View {
 
     private var accessibilitySummary: String {
         var parts = [
-            "\(Int(eaten)) of \(Int(goal)) calories eaten",
-            remaining < 0 ? "\(Int(abs(remaining))) over" : "\(Int(remaining)) remaining",
+            "\(Int(eaten.rounded())) of \(Int(goal.rounded())) calories eaten",
+            remaining < 0 ? "\(Int(abs(remaining).rounded())) over" : "\(Int(remaining.rounded())) remaining",
         ]
-        if burned > 0 { parts.append("\(Int(burned)) burned") }
+        if burned > 0 { parts.append("\(Int(burned.rounded())) burned") }
         return parts.joined(separator: ", ") + "."
     }
 
@@ -158,7 +158,7 @@ struct CalorieRingCard: View {
             accessibilityDescription: accessibilitySummary
         ) {
             VStack(spacing: 2) {
-                Text(abs(Int(remaining)).formatted())
+                Text(abs(Int(remaining.rounded())).formatted())
                     .appDisplay(46)
                     .foregroundStyle(isOver ? AppColor.destructive : AppColor.ink)
                     .contentTransition(.numericText())
@@ -166,14 +166,14 @@ struct CalorieRingCard: View {
                 Text(isOver ? "kcal over" : "kcal left")
                     .appBody(14)
                     .foregroundStyle(isOver ? AppColor.destructive : AppColor.secondaryText)
-                Text("\(Int(eaten).formatted()) / \(Int(goal).formatted()) kcal")
+                Text("\(Int(eaten.rounded()).formatted()) / \(Int(goal.rounded()).formatted()) kcal")
                     .appBody(12)
                     .foregroundStyle(AppColor.placeholder)
                     .padding(.top, 6)
                 // "Left" includes exercise, so without this the three
                 // numbers wouldn't add up whenever something was burned.
                 if burned > 0 {
-                    Text("+\(Int(burned).formatted()) burned")
+                    Text("+\(Int(burned.rounded()).formatted()) burned")
                         .appBody(12, weight: .semibold)
                         .foregroundStyle(AppColor.energy)
                 }

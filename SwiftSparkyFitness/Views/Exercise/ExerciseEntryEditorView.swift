@@ -387,7 +387,7 @@ struct ExerciseEntryEditorView: View {
 
     private var distanceSection: some View {
         VStack(alignment: .leading, spacing: 8) {
-            sectionLabel("DISTANCE", isInvalid: viewModel.distanceError != nil)
+            sectionLabel("DISTANCE (OPTIONAL)", isInvalid: viewModel.distanceError != nil)
             StepperField(
                 label: "Distance in \(viewModel.distanceUnit)",
                 text: $viewModel.distanceText,
