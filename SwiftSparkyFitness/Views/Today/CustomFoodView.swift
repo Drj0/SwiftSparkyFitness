@@ -24,7 +24,9 @@ struct CustomFoodView: View {
     @StateObject private var viewModel = CustomFoodViewModel()
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    let onSaved: () -> Void
+    /// Gets the new food. Saving only adds it to the library; the presenter
+    /// still has to log it (Log Food opens it in FoodDetailView).
+    let onSaved: (Food) -> Void
 
     /// The sheet is here to take typed input, so the keyboard comes up on
     /// NAME rather than costing a tap. NAME and CALORIES are the two
@@ -98,9 +100,9 @@ struct CustomFoodView: View {
             // during the round trip created a duplicate custom food.
             action: SheetAction("Save", isBusy: viewModel.isSaving) {
                 Task {
-                    if await viewModel.save() != nil {
-                        onSaved()
+                    if let food = await viewModel.save() {
                         dismiss()
+                        onSaved(food)
                     }
                 }
             }
@@ -126,5 +128,5 @@ struct CustomFoodView: View {
 }
 
 #Preview {
-    CustomFoodView(onSaved: {})
+    CustomFoodView(onSaved: { _ in })
 }

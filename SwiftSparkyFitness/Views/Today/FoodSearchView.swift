@@ -119,7 +119,11 @@ struct FoodSearchView: View {
             Text(viewModel.quickLogError ?? "")
         }
         .sheet(isPresented: $isPresentingCustomFood) {
-            CustomFoodView { dismiss() }
+            // Saving a custom food only adds it to the library. This used to
+            // call this sheet's `dismiss()`, closing Log Food with nothing
+            // logged — the food never reached the meal. Open it in the
+            // detail instead, the same as a search result, to log it.
+            CustomFoodView { food in pushedFood = food }
                 .presentationDetents([.medium, .large])
                 .presentationDragIndicator(.visible)
         }
