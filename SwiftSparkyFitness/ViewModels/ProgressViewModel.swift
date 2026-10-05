@@ -193,15 +193,19 @@ final class ProgressViewModel: ObservableObject {
         var end = maxDate
 
         if let days = preset.days {
+            // The whole window, not floored at `minDate`. Floored, a new
+            // account saw 1W through 1Y all as the same two days, so the
+            // range buttons looked dead; and in on-device mode `minDate` is
+            // this install's first launch, which hid history restored from
+            // iCloud. Days before any entry just chart as empty.
             start = calendar.date(byAdding: .day, value: -(days - 1), to: maxDate) ?? maxDate
         } else {
             start = calendar.startOfDay(for: customStart)
             end = calendar.startOfDay(for: customEnd)
             if start > end { swap(&start, &end) }
+            start = max(start, minDate)
+            end = min(max(end, minDate), maxDate)
         }
-
-        start = max(start, minDate)
-        end = min(max(end, minDate), maxDate)
 
         let span = (calendar.dateComponents([.day], from: start, to: end).day ?? 0) + 1
         if span > ProgressDateRange.maximumDays {
@@ -359,7 +363,7 @@ final class ProgressViewModel: ObservableObject {
     private func findLastEntry(outside window: ProgressDateRange) async {
         let calendar = Calendar.current
         let end = maxDate
-        let start = max(minDate, calendar.date(byAdding: .day, value: -365, to: end) ?? minDate)
+        let start = calendar.date(byAdding: .day, value: -365, to: end) ?? end
 
         async let food = try? apiClient.foodEntries(from: start, to: end)
         async let body = try? apiClient.bodyMeasurements(from: start, to: end)

@@ -38,7 +38,6 @@ struct NutritionTrendCard: View {
     @ObservedObject var viewModel: ProgressViewModel
 
     @State private var rawSelection: Date?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var series: MacroSeries { viewModel.selectedSeries }
     private var bars: [DailyNutrition] { viewModel.nutritionBars }
@@ -137,7 +136,7 @@ struct NutritionTrendCard: View {
     private static func color(_ series: MacroSeries) -> Color {
         switch series {
         case .calories: return AppColor.accent
-        case .protein: return AppColor.accent
+        case .protein: return AppColor.proteinGraphic
         case .carbs: return AppColor.carbsGraphic
         case .fat: return AppColor.energyGraphic
         }
@@ -228,9 +227,12 @@ struct NutritionTrendCard: View {
         return Button {
             guard viewModel.selectedSeries != option else { return }
             Haptics.selection()
-            withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) {
-                viewModel.selectedSeries = option
-            }
+            // Not animated. Swift Charts, animating a series switch,
+            // repainted the bars in the previous series' colour for a few
+            // frames after the change — measured frame by frame on a
+            // recording. Switching in one frame is what a segmented
+            // control does anyway.
+            viewModel.selectedSeries = option
         } label: {
             VStack(alignment: .leading, spacing: 3) {
                 HStack(spacing: 5) {
@@ -251,13 +253,16 @@ struct NutritionTrendCard: View {
             .frame(maxWidth: .infinity, alignment: .leading)
             .padding(.horizontal, 10)
             .padding(.vertical, 9)
+            // The selection wears the colour the bars are drawn in, so the
+            // tile and the chart it drives read as one thing. A pink ring
+            // round every pick put pink beside orange or green bars.
             .background(
-                isSelected ? AppColor.accentSoft : AppColor.inputBackground,
+                isSelected ? Self.color(option).opacity(0.14) : AppColor.inputBackground,
                 in: RoundedRectangle(cornerRadius: AppRadius.sm)
             )
             .overlay(
                 RoundedRectangle(cornerRadius: AppRadius.sm)
-                    .stroke(isSelected ? AppColor.accent : .clear, lineWidth: 1.5)
+                    .stroke(isSelected ? Self.color(option) : .clear, lineWidth: 1.5)
             )
             .frame(minHeight: 44)
             .contentShape(Rectangle())

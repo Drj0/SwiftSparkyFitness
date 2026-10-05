@@ -199,7 +199,7 @@ struct FoodDetailView: View {
                     .contentTransition(.numericText())
             }
             HStack(spacing: 0) {
-                macroColumn("\(Int(viewModel.scaledProtein))g", "Protein", AppColor.accent)
+                macroColumn("\(Int(viewModel.scaledProtein))g", "Protein", AppColor.protein)
                 Divider()
                 macroColumn("\(Int(viewModel.scaledCarbs))g", "Carbs", AppColor.carbs)
                 Divider()

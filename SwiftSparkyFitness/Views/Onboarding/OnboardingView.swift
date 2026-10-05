@@ -452,7 +452,7 @@ struct OnboardingView: View {
             .onChange(of: viewModel.macroSplit) { _, _ in Haptics.selection() }
 
             HStack(spacing: 10) {
-                macroTile("Protein", viewModel.grams(viewModel.split.protein, perGram: 4), viewModel.split.protein, AppColor.accent)
+                macroTile("Protein", viewModel.grams(viewModel.split.protein, perGram: 4), viewModel.split.protein, AppColor.protein)
                 macroTile("Carbs", viewModel.grams(viewModel.split.carbs, perGram: 4), viewModel.split.carbs, AppColor.carbs)
                 macroTile("Fat", viewModel.grams(viewModel.split.fat, perGram: 9), viewModel.split.fat, AppColor.energy)
             }

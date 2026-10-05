@@ -218,7 +218,7 @@ struct MacroGoalsCard: View {
 
     @ViewBuilder
     private var columns: some View {
-        column("Protein", totals.protein, goals.protein, text: AppColor.accent, bar: AppColor.accent)
+        column("Protein", totals.protein, goals.protein, text: AppColor.protein, bar: AppColor.proteinGraphic)
         column("Carbs", totals.carbs, goals.carbs, text: AppColor.carbs, bar: AppColor.carbsGraphic)
         column("Fat", totals.fat, goals.fat, text: AppColor.energy, bar: AppColor.energyGraphic)
     }

@@ -24,7 +24,6 @@ struct MeasurementsTrendCard: View {
     var onLog: (() -> Void)?
 
     @State private var rawSelection: Date?
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     private var fields: [BodyField] { viewModel.populatedBodyFields }
     private var field: BodyField { viewModel.selectedBodyField }
@@ -36,7 +35,7 @@ struct MeasurementsTrendCard: View {
     var body: some View {
         TrendCard(kind: .measurements, action: fields.isEmpty ? nil : logAction) {
             if fields.isEmpty {
-                TrendEmptyState(message: "No body measurements in this range.", action: logAction)
+                TrendEmptyState(message: "No body measurements in this range.", action: logAction, tint: TrendKind.measurements.tint)
             } else {
                 if fields.count > 1 { fieldPicker }
                 headline
@@ -80,12 +79,11 @@ struct MeasurementsTrendCard: View {
         ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: 6) {
                 ForEach(fields) { option in
-                    TrendChip(title: option.label, isSelected: option == field) {
+                    TrendChip(title: option.label, isSelected: option == field, tint: TrendKind.measurements.tint) {
                         guard viewModel.selectedBodyField != option else { return }
                         Haptics.selection()
-                        withAnimation(reduceMotion ? nil : .snappy(duration: 0.22)) {
-                            viewModel.selectedBodyField = option
-                        }
+                        // Not animated, for the reason in NutritionTrendCard.
+                        viewModel.selectedBodyField = option
                     }
                 }
             }
