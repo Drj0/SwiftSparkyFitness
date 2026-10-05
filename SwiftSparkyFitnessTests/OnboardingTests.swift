@@ -125,13 +125,48 @@ final class OnboardingTests: XCTestCase {
         XCTAssertEqual(vm.weightText, "72.51")
     }
 
-    func testPaceStaysOnAnOfferedChoiceInPounds() {
+    func testPaceIsAShareOfBodyWeightAndCapped() {
+        XCTAssertEqual(CalorieTarget.Pace.medium.kgPerWeek(weightKg: 80, gaining: false), 0.6, accuracy: 0.001)
+        XCTAssertEqual(CalorieTarget.Pace.fast.kgPerWeek(weightKg: 150, gaining: false), 1)
+        XCTAssertEqual(CalorieTarget.Pace.fast.kgPerWeek(weightKg: 100, gaining: true), 0.5)
+        XCTAssertEqual(CalorieTarget.floor(sex: .male), 1500)
+        XCTAssertEqual(CalorieTarget.floor(sex: .female), 1200)
+    }
+
+    func testTheFloorSlowsAPaceRatherThanPretending() {
         let vm = model()
-        vm.weightUnit = "lbs"
+        vm.sex = .female; vm.answerStep()
+        vm.weightText = "50"; vm.heightText = "150"; vm.answerStep()
+        vm.activityLevel = "sedentary"; vm.answerStep()
         vm.goal = .lose
-        XCTAssertTrue(vm.paceOptions.contains { abs($0.kg - vm.pace) < 0.001 })
+        // Maintenance ~1350: fast's 0.5 kg would need 1350 - 714, under 1200.
+        XCTAssertLessThan(vm.kgPerWeek(.fast), vm.requestedKgPerWeek(.fast))
+        XCTAssertGreaterThanOrEqual(vm.kgPerWeek(.fast), 0)
+    }
+
+    func testTargetStaysInsideAHealthyBMI() {
+        let vm = model()
+        vm.weightText = "70"; vm.heightText = "170"
+        vm.goal = .lose
+        vm.targetWeightText = "50"          // BMI 17.3
+        XCTAssertNotNil(vm.targetError)
+        vm.targetWeightText = "60"          // BMI 20.8
+        XCTAssertNil(vm.targetError)
         vm.goal = .gain
-        XCTAssertTrue(vm.paceOptions.contains { abs($0.kg - vm.pace) < 0.001 })
+        vm.targetWeightText = "95"          // BMI 32.9
+        XCTAssertNotNil(vm.targetError)
+    }
+
+    func testAnsweredSexIsNotAskedForAgain() {
+        let vm = model()
+        vm.sex = .male
+        vm.answerStep()
+        vm.weightText = "70"; vm.heightText = "170"
+        vm.answerStep()
+        vm.skipStep(); vm.skipStep()
+        let prompt = vm.assumptions.first { $0.step == .about }?.text ?? ""
+        XCTAssertFalse(prompt.contains("sex"))
+        XCTAssertTrue(prompt.contains("birthday"))
     }
 
     func testAnUntouchedBirthdayIsNotAnAnswer() {

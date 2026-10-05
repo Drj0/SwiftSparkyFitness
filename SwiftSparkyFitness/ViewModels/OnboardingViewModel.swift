@@ -116,7 +116,6 @@ final class OnboardingViewModel: ObservableObject {
             guard weightUnit != oldValue else { return }
             weightText = Self.converted(weightText) { CalorieTarget.kilograms($0, unit: oldValue) / CalorieTarget.kilograms(1, unit: self.weightUnit) }
             targetWeightText = Self.converted(targetWeightText) { CalorieTarget.kilograms($0, unit: oldValue) / CalorieTarget.kilograms(1, unit: self.weightUnit) }
-            snapPace()
         }
     }
     @Published var heightUnit = "cm" {
@@ -130,10 +129,10 @@ final class OnboardingViewModel: ObservableObject {
     @Published var weightText = "" { didSet { if let clean = Self.sanitized(weightText) { weightText = clean } } }
     @Published var heightText = "" { didSet { if let clean = Self.sanitized(heightText) { heightText = clean } } }
     @Published var activityLevel: String?
-    @Published var goal: UserProfile.PrimaryGoal? { didSet { snapPace() } }
+    @Published var goal: UserProfile.PrimaryGoal?
     @Published var targetWeightText = "" { didSet { if let clean = Self.sanitized(targetWeightText) { targetWeightText = clean } } }
-    /// kg per week.
-    @Published var pace = 0.5
+    /// A share of body weight, not a fixed kg: see CalorieTarget.
+    @Published var pace: CalorieTarget.Pace = .medium
     @Published var calories: Double = 0
     @Published var waterMl: Double = 0
     @Published var macroSplit: MacroSplit = .balanced
@@ -237,15 +236,35 @@ final class OnboardingViewModel: ObservableObject {
         guard let height else { return nil }
         return heightRange.contains(height) ? nil : "Between \(Int(heightRange.lowerBound)) and \(Int(heightRange.upperBound)) \(heightUnitLabel)"
     }
-    /// Losing needs a lower target, gaining a higher one.
+    /// Losing needs a lower target, gaining a higher one, and either stays
+    /// inside a healthy BMI for the height given (CalorieTarget.healthyBMI).
     var targetError: String? {
         guard let target = targetWeight, let weight, let goal else { return nil }
         guard weightRange.contains(target) else { return "That doesn't look right" }
         switch goal {
         case .lose where target >= weight: return "Lower than your weight now (\(Self.text(weight)) \(weightUnitLabel))"
         case .gain where target <= weight: return "Higher than your weight now (\(Self.text(weight)) \(weightUnitLabel))"
-        default: return nil
+        default: break
         }
+        guard let healthy = healthyWeightRange else { return nil }
+        if goal == .lose, target < healthy.lowerBound {
+            return "Under a healthy weight for your height. \(Self.text(healthy.lowerBound)) \(weightUnitLabel) is the lowest Sparky plans for"
+        }
+        if goal == .gain, target > healthy.upperBound {
+            return "Over a healthy weight for your height. \(Self.text(healthy.upperBound)) \(weightUnitLabel) is the highest Sparky plans for"
+        }
+        return nil
+    }
+
+    /// BMI 18.5–30 at the height given, in the weight unit, to one decimal.
+    var healthyWeightRange: ClosedRange<Double>? {
+        guard let height, heightError == nil else { return nil }
+        let cm = CalorieTarget.centimetres(height, unit: heightUnit)
+        func inUnit(_ bmi: Double) -> Double {
+            let kg = CalorieTarget.weightKg(bmi: bmi, heightCm: cm)
+            return (kg / CalorieTarget.kilograms(1, unit: weightUnit) * 10).rounded() / 10
+        }
+        return inUnit(CalorieTarget.healthyBMI.lowerBound)...inUnit(CalorieTarget.healthyBMI.upperBound)
     }
 
     var weightUnitLabel: String { weightUnit == "lbs" ? "lb" : "kg" }
@@ -266,20 +285,34 @@ final class OnboardingViewModel: ObservableObject {
 
     // MARK: - Pace and plan
 
-    /// Gentle to brisk, in the unit the person weighs in.
-    var paceOptions: [(kg: Double, label: String)] {
-        let steps: [Double] = goal == .gain ? [0.25, 0.5] : [0.25, 0.5, 0.75, 1]
-        if weightUnit == "lbs" {
-            return steps.map { ($0 * 2 * 0.45359237, "\(($0 * 2).formatted()) lb") }
-        }
-        return steps.map { ($0, "\($0.formatted()) kg") }
+    /// The lowest target to suggest; 1500 for men, 1200 otherwise.
+    var calorieFloor: Double { CalorieTarget.floor(sex: usableSex) }
+
+    /// What `pace` asks for at this person's weight (70 kg if skipped).
+    func requestedKgPerWeek(_ pace: CalorieTarget.Pace) -> Double {
+        pace.kgPerWeek(weightKg: weightKg ?? 70, gaining: usableGoal == .gain)
     }
 
-    /// Keeps the pace on one of the offered choices: a unit or goal change
-    /// moves them, and 0.5 kg isn't any of the lb ones.
-    private func snapPace() {
-        guard let closest = paceOptions.min(by: { abs($0.kg - pace) < abs($1.kg - pace) }) else { return }
-        pace = closest.kg
+    /// What `pace` actually delivers once the floor has had its say.
+    func kgPerWeek(_ pace: CalorieTarget.Pace) -> Double {
+        let requested = requestedKgPerWeek(pace)
+        guard let maintenance else { return requested }
+        let target = CalorieTarget.daily(maintenance: maintenance, goal: usableGoal, kgPerWeek: requested, floor: calorieFloor)
+        // Signed: a maintenance already under the floor allows no loss at all.
+        let change = usableGoal == .gain ? target - maintenance : maintenance - target
+        return min(requested, max(change, 0) * 7 / CalorieTarget.kcalPerKg)
+    }
+
+    /// "0.6 kg a week · 650 kcal a day", worked out for this person.
+    func paceDetail(_ pace: CalorieTarget.Pace) -> String {
+        let kg = kgPerWeek(pace)
+        let amount = (kg / CalorieTarget.kilograms(1, unit: weightUnit) * 10).rounded() / 10
+        var detail = "\(amount.formatted()) \(weightUnitLabel) a week"
+        if maintenance != nil {
+            let kcal = Int((kg * CalorieTarget.kcalPerKg / 7 / 10).rounded() * 10)
+            detail += " · \(kcal.formatted()) kcal a day \(usableGoal == .gain ? "over" : "under") maintenance"
+        }
+        return detail
     }
 
     // What the plan may use: an answer only counts if its step wasn't
@@ -317,7 +350,7 @@ final class OnboardingViewModel: ObservableObject {
 
     var suggestedCalories: Double {
         guard let maintenance else { return GoalsViewModel.suggestedCalories }
-        return CalorieTarget.daily(maintenance: maintenance, goal: usableGoal, kgPerWeek: pace)
+        return CalorieTarget.daily(maintenance: maintenance, goal: usableGoal, kgPerWeek: requestedKgPerWeek(pace), floor: calorieFloor)
     }
 
     /// What the plan had to guess, and the step that would fix it.
@@ -326,7 +359,14 @@ final class OnboardingViewModel: ObservableObject {
         if maintenance == nil {
             list.append(("Add your height and weight for a target that fits you", .body))
         } else {
-            if usableSex == nil || usableBirthDate == nil { list.append(("Add your sex and birthday for a closer estimate", .about)) }
+            // Only what's missing: naming sex after it was answered read as
+            // the answer not having been taken.
+            switch (usableSex == nil, usableBirthDate == nil) {
+            case (true, true): list.append(("Add your sex and birthday for a closer estimate", .about))
+            case (true, false): list.append(("Add your sex for a closer estimate", .about))
+            case (false, true): list.append(("Add your birthday for a closer estimate", .about))
+            case (false, false): break
+            }
             if usableActivity == nil { list.append(("Assumed mostly sitting — add your activity level", .activity)) }
         }
         if skippedSteps.contains(.goal) || goal == nil { list.append(("Set a goal to lose or gain weight", .goal)) }
@@ -344,13 +384,14 @@ final class OnboardingViewModel: ObservableObject {
     }
 
     /// The pace's deficit hit the floor, so the target is slower than asked.
-    var isAtFloor: Bool { usableGoal == .lose && maintenance != nil && suggestedCalories <= CalorieTarget.floor }
+    var isAtFloor: Bool { usableGoal == .lose && maintenance != nil && suggestedCalories <= calorieFloor }
 
     /// When the target weight is reached at this pace, or nil when maintaining.
     var estimatedArrival: Date? {
-        guard let target = usableTarget, let weightKg, pace > 0 else { return nil }
+        let rate = kgPerWeek(pace)
+        guard let target = usableTarget, let weightKg, rate > 0 else { return nil }
         let kgToGo = abs(weightKg - CalorieTarget.kilograms(target, unit: weightUnit))
-        return Calendar.current.date(byAdding: .day, value: Int((kgToGo / pace * 7).rounded()), to: Date())
+        return Calendar.current.date(byAdding: .day, value: Int((kgToGo / rate * 7).rounded()), to: Date())
     }
 
     var split: (protein: Double, carbs: Double, fat: Double) { macroSplit.ratio }
@@ -374,7 +415,7 @@ final class OnboardingViewModel: ObservableObject {
     }
 
     func adjustCalories(by amount: Double) {
-        calories = min(max(calories + amount, CalorieTarget.floor), GoalsViewModel.Field.calories.maximum)
+        calories = min(max(calories + amount, calorieFloor), GoalsViewModel.Field.calories.maximum)
     }
 
     // MARK: - Navigation

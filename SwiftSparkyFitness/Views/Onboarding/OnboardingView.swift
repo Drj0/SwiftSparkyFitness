@@ -360,17 +360,27 @@ struct OnboardingView: View {
                     suffix: viewModel.weightUnitLabel, focus: binding(.target)
                 )
 
-                label("PACE PER WEEK").padding(.top, 16)
-                HStack(spacing: 8) {
-                    ForEach(viewModel.paceOptions, id: \.kg) { option in
-                        OptionCard(title: option.label, isSelected: abs(viewModel.pace - option.kg) < 0.001, compact: true) {
-                            viewModel.pace = option.kg
-                        }
+                // Tiers, not raw kg: each is a share of body weight, and its
+                // detail is what it means for this person (CalorieTarget).
+                label("PACE").padding(.top, 16)
+                ForEach(CalorieTarget.Pace.allCases) { pace in
+                    OptionCard(title: pace.rawValue, detail: viewModel.paceDetail(pace),
+                               isSelected: viewModel.pace == pace) {
+                        viewModel.pace = pace
                     }
                 }
-                Text(goal == .lose ? "Slower is easier to stick with — \(viewModel.weightUnit == "lbs" ? "1 lb" : "0.5 kg") a week suits most people." : "Slow gains keep it mostly muscle.")
+                Text(goal == .lose
+                     ? "Slower is easier to stick with and keeps more muscle. Medium suits most people."
+                     : "Slow gains keep it mostly muscle.")
                     .appBody(12)
                     .foregroundStyle(AppColor.placeholder)
+                    .padding(.top, 4)
+                Label(goal == .lose
+                      ? "Fast isn't for everyone. Skip it if you're under 18, pregnant or breastfeeding, have a health condition, or are close to your target. Check with a doctor first."
+                      : "Fast isn't for everyone: at that rate more of what you gain is fat than muscle.",
+                      systemImage: "exclamationmark.triangle.fill")
+                    .appBody(12)
+                    .foregroundStyle(AppColor.secondaryText)
                     .padding(.top, 4)
             }
         }
@@ -547,7 +557,8 @@ struct OnboardingView: View {
     }
 
     private var paceLabel: String {
-        let pace = viewModel.paceOptions.first { abs($0.kg - viewModel.pace) < 0.001 }?.label ?? ""
+        let kg = viewModel.kgPerWeek(viewModel.pace) / CalorieTarget.kilograms(1, unit: viewModel.weightUnit)
+        let pace = "\(((kg * 10).rounded() / 10).formatted()) \(viewModel.weightUnitLabel)"
         return viewModel.usableGoal == .lose ? "To lose \(pace) a week" : "To gain \(pace) a week"
     }
 

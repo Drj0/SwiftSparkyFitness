@@ -42,6 +42,7 @@ struct SetGoalsView: View {
     @Environment(\.dismiss) private var dismiss
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var confirmingDiscard = false
+    @State private var isRecalculating = false
 
     /// Set by the sheet presentation (Today) and not by the push (Settings):
     /// a pushed screen already has a back button, and a second way out
@@ -123,6 +124,15 @@ struct SetGoalsView: View {
         }
         .task { await viewModel.load() }
         .discardGuard(isDirty: viewModel.isDirty, isPresented: $confirmingDiscard) { dismiss() }
+        // Saves the goals itself, so this form reloads after: a Save from
+        // the stale copy would put the old numbers back.
+        .fullScreenCover(isPresented: $isRecalculating) {
+            OnboardingView(account: ServerSync.shared.account, isRerun: true) {
+                isRecalculating = false
+                Task { await viewModel.load() }
+                onSaved()
+            }
+        }
     }
 
     private var form: some View {
@@ -138,6 +148,7 @@ struct SetGoalsView: View {
             calorieSection
             macroSection
             waterSection
+            recalculateSection
         }
         .listStyle(.insetGrouped)
         .scrollContentBackground(.hidden)
@@ -367,6 +378,37 @@ struct SetGoalsView: View {
             // says, so this one is always millilitres. Saying so beats a
             // number that silently means something else.
             footnote("Always in millilitres — the Units screen changes how water is shown, not how it's stored.")
+        }
+        .listRowBackground(AppColor.surface)
+    }
+
+    // MARK: - Recalculate
+
+    /// Last, under the numbers it would replace: lived in Settings, a row
+    /// away from the goals it rewrites.
+    private var recalculateSection: some View {
+        Section {
+            Button {
+                isRecalculating = true
+            } label: {
+                Label {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Recalculate goals")
+                            .appBody(15, weight: .semibold)
+                            .foregroundStyle(AppColor.accent)
+                        Text("From your height, weight, activity and goal")
+                            .appBody(12)
+                            .foregroundStyle(AppColor.secondaryText)
+                    }
+                } icon: {
+                    Image(systemName: "wand.and.stars").foregroundStyle(AppColor.accent)
+                }
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+        } footer: {
+            footnote("Works out new calorie, macro and water goals and replaces the ones above.")
         }
         .listRowBackground(AppColor.surface)
     }
