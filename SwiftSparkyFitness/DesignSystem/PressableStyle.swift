@@ -32,6 +32,17 @@ struct PressableStyle: ButtonStyle {
     }
 }
 
+/// For a row that also has a context menu. A long-press holds the button
+/// "pressed" while the system lifts the row, so `PressableStyle`'s dim and
+/// squash turned the very row being picked dark and small. This only tints
+/// the row, and leaves the lift to the system.
+struct RowPressStyle: ButtonStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .overlay(AppColor.ink.opacity(configuration.isPressed ? 0.05 : 0))
+    }
+}
+
 extension ButtonStyle where Self == PressableStyle {
     /// Row-sized and card-sized controls.
     static var pressable: PressableStyle { PressableStyle() }
@@ -39,4 +50,9 @@ extension ButtonStyle where Self == PressableStyle {
     static var pressableLarge: PressableStyle { PressableStyle(scale: 0.985) }
     /// Small circular targets (the FAB, steppers) — they can take more.
     static var pressableCompact: PressableStyle { PressableStyle(scale: 0.92) }
+}
+
+extension ButtonStyle where Self == RowPressStyle {
+    /// Tappable rows with a long-press menu.
+    static var pressableRow: RowPressStyle { RowPressStyle() }
 }

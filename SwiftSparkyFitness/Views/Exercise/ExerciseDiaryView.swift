@@ -264,7 +264,9 @@ struct ExerciseDiaryView: View {
             .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
             .contentShape(Rectangle())
         }
-        .buttonStyle(.pressable)
+        // No dimming: a long-press holds the button "pressed" while the row
+        // lifts, and a dimmed row doesn't look picked, it looks disabled.
+        .buttonStyle(PressableStyle(scale: 0.985, dimsOnPress: false))
         .contentShape(.contextMenuPreview, RoundedRectangle(cornerRadius: AppRadius.md))
         .contextMenu {
             if session.exerciseId != nil {

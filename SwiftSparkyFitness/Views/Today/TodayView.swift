@@ -31,6 +31,8 @@ struct TodayView: View {
     }
 
     @State private var isPresentingCalendar = false
+    /// The Log sheet's measured height; this first guess is replaced on its first layout.
+    @State private var logChoiceHeight: CGFloat = 320
 
     /// Same floor Diary uses: no days before the account existed.
     private var minDate: Date {
@@ -165,8 +167,17 @@ struct TodayView: View {
                 viewModel.pendingLogTarget = target
                 viewModel.isPresentingLogChoice = false
             }
-            .presentationDetents([.height(360)])
-            .presentationDragIndicator(.hidden)
+            // Sized to its rows, not a fixed height: 360pt left a gap under
+            // the last row, and would clip at larger text sizes.
+            // (`.presentationSizing(.fitted)` doesn't do this on iPhone: it
+            // gives a full-height sheet with the rows floating in the middle.)
+            // Natural height, not the height it was offered: offered the
+            // detent's 320pt, larger text couldn't grow and cut the titles.
+            .fixedSize(horizontal: false, vertical: true)
+            .onGeometryChange(for: CGFloat.self) { $0.size.height } action: { logChoiceHeight = $0 }
+            .presentationDetents([.height(logChoiceHeight)])
+            .presentationBackground(AppColor.surface)
+            .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $viewModel.isPresentingFoodSearch, onDismiss: {
             viewModel.pendingMealType = nil
@@ -356,12 +367,16 @@ struct TodayView: View {
             }
             .padding(.horizontal, 16)
             .padding(.vertical, 13)
-            // The white behind a row is the meal card's, so without this
-            // only the text itself took a tap or a long-press. The row's
-            // whole rectangle does now — and nothing outside the card.
+            // Its own surface, so the row lifted by a long-press is a solid
+            // card rather than text on nothing (the white was the meal
+            // card's, behind it).
+            .background(AppColor.surface)
+            // Without this only the text itself took a tap or a long-press.
+            // The row's whole rectangle does now — and nothing outside the
+            // card.
             .contentShape(Rectangle())
         }
-        .buttonStyle(.pressable)
+        .buttonStyle(.pressableRow)
         // Three VoiceOver stops per food — name, portion, and a bare
         // number with no unit. One stop, one sentence.
         .accessibilityElement(children: .ignore)
@@ -488,21 +503,32 @@ private struct LogChoiceSheet: View {
     let onSelect: (LogTarget) -> Void
 
     var body: some View {
-        VStack(spacing: 8) {
-            Capsule().fill(AppColor.hairline).frame(width: 44, height: 5).padding(.top, 10)
-            Text("Log").appDisplay(18).foregroundStyle(AppColor.ink).padding(.top, 4)
+        VStack(spacing: 0) {
+            Text("Log")
+                .appDisplay(18)
+                .foregroundStyle(AppColor.ink)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.top, 24)
+                .padding(.bottom, 8)
+                .accessibilityAddTraits(.isHeader)
 
             choiceRow(icon: "fork.knife", title: "Log Food") { onSelect(.food) }
+            divider
             choiceRow(icon: "figure.run", title: "Log Exercise") { onSelect(.exercise) }
+            divider
             // Water isn't here: it's one tap on the card itself, and burying
             // a one-tap action two sheets deep would be slower than the stub
             // it replaced.
             choiceRow(icon: "scalemass", title: "Log Weight") { onSelect(.weight) }
+            divider
             choiceRow(icon: "ruler", title: "Body Measurements") { onSelect(.measurements) }
-            Spacer(minLength: 8)
         }
         .padding(.horizontal, 20)
         .background(AppColor.surface)
+    }
+
+    private var divider: some View {
+        Rectangle().fill(AppColor.hairline).frame(height: 1).padding(.leading, 50)
     }
 
     private func choiceRow(icon: String, title: String, action: @escaping () -> Void) -> some View {
@@ -517,11 +543,25 @@ private struct LogChoiceSheet: View {
                     // visible to VoiceOver the symbol read its own name out
                     // loud first — "Scale For Weighing Mass, Log Weight".
                     .accessibilityHidden(true)
-                Text(title).appBody(16, weight: .semibold).foregroundStyle(AppColor.ink)
+                Text(title)
+                    .appBody(16, weight: .semibold)
+                    .foregroundStyle(AppColor.ink)
+                    // At the largest text sizes a word like "Measurements"
+                    // is wider than the row; shrink it before it breaks
+                    // mid-word.
+                    .lineLimit(2)
+                    .minimumScaleFactor(0.7)
                 Spacer()
+                Image(systemName: "chevron.right")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(AppColor.placeholder)
+                    .accessibilityHidden(true)
             }
             .padding(.vertical, 10)
+            .frame(minHeight: 56)
+            .contentShape(Rectangle())
         }
+        .buttonStyle(.pressable)
     }
 }
 

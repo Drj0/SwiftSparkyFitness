@@ -62,14 +62,7 @@ struct FoodDetailView: View {
             PrimaryButton(
                 title: viewModel.isEditing ? "Save Changes" : "Add to \(viewModel.selectedMealType.name.capitalized)",
                 isLoading: viewModel.isSaving
-            ) {
-                Task {
-                    if await viewModel.save() {
-                        if dismissesOnSave { dismiss() }
-                        onLogged()
-                    }
-                }
-            }
+            ) { save() }
             .padding(20)
             .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .top)
         }
@@ -85,16 +78,23 @@ struct FoodDetailView: View {
         })
     }
 
-    // The right-hand "Add"/"Edit" used to be a plain Text in accent
-    // semibold — pixel-identical to every real Save button in the app, in
-    // the exact corner a Save button lives in, and it did nothing when
-    // tapped. It's a mode indicator, not an action (the action is the
-    // full-width button at the bottom), so it's restyled to the sheet's
-    // section-label idiom rather than promoted to a second button that
-    // would then compete with that one.
+    private func save() {
+        Task {
+            if await viewModel.save() {
+                if dismissesOnSave { dismiss() }
+                onLogged()
+            }
+        }
+    }
+
+    // Adding has no top-right action: the full-width button at the bottom is
+    // the one way to add, and a second "Add" up here only competed with it.
+    // Editing gets a Save in the corner, in Liquid Glass like Goals' Save,
+    // that does exactly what "Save Changes" below does; like Goals it stays
+    // disabled until something has changed.
     //
-    // Header padding drops from 14 to 2 because Back now carries a 44pt
-    // touch target of its own; the row keeps its measured height.
+    // Header padding drops from 14 to 2 because Back carries a 44pt touch
+    // target of its own; the row keeps its measured height.
     private var header: some View {
         HStack {
             Button { if viewModel.isDirty { confirmingDiscard = true } else { dismiss() } } label: {
@@ -109,11 +109,26 @@ struct FoodDetailView: View {
 
             Spacer()
 
-            Text(viewModel.isEditing ? "EDIT" : "ADD")
-                .appBody(12, weight: .semibold)
-                .foregroundStyle(AppColor.placeholder)
-                .accessibilityAddTraits(.isHeader)
+            if viewModel.isEditing {
+                Button(action: save) {
+                    if viewModel.isSaving {
+                        ProgressView().controlSize(.small)
+                    } else {
+                        Text("Save").appBody(15, weight: .semibold)
+                    }
+                }
+                .buttonStyle(.glass)
+                .controlSize(.large)
+                .tint(AppColor.accent)
+                .disabled(!viewModel.isDirty || viewModel.isSaving)
+                .accessibilityLabel("Save")
+                .accessibilityValue(viewModel.isSaving ? "In progress" : "")
+            }
         }
+        // The glass Save is taller than Back's 44pt; a floor of its height
+        // keeps the header, and everything under it, the same size in add
+        // mode, where there's no Save.
+        .frame(minHeight: 46)
         .padding(.horizontal, 20)
         .padding(.vertical, 2)
         .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .bottom)
@@ -222,4 +237,24 @@ struct FoodDetailView: View {
         }
         .frame(maxWidth: .infinity)
     }
+}
+
+private enum FoodDetailPreview {
+    static let meals = [
+        MealType(id: "1", name: "breakfast", sortOrder: 10),
+        MealType(id: "2", name: "lunch", sortOrder: 20),
+        MealType(id: "3", name: "dinner", sortOrder: 30),
+    ]
+    static let food = Food(
+        id: "f", name: "French toast", brand: nil,
+        defaultVariant: FoodVariant(id: "v", servingSize: 100, servingUnit: "g", calories: 229, protein: 7.9, carbs: 25, fat: 10)
+    )
+}
+
+#Preview("Adding") {
+    FoodDetailView(food: FoodDetailPreview.food, mealTypes: FoodDetailPreview.meals, initialMealType: FoodDetailPreview.meals[2], onLogged: {})
+}
+
+#Preview("Editing") {
+    FoodDetailView(food: FoodDetailPreview.food, mealTypes: FoodDetailPreview.meals, initialMealType: FoodDetailPreview.meals[2], existingEntryId: "e", initialQuantity: 150, onLogged: {})
 }
