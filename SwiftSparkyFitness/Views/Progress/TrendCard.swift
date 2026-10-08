@@ -103,12 +103,14 @@ struct TrendCard<Content: View>: View {
             if let action {
                 // Today's meal "+": a 28pt glyph on a 44pt target, with the
                 // growth handed back so the header keeps its height.
+                // In the card's own colour: a pink "+" on the blue
+                // measurements card read as belonging to something else.
                 Button(action: action.perform) {
                     Image(systemName: "plus")
                         .font(.system(size: 13, weight: .semibold))
-                        .foregroundStyle(AppColor.accent)
+                        .foregroundStyle(kind.tint)
                         .frame(width: 28, height: 28)
-                        .background(AppColor.accentSoft, in: Circle())
+                        .background(kind.tint.opacity(0.14), in: Circle())
                         .frame(minWidth: 44, minHeight: 44)
                         .contentShape(Rectangle())
                         .padding(.vertical, -8)
@@ -176,6 +178,9 @@ struct TrendHeadline: View {
 struct TrendEmptyState: View {
     let message: String
     var action: TrendCardAction?
+    /// The card's colour, for the button's glyph and fill. The label stays
+    /// ink: the blue and green don't reach 4.5:1 as text.
+    var tint: Color = AppColor.accent
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -185,14 +190,17 @@ struct TrendEmptyState: View {
                 .fixedSize(horizontal: false, vertical: true)
             if let action {
                 Button(action: action.perform) {
-                    Label(action.label, systemImage: "plus")
-                        .appBody(14, weight: .semibold)
-                        .foregroundStyle(AppColor.accent)
-                        .padding(.horizontal, 14)
-                        .padding(.vertical, 8)
-                        .background(AppColor.accentSoft, in: Capsule())
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
+                    Label {
+                        Text(action.label).foregroundStyle(AppColor.ink)
+                    } icon: {
+                        Image(systemName: "plus").foregroundStyle(tint)
+                    }
+                    .appBody(14, weight: .semibold)
+                    .padding(.horizontal, 14)
+                    .padding(.vertical, 8)
+                    .background(tint.opacity(0.14), in: Capsule())
+                    .frame(minHeight: 44)
+                    .contentShape(Rectangle())
                 }
                 .buttonStyle(.pressable)
             }
@@ -256,21 +264,32 @@ struct TrendStatRow: View {
 struct TrendChip: View {
     let title: String
     let isSelected: Bool
+    /// Set inside a Progress card: the selection then takes the card's
+    /// colour as a soft fill and ring, the same as Nutrition's tiles, since
+    /// white text on the lighter tints fails contrast. Nil keeps the solid
+    /// accent capsule.
+    var tint: Color?
     let action: () -> Void
 
     var body: some View {
         Button(action: action) {
             Text(title)
                 .appBody(13, weight: .semibold)
-                .foregroundStyle(isSelected ? .white : AppColor.secondaryText)
+                .foregroundStyle(isSelected ? (tint == nil ? .white : AppColor.ink) : AppColor.secondaryText)
                 .padding(.horizontal, 14)
                 .padding(.vertical, 7)
-                .background(isSelected ? AppColor.accent : AppColor.inputBackground, in: Capsule())
+                .background(selectedFill, in: Capsule())
+                .overlay(Capsule().stroke(isSelected ? tint ?? .clear : .clear, lineWidth: 1.5))
                 .frame(minHeight: 44)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.pressable)
         .accessibilityAddTraits(isSelected ? [.isSelected] : [])
+    }
+
+    private var selectedFill: Color {
+        guard isSelected else { return AppColor.inputBackground }
+        return tint?.opacity(0.14) ?? AppColor.accent
     }
 }
 

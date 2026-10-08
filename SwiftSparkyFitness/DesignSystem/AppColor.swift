@@ -64,6 +64,11 @@ enum AppColor {
     static let carbs = Color.adaptive(light: Color(hex: "8F5B06"), dark: Color(hex: "F5A623"))
     static let energyGraphic = Color.adaptive(light: Color(hex: "1FA98A"), dark: Color(hex: "2FD3AC"))
     static let carbsGraphic = Color.adaptive(light: Color(hex: "F5A623"), dark: Color(hex: "F5A623"))
+    /// Protein used to borrow `accent`, which is also calories — so on the
+    /// Progress chart switching between the two changed nothing on screen.
+    /// Its own violet, AA-clear for text on both surfaces.
+    static let protein = Color.adaptive(light: Color(hex: "6A4BD6"), dark: Color(hex: "B39DFF"))
+    static let proteinGraphic = Color.adaptive(light: Color(hex: "7C5CFA"), dark: Color(hex: "B39DFF"))
     static let water = Color.adaptive(light: Color(hex: "2F9BEA"), dark: Color(hex: "5AC8FA"))
     /// iCloud's own blue, not this app's water blue — the row it colours is a
     /// status readout for someone else's service, and matching the cloud they

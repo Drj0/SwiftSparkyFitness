@@ -3134,14 +3134,16 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         XCTAssertFalse(viewModel.didClampCustomRange)
     }
 
-    /// Nothing may be charted from before the account existed.
+    /// A preset is its whole window even on a new account: floored at the
+    /// account's first day, 1W through 1Y were all the same two days.
     @MainActor
-    func testRangeNeverStartsBeforeTheAccountWasCreated() {
-        let (viewModel, _) = progressViewModel(createdDaysAgo: 3)
-        viewModel.preset = .threeMonths
+    func testPresetRangeKeepsItsFullSpanOnANewAccount() {
+        let (viewModel, _) = progressViewModel(createdDaysAgo: 1)
 
-        XCTAssertEqual(viewModel.range.start, viewModel.minDate)
-        XCTAssertLessThanOrEqual(viewModel.range.end, viewModel.maxDate)
+        XCTAssertEqual(viewModel.range.dayCount, 7)
+        viewModel.preset = .threeMonths
+        XCTAssertEqual(viewModel.range.dayCount, ProgressRangePreset.threeMonths.days)
+        XCTAssertEqual(viewModel.range.end, viewModel.maxDate)
     }
 
     /// One failing read must not empty the whole tab — the other three cards

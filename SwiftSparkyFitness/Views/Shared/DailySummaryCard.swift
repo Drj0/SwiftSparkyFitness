@@ -111,14 +111,14 @@ struct DailySummaryCard: View {
     private var macroRow: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 0) {
-                macroColumn("\(Int(macroTotals.protein))g", "Protein", AppColor.accent)
+                macroColumn("\(Int(macroTotals.protein))g", "Protein", AppColor.protein)
                 macroDivider
                 macroColumn("\(Int(macroTotals.carbs))g", "Carbs", AppColor.carbs)
                 macroDivider
                 macroColumn("\(Int(macroTotals.fat))g", "Fat", AppColor.energy)
             }
             VStack(spacing: 10) {
-                macroColumn("\(Int(macroTotals.protein))g", "Protein", AppColor.accent)
+                macroColumn("\(Int(macroTotals.protein))g", "Protein", AppColor.protein)
                 macroColumn("\(Int(macroTotals.carbs))g", "Carbs", AppColor.carbs)
                 macroColumn("\(Int(macroTotals.fat))g", "Fat", AppColor.energy)
             }
