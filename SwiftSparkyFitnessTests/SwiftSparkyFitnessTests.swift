@@ -3065,10 +3065,14 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         let (viewModel, _) = progressViewModel(createdDaysAgo: 0) { stub in
             stub.goalsRangeToReturn = [today: NutritionGoals(raw: ["calories": .number(2250)])]
         }
-        viewModel.preset = .week
+        // An explicit one-day range: presets no longer floor at the account's
+        // first day, so a new account's "1W" is a full week.
+        viewModel.customStart = Date()
+        viewModel.customEnd = Date()
+        viewModel.preset = .custom
         await viewModel.load()
 
-        XCTAssertEqual(viewModel.range.dayCount, 1, "account created today floors the range to one day")
+        XCTAssertEqual(viewModel.range.dayCount, 1)
         XCTAssertEqual(viewModel.goalLine.count, 1)
         XCTAssertEqual(viewModel.constantGoal, 2250)
     }
