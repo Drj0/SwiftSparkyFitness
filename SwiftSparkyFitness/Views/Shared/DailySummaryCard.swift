@@ -27,19 +27,13 @@ struct DailySummaryCard: View {
         }
     }
 
-    /// Summed from the same entries the meal list renders, rather than read
-    /// from `calorieBalance.eaten`.
-    ///
-    /// The server re-applies `quantity / serving_size` to the already-scaled
-    /// `calories` the app writes, so its total is only correct when the
-    /// logged quantity happens to equal one base serving. Verified live: 50 g
-    /// of a 100 g / 200 kcal food (truth 100 kcal) returns `eaten: 50` while
-    /// the entries sum to 100 — so the hero number contradicted the list
-    /// directly beneath it for any part portion. Summing locally keeps the
-    /// screen internally consistent and doesn't depend on fixing the server.
-    private var eaten: Double {
-        summary.foodEntries.reduce(0) { $0 + $1.calories }
-    }
+    private var eaten: Double { summary.eatenCalories }
+
+    /// The goal *row*, as Today reads it (`TodayViewModel.hasGoalSet`):
+    /// `calorieBalance.goal` falls back to a default 2,000 for a diary with
+    /// no goal, so this card said "1,816 kcal left" against a goal Today
+    /// said wasn't set.
+    private var hasGoal: Bool { (summary.goals.calories ?? 0) > 0 }
 
     private var remaining: Double {
         summary.calorieBalance.goal - eaten + summary.calorieBalance.burned
@@ -49,17 +43,17 @@ struct DailySummaryCard: View {
         let goal = summary.calorieBalance.goal
         let energyGoal = max(goal * 0.15, 1)
         let waterGoal = summary.goals.effectiveWaterGoalMl
-        let isOver = remaining < 0
+        let isOver = hasGoal && remaining < 0
         let water = waterMl ?? summary.waterIntake
 
         return RingCard {
             RingChart(layers: [
-                RingLayer(progress: eaten / max(goal, 1), color: AppColor.accent),
+                RingLayer(progress: hasGoal ? eaten / max(goal, 1) : 0, color: AppColor.accent),
                 RingLayer(progress: summary.calorieBalance.burned / energyGoal, color: AppColor.energyGraphic),
                 RingLayer(progress: water / waterGoal, color: AppColor.water),
             ], accessibilityDescription: ringDescription(eaten: eaten, goal: goal, water: water, waterGoal: waterGoal)) {
                 VStack(spacing: 2) {
-                    Text("\(abs(Int(remaining.rounded())))")
+                    Text("\(abs(Int((hasGoal ? remaining : eaten).rounded())))")
                         .appDisplay(34)
                         .foregroundStyle(isOver ? AppColor.destructive : AppColor.ink)
                         .lineLimit(1)
@@ -67,10 +61,10 @@ struct DailySummaryCard: View {
                     // Over-goal used to render identically to hitting it
                     // exactly (both clamped to "0 kcal left"), which is the
                     // one question a calorie tracker exists to answer.
-                    Text(isOver ? "kcal over" : "kcal left")
+                    Text(hasGoal ? (isOver ? "kcal over" : "kcal left") : "kcal eaten")
                         .appBody(12)
                         .foregroundStyle(isOver ? AppColor.destructive : AppColor.secondaryText)
-                    Text("\(Int(eaten.rounded())) eaten")
+                    Text(hasGoal ? "\(Int(eaten.rounded())) eaten" : "No goal set")
                         .appBody(12)
                         .foregroundStyle(AppColor.secondaryText)
                         .padding(.top, 3)
@@ -95,10 +89,10 @@ struct DailySummaryCard: View {
     /// arc length and colour — i.e. nothing — for active energy and water.
     private func ringDescription(eaten: Double, goal: Double, water: Double, waterGoal: Double) -> String {
         let burned = summary.calorieBalance.burned
-        var parts = [
+        var parts = hasGoal ? [
             "\(Int(eaten.rounded())) of \(Int(goal.rounded())) calories eaten",
             remaining < 0 ? "\(Int(abs(remaining).rounded())) over" : "\(Int(remaining.rounded())) remaining",
-        ]
+        ] : ["\(Int(eaten.rounded())) calories eaten, no goal set"]
         if burned > 0 { parts.append("active energy \(Int(burned.rounded())) calories") }
         parts.append("water \(Int(water)) of \(Int(waterGoal)) millilitres")
         return parts.joined(separator: ", ") + "."
@@ -111,16 +105,16 @@ struct DailySummaryCard: View {
     private var macroRow: some View {
         ViewThatFits(in: .horizontal) {
             HStack(spacing: 0) {
-                macroColumn("\(Int(macroTotals.protein))g", "Protein", AppColor.protein)
+                macroColumn("\(Int(macroTotals.protein.rounded()))g", "Protein", AppColor.protein)
                 macroDivider
-                macroColumn("\(Int(macroTotals.carbs))g", "Carbs", AppColor.carbs)
+                macroColumn("\(Int(macroTotals.carbs.rounded()))g", "Carbs", AppColor.carbs)
                 macroDivider
-                macroColumn("\(Int(macroTotals.fat))g", "Fat", AppColor.energy)
+                macroColumn("\(Int(macroTotals.fat.rounded()))g", "Fat", AppColor.energy)
             }
             VStack(spacing: 10) {
-                macroColumn("\(Int(macroTotals.protein))g", "Protein", AppColor.protein)
-                macroColumn("\(Int(macroTotals.carbs))g", "Carbs", AppColor.carbs)
-                macroColumn("\(Int(macroTotals.fat))g", "Fat", AppColor.energy)
+                macroColumn("\(Int(macroTotals.protein.rounded()))g", "Protein", AppColor.protein)
+                macroColumn("\(Int(macroTotals.carbs.rounded()))g", "Carbs", AppColor.carbs)
+                macroColumn("\(Int(macroTotals.fat.rounded()))g", "Fat", AppColor.energy)
             }
         }
         .padding(.vertical, 14)

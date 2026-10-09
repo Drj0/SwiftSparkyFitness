@@ -31,6 +31,13 @@ struct DailySummary: Decodable {
     let foodEntries: [FoodEntrySummary]
     let exerciseSessions: [ExerciseSessionSummary]
 
+    /// Calories eaten, summed from the entries the meal list shows rather
+    /// than read from `calorieBalance.eaten`. The server re-applies
+    /// `quantity / serving_size` to the already-scaled `calories` the app
+    /// writes, so its total is only right when the quantity is one base
+    /// serving (50 g of a 100 g / 200 kcal food came back as 50, not 100).
+    var eatenCalories: Double { foodEntries.reduce(0) { $0 + $1.calories } }
+
     struct CalorieBalance: Decodable {
         let eaten: Double
         let burned: Double

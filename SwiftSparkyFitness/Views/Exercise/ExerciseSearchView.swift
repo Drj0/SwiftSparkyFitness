@@ -278,11 +278,13 @@ struct ExerciseSearchView: View {
                 select(result)
             } label: {
                 HStack(spacing: 12) {
+                    // Exercise's colour, as on Today's card and the
+                    // Exercise tab — pink here made it look like food.
                     Image(systemName: result.symbol)
                         .font(.system(size: 17, weight: .medium))
-                        .foregroundStyle(AppColor.accent)
+                        .foregroundStyle(AppColor.energy)
                         .frame(width: 36, height: 36)
-                        .background(AppColor.accentSoft, in: RoundedRectangle(cornerRadius: 10, style: .continuous))
+                        .background(AppColor.energy.opacity(0.12), in: RoundedRectangle(cornerRadius: 10, style: .continuous))
                         .accessibilityHidden(true)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(result.name).appBody(15, weight: .semibold).foregroundStyle(AppColor.ink)

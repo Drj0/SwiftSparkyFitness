@@ -103,7 +103,9 @@ struct TodayView: View {
                         // meals and water all appearing at once), and an empty
                         // day hid the meals you'd log into.
                         if !viewModel.hasGoalSet {
-                            GoalNotSetCard { viewModel.isPresentingSetGoals = true }
+                            GoalNotSetCard(eaten: summary.eatenCalories) {
+                                viewModel.isPresentingSetGoals = true
+                            }
                             // Logging works without a goal, so what's logged
                             // has to show without one too: hiding the meals
                             // here made every entry look lost.
@@ -486,11 +488,12 @@ private struct FirstFoodNudge: View {
 }
 
 private struct GoalNotSetCard: View {
+    let eaten: Double
     let onSetGoal: () -> Void
 
     var body: some View {
         VStack(spacing: 16) {
-            GoalNotSetRing()
+            GoalNotSetRing(eaten: eaten)
                 .padding(.top, 10)
             PrimaryButton(title: "Set daily calorie goal", action: onSetGoal)
         }
@@ -516,14 +519,14 @@ private struct LogChoiceSheet: View {
 
             choiceRow(icon: "fork.knife", title: "Log Food") { onSelect(.food) }
             divider
-            choiceRow(icon: "figure.run", title: "Log Exercise") { onSelect(.exercise) }
+            choiceRow(icon: "figure.run", title: "Log Exercise", tint: AppColor.energy) { onSelect(.exercise) }
             divider
             // Water isn't here: it's one tap on the card itself, and burying
             // a one-tap action two sheets deep would be slower than the stub
             // it replaced.
             choiceRow(icon: "scalemass", title: "Log Weight") { onSelect(.weight) }
             divider
-            choiceRow(icon: "ruler", title: "Body Measurements") { onSelect(.measurements) }
+            choiceRow(icon: "ruler", title: "Log Measurements") { onSelect(.measurements) }
         }
         .padding(.horizontal, 20)
         .background(AppColor.surface)
@@ -533,14 +536,16 @@ private struct LogChoiceSheet: View {
         Rectangle().fill(AppColor.hairline).frame(height: 1).padding(.leading, 50)
     }
 
-    private func choiceRow(icon: String, title: String, action: @escaping () -> Void) -> some View {
+    /// Each row in its kind's colour, as on Today's cards: exercise green.
+    private func choiceRow(icon: String, title: String, tint: Color = AppColor.accent,
+                           action: @escaping () -> Void) -> some View {
         Button(action: action) {
             HStack(spacing: 14) {
                 Image(systemName: icon)
                     .font(.system(size: 16, weight: .semibold))
-                    .foregroundStyle(AppColor.accent)
+                    .foregroundStyle(tint)
                     .frame(width: 36, height: 36)
-                    .background(AppColor.accentSoft, in: Circle())
+                    .background(tint == AppColor.accent ? AppColor.accentSoft : tint.opacity(0.12), in: Circle())
                     // The row's title already says what this does; left
                     // visible to VoiceOver the symbol read its own name out
                     // loud first — "Scale For Weighing Mass, Log Weight".

@@ -8,7 +8,7 @@
 //  measurement chips (waist/hips/neck/...) used to render here too, but
 //  their variable count made this card grow taller than its sibling and,
 //  at accessibility text sizes, overflow it. Measurements are still
-//  logged the same way as before (the FAB's "Body Measurements" choice
+//  logged the same way as before (the FAB's "Log Measurements" choice
 //  opens the exact same sheet this card's own "+ Measurements" link used
 //  to), just not surfaced in this compact a card.
 //

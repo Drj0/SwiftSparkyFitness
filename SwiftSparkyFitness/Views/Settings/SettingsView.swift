@@ -156,7 +156,7 @@ struct SettingsView: View {
         // back to my server" are the same tap otherwise.
         .sheet(isPresented: $isPresentingConnect) {
             ServerAddressSheet(
-                title: "Connect Sparky Server",
+                title: "Connect SparkyFitness Server",
                 saveTitle: "Connect",
                 note: "After you sign in, you can send this iPhone's diary to the server. This iPhone keeps its copy either way."
             ) {
@@ -376,7 +376,7 @@ struct SettingsView: View {
                 }
             }
 
-            actionRow("Connect Sparky server", icon: "externaldrive.connected.to.line.below") {
+            actionRow("Connect SparkyFitness server", icon: "externaldrive.connected.to.line.below") {
                 isPresentingConnect = true
             }
         } header: {
@@ -1197,7 +1197,7 @@ enum HealthRequestState: Equatable {
         case .idle:
             return isOn
                 ? Footnote(text: "Logged workouts still count — whichever total is higher wins.")
-                : Footnote(text: "Adds Health's active energy to your daily burn.")
+                : Footnote(text: "Sparky only reads from Health. It never writes to it.")
         }
     }
 }

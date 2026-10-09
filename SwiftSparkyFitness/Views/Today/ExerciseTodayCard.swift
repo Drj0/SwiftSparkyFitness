@@ -24,10 +24,10 @@ struct ExerciseTodayCard: View {
                 title: "Exercise", symbol: "figure.run", tint: AppColor.energy,
                 // A real zero, not a dash: "0 min" is a true fact about the
                 // day, and the prompt under it says what to do about it.
-                value: hasLogged ? "\(Int(durationMinutes))" : "0",
+                value: hasLogged ? "\(Int(durationMinutes.rounded()))" : "0",
                 valueIsEmpty: !hasLogged,
                 unit: "min",
-                caption: hasLogged ? "−\(Int(caloriesBurned)) kcal burned" : "Log a workout →",
+                caption: hasLogged ? "−\(Int(caloriesBurned.rounded())) kcal burned" : "Log a workout →",
                 captionIsAction: !hasLogged
             )
         }
@@ -36,7 +36,7 @@ struct ExerciseTodayCard: View {
         .accessibilityLabel(hasLogged ? "Exercise" : isToday ? "Log today's exercise" : "Log exercise")
         .accessibilityValue(
             hasLogged
-                ? "\(Int(durationMinutes)) minutes, \(Int(caloriesBurned)) calories burned"
+                ? "\(Int(durationMinutes.rounded())) minutes, \(Int(caloriesBurned.rounded())) calories burned"
                 : "Not logged"
         )
     }

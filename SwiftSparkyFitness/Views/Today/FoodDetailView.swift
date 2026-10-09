@@ -201,11 +201,11 @@ struct FoodDetailView: View {
                     .contentTransition(.numericText())
             }
             HStack(spacing: 0) {
-                macroColumn("\(Int(viewModel.scaledProtein))g", "Protein", AppColor.protein)
+                macroColumn("\(Int(viewModel.scaledProtein.rounded()))g", "Protein", AppColor.protein)
                 Divider()
-                macroColumn("\(Int(viewModel.scaledCarbs))g", "Carbs", AppColor.carbs)
+                macroColumn("\(Int(viewModel.scaledCarbs.rounded()))g", "Carbs", AppColor.carbs)
                 Divider()
-                macroColumn("\(Int(viewModel.scaledFat))g", "Fat", AppColor.energy)
+                macroColumn("\(Int(viewModel.scaledFat.rounded()))g", "Fat", AppColor.energy)
             }
         }
         .padding(16)

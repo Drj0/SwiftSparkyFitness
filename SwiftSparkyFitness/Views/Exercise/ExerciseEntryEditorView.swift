@@ -148,6 +148,10 @@ struct ExerciseEntryEditorView: View {
     private var header: some View {
         SheetHeader(
             title: viewModel.isEditing ? "Edit \(viewModel.exercise.name)" : viewModel.exercise.name,
+            // Slid over Log Exercise's list, this goes back to it — a chevron,
+            // as food's detail has. ✕ there read as closing the whole sheet.
+            cancelTitle: closes == nil ? "Cancel" : "Back",
+            cancelSymbol: closes == nil ? "xmark" : "chevron.left",
             onCancel: { if viewModel.isDirty { confirmingDiscard = true } else { close() } },
             action: SheetAction("Save", isBusy: viewModel.isSaving) {
                 Task {

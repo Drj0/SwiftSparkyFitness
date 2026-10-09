@@ -182,7 +182,7 @@ struct SetGoalsView: View {
             footnote(
                 (viewModel.loaded?.isSet ?? true)
                     ? "Drives the main ring on Today."
-                    : "Starting from a typical 2,000 kcal — spin to yours. Nothing is saved until you tap Save."
+                    : "Starting from a typical 2,000 kcal — spin to yours. Nothing is saved until you tap ✓."
             )
         }
         .listRowBackground(AppColor.surface)
@@ -215,7 +215,7 @@ struct SetGoalsView: View {
         } header: {
             header("MACROS")
         } footer: {
-            footnote("Optional — leave one at zero and its ring just won't show a target.")
+            footnote("Optional — leave one not set and its ring just won't show a target.")
         }
         .listRowBackground(AppColor.surface)
     }

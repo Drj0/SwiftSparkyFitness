@@ -105,21 +105,45 @@ struct RingChart<Center: View>: View {
 
 /// The dashed single-ring "goal not set" state — visually distinct from an
 /// empty-but-configured ring so it reads as "unconfigured," not "no data yet."
+///
+/// Logging works without a goal, so once something is eaten the centre says
+/// how much: it used to keep asking for a goal over a day that had food in
+/// it, as if nothing had been logged.
 struct GoalNotSetRing: View {
     var diameter: CGFloat = 190
+    var eaten: Double = 0
 
     var body: some View {
         ZStack {
             Circle()
                 .stroke(AppColor.ringTrack, style: StrokeStyle(lineWidth: 13, dash: [5, 7]))
-            VStack(spacing: 6) {
-                Image(systemName: "sparkle")
-                    .font(.system(size: 22, weight: .semibold))
-                    .foregroundStyle(AppColor.accent)
-                Text("Set a daily\ngoal to start")
-                    .appBody(14)
-                    .foregroundStyle(AppColor.secondaryText)
-                    .multilineTextAlignment(.center)
+            if eaten > 0 {
+                VStack(spacing: 2) {
+                    Text(Int(eaten.rounded()).formatted())
+                        .appDisplay(46)
+                        .foregroundStyle(AppColor.ink)
+                        .contentTransition(.numericText())
+                    Text("kcal eaten")
+                        .appBody(14)
+                        .foregroundStyle(AppColor.secondaryText)
+                    Text("Set a goal to see what's left")
+                        .appBody(12)
+                        .foregroundStyle(AppColor.placeholder)
+                        .multilineTextAlignment(.center)
+                        .padding(.top, 6)
+                }
+                .padding(.horizontal, 24)
+                .accessibilityElement(children: .combine)
+            } else {
+                VStack(spacing: 6) {
+                    Image(systemName: "sparkle")
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(AppColor.accent)
+                    Text("Set a daily\ngoal to start")
+                        .appBody(14)
+                        .foregroundStyle(AppColor.secondaryText)
+                        .multilineTextAlignment(.center)
+                }
             }
         }
         .frame(width: diameter, height: diameter)
@@ -135,5 +159,8 @@ struct GoalNotSetRing: View {
 }
 
 #Preview("Goal not set") {
-    GoalNotSetRing()
+    VStack {
+        GoalNotSetRing()
+        GoalNotSetRing(eaten: 184)
+    }
 }

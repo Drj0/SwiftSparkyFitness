@@ -42,7 +42,7 @@ enum FoodSource: String, Hashable {
         case .local: return nil
         case .openFoodFacts: return "Open Food"
         case .usda: return "USDA"
-        case .indb: return "INDB"
+        case .indb: return "Indian foods"
         }
     }
 }

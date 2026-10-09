@@ -133,9 +133,7 @@ struct WeekStrip: View {
 struct CalorieRingCard: View {
     let summary: DailySummary
 
-    /// Summed from the entries, not `calorieBalance.eaten` — see
-    /// DailySummaryCard.eaten for the server bug this sidesteps.
-    private var eaten: Double { summary.foodEntries.reduce(0) { $0 + $1.calories } }
+    private var eaten: Double { summary.eatenCalories }
     private var goal: Double { summary.calorieBalance.goal }
     private var burned: Double { summary.calorieBalance.burned }
     private var remaining: Double { goal - eaten + burned }

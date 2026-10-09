@@ -25,6 +25,7 @@ import SwiftUI
 struct DiaryView: View {
     @ObservedObject private var viewModel: DiaryViewModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+    @State private var isLoggingFood = false
 
     /// Standalone use (previews, tests) builds its own view model; the
     /// Exercise tab passes one down so both segments share a single day's
@@ -70,6 +71,18 @@ struct DiaryView: View {
         .refreshable { await viewModel.load() }
         .sheet(item: $viewModel.editingFoodEntry, onDismiss: { Task { await viewModel.load() } }) { entry in
             editFoodSheet(entry)
+        }
+        // Logs to the day on screen, as the Exercise side's "Log a workout"
+        // does; today keeps the time of day, as Today's logging does.
+        .sheet(isPresented: $isLoggingFood, onDismiss: { Task { await viewModel.load() } }) {
+            FoodSearchView(
+                mealTypes: viewModel.mealTypes.visibleOnly, initialMealType: nil,
+                entryDate: Calendar.current.isDateInToday(viewModel.selectedDate) ? Date() : viewModel.selectedDate
+            ) {
+                isLoggingFood = false
+            }
+            .fittedDetent()
+            .presentationDragIndicator(.visible)
         }
         .sheet(item: $viewModel.isPresentingBodySheet) { kind in
             LogBodyView(
@@ -187,21 +200,46 @@ struct DiaryView: View {
         DiaryDayHeader(viewModel: viewModel)
     }
 
+    /// The same card as the Exercise side's, so the two halves of this tab
+    /// read as one screen — and, like it, it offers the thing to do here
+    /// rather than sending the user to another tab.
     private var emptyState: some View {
-        VStack(spacing: 10) {
-            Text("📭").font(.system(size: 36))
+        VStack(spacing: 12) {
+            Image(systemName: "fork.knife")
+                .font(.system(size: 26, weight: .semibold))
+                .foregroundStyle(AppColor.accent)
+                .frame(width: 64, height: 64)
+                .background(AppColor.accentSoft, in: Circle())
+                .accessibilityHidden(true)
             Text("Nothing logged \(DiaryDayHeader.phrase(for: viewModel.selectedDate))")
-                .appDisplay(18)
+                .appDisplay(20)
                 .foregroundStyle(AppColor.ink)
                 .multilineTextAlignment(.center)
-            Text("Switch to Today to log food, water, or exercise.")
-                .appBody(13)
+                .accessibilityAddTraits(.isHeader)
+            Text("Log a meal or a snack for this day. Water is on Today.")
+                .appBody(14)
                 .foregroundStyle(AppColor.secondaryText)
                 .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+            PrimaryButton(title: "Log food") {
+                // A day swipe across the card ends on this button.
+                guard !viewModel.isMidDaySwipe else { return }
+                Haptics.light()
+                isLoggingFood = true
+            }
+            .padding(.top, 6)
         }
         .frame(maxWidth: .infinity)
-        .padding(.horizontal, 44)
-        .padding(.top, 60)
+        .padding(.horizontal, 24)
+        .padding(.vertical, 32)
+        .background(AppColor.surface)
+        .overlay(
+            RoundedRectangle(cornerRadius: AppRadius.lg)
+                .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                .foregroundStyle(AppColor.dashedBorder)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: AppRadius.lg))
+        .padding(.horizontal, AppSpacing.screenPad)
     }
 
     private func loadErrorState(_ message: String) -> some View {
