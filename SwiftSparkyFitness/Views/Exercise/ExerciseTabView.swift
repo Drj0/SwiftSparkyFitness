@@ -62,6 +62,7 @@ struct ExerciseTabView: View {
         // nothing, since `viewModel.summary` stayed nil forever. Found by
         // driving the built app on the simulator, not by reading the code.
         .task { await viewModel.load() }
+        .onChange(of: user.createdAt) { _, start in viewModel.historyStarts(start) }
     }
 }
 

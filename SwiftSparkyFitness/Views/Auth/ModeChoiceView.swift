@@ -36,6 +36,19 @@ struct ModeChoiceView: View {
     /// storing the mode swaps this whole view out, and doing that while its
     /// sheet is still animating away leaves the sheet without a presenter.
     @State private var serverIsReady = false
+    /// The store is already open and mirroring here, so on a reinstall the
+    /// iCloud diary starts arriving while this screen is up; each sync event
+    /// re-reads `foundICloudDiary`.
+    @ObservedObject private var cloud = CloudSyncStatus.shared
+
+    /// A diary has come down from iCloud, and it's still the one in use — not
+    /// one left behind when it moved to a server. A returning user otherwise
+    /// had nothing here telling them which card leads back to it.
+    private var foundICloudDiary: Bool {
+        let store = LocalStore.shared
+        guard store.isCloudKitEnabled, store.hasDiaryEntries() else { return false }
+        return store.latestHandoff?.toMode != AppMode.server.rawValue
+    }
 
     var body: some View {
         ScrollView {
@@ -61,7 +74,9 @@ struct ModeChoiceView: View {
                     title: "On this iPhone",
                     badge: "Recommended",
                     detail: "Start logging right away. No account or server needed.",
-                    note: Note(icon: "icloud", text: "Private to you, and backed up to iCloud when you're signed in."),
+                    note: foundICloudDiary
+                        ? Note(icon: "checkmark.icloud", text: "Your diary is in iCloud. Choose this to pick up where you left off.")
+                        : Note(icon: "icloud", text: "Private to you, and backed up to iCloud when you're signed in."),
                     isPrimary: true
                 ) { choose(.local) }
                 .padding(.top, 28)

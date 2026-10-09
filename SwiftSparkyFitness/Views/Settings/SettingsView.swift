@@ -929,6 +929,9 @@ struct SettingsView: View {
         let keepsCloudCopy = LocalStore.shared.isCloudKitEnabled
         do {
             try LocalStore.shared.eraseThisDeviceCopy()
+            // The reopened store fetches the iCloud diary from the start, so
+            // it's a fresh install again until that has arrived.
+            if keepsCloudCopy { sync.restartInitialImport() }
             wipeError = nil
             Haptics.success()
             NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
@@ -967,14 +970,9 @@ struct SettingsView: View {
         do {
             let archive = try DiaryArchive.decode(Data(contentsOf: url))
             let result = try archive.restore(into: LocalStore.shared)
-            // Local mode floors day navigation on its first-use date; a
-            // restored history older than that has to stay reachable.
-            if let earliest = result.earliestDay {
-                let firstUse = UserDefaults.standard.object(forKey: LocalAPIClient.firstUseKey) as? Date
-                if firstUse.map({ earliest < $0 }) ?? true {
-                    UserDefaults.standard.set(Calendar.current.startOfDay(for: earliest), forKey: LocalAPIClient.firstUseKey)
-                }
-            }
+            // Older days it brought become reachable on their own: the
+            // first-use date never sits after the diary's first entry, and
+            // this notice has the session re-read it.
             NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
             let summary = result.added + result.updated == 0
                 ? "Restored — this iPhone already had everything in that file."

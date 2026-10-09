@@ -58,7 +58,7 @@ final class DiaryArchiveTests: XCTestCase {
         let destination = makeLocal()
         let result = try archive.restore(into: destination.store)
         XCTAssertGreaterThan(result.added, 0)
-        XCTAssertEqual(result.earliestDay, day)
+        XCTAssertEqual(destination.store.earliestEntryDay(), day, "the restored history is reachable")
 
         let original = try await source.dailySummary(date: day)
         let restored = try await destination.dailySummary(date: day)

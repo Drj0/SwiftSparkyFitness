@@ -59,7 +59,8 @@ final class DiaryViewModel: ObservableObject {
 
     /// Confirmed with the user: Diary can't navigate before the account
     /// existed (nothing to show) or past today (nothing logged yet).
-    let minDate: Date
+    /// Moves earlier when older history arrives (`historyStarts`).
+    @Published private(set) var minDate: Date
     /// Today. Moves with the clock (see `rollOverToToday`): the view model
     /// lives as long as its tab, which can be days.
     @Published private(set) var maxDate: Date
@@ -79,6 +80,13 @@ final class DiaryViewModel: ObservableObject {
     /// published: nothing draws from it.
     var lastDaySwipeAt = Date.distantPast
     var isMidDaySwipe: Bool { Date().timeIntervalSince(lastDaySwipeAt) < 0.3 }
+
+    /// The diary's start moved earlier: on this device's own diary that
+    /// happens when iCloud or a restored file brings back older days.
+    func historyStarts(_ createdAt: Date?) {
+        let start = min(Calendar.current.startOfDay(for: createdAt ?? Date()), maxDate)
+        if start < minDate { minDate = start }
+    }
 
     init(user: SessionUser, apiClient: APIClientProtocol = AppServices.client) {
         self.apiClient = apiClient

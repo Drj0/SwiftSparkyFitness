@@ -303,6 +303,23 @@ final class LocalStore {
         }
     }
 
+    /// The first day anything was logged on, or nil for an empty diary.
+    /// Day keys sort as dates, so this is one row per kind, not the diary.
+    func earliestEntryDay() -> Date? {
+        func first<T: PersistentModel>(_ predicate: Predicate<T>, by key: KeyPath<T, String>) -> String? {
+            var descriptor = FetchDescriptor<T>(predicate: predicate, sortBy: [SortDescriptor(key)])
+            descriptor.fetchLimit = 1
+            return (try? context.fetch(descriptor))?.first?[keyPath: key]
+        }
+        let days = [
+            first(#Predicate<LocalFoodEntry> { $0.dayKey != "" }, by: \.dayKey),
+            first(#Predicate<LocalExerciseEntry> { $0.dayKey != "" }, by: \.dayKey),
+            first(#Predicate<LocalWaterEntry> { $0.dayKey != "" }, by: \.dayKey),
+            first(#Predicate<LocalCheckIn> { $0.dayKey != "" }, by: \.dayKey)
+        ]
+        return days.compactMap { $0 }.min().flatMap(LocalDay.date)
+    }
+
     func insert<T: PersistentModel>(_ model: T) {
         context.insert(model)
         save()

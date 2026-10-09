@@ -117,7 +117,7 @@ final class ProgressViewModel: ObservableObject {
 
     /// Diary's floor, for the same reason: there is nothing to chart before
     /// the account existed, and nothing logged after today.
-    let minDate: Date
+    private(set) var minDate: Date
     /// Today. Rolls forward on the next load if the app stays alive past
     /// midnight — the tab lives for the whole session behind the tab bar.
     private(set) var maxDate: Date
@@ -137,6 +137,13 @@ final class ProgressViewModel: ObservableObject {
         formatter.calendar = Calendar(identifier: .gregorian)
         return formatter
     }()
+
+    /// See `DiaryViewModel.historyStarts`. Only Custom is floored, and its
+    /// pickers read this on their next render.
+    func historyStarts(_ createdAt: Date?) {
+        let start = min(Calendar.current.startOfDay(for: createdAt ?? Date()), maxDate)
+        if start < minDate { minDate = start; objectWillChange.send() }
+    }
 
     init(user: SessionUser, apiClient: APIClientProtocol = AppServices.client) {
         self.apiClient = apiClient

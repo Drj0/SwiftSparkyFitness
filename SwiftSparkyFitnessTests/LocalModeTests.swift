@@ -575,4 +575,30 @@ final class LocalModeTests: XCTestCase {
         auth.resetForModeChange(restoring: true)
         XCTAssertEqual(auth.restoreState, .restoring, "the frame before the new mode's restore isn't the login form")
     }
+
+    // MARK: - Where the diary starts
+
+    /// A diary that came back from iCloud after a reinstall is older than
+    /// this install; floored at the install date, none of it could be
+    /// reached from Today or Diary.
+    func testTheDiaryStartsNoLaterThanItsFirstEntry() async throws {
+        let defaults = UserDefaults.standard
+        let saved = defaults.object(forKey: LocalAPIClient.firstUseKey)
+        defer { defaults.set(saved, forKey: LocalAPIClient.firstUseKey) }
+        defaults.set(day("2026-10-01"), forKey: LocalAPIClient.firstUseKey)
+
+        let local = makeLocal()
+        XCTAssertEqual(local.firstUseDate, day("2026-10-01"), "an empty diary starts on first use")
+
+        let food = try await seedFood(local, id: "f1")
+        try await local.createFoodEntry(FoodEntryInput(food: food, mealTypeId: "breakfast", quantity: 100, entryDate: day("2025-03-14")))
+        _ = try await local.logWaterAmount(date: day("2024-12-31"), milliliters: 250)
+
+        XCTAssertEqual(local.store.earliestEntryDay(), day("2024-12-31"))
+        XCTAssertEqual(local.firstUseDate, day("2024-12-31"))
+        let session = try await local.currentSession()
+        XCTAssertEqual(session?.createdAt, day("2024-12-31"))
+        XCTAssertEqual(defaults.object(forKey: LocalAPIClient.firstUseKey) as? Date, day("2024-12-31"), "remembered, not recomputed down")
+    }
+
 }

@@ -34,6 +34,11 @@ enum OnboardingGate {
         guard !UserDefaults.standard.bool(forKey: key(account: account)) else { return false }
         let start = Calendar.current.date(byAdding: .day, value: -90, to: Date()) ?? Date()
         if AppMode.isLocal {
+            // A fresh install's diary is empty until iCloud's copy arrives;
+            // asked before then, a returning user was taken for a new one,
+            // and finishing onboarding replaced their goals and profile with
+            // newer ones. MainTabView asks again once it has arrived.
+            guard !CloudSyncStatus.shared.isAwaitingInitialImport else { return false }
             // Goals alone would catch someone logging for months on the
             // defaults, who isn't new either.
             let client = AppServices.client

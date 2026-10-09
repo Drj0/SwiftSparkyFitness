@@ -36,9 +36,13 @@ struct ProgressTabView: View {
     /// straight from their chart.
     @State private var bodySheet: LogBodyViewModel.Kind?
 
+    /// The diary's start, which moves earlier when older days arrive.
+    private var historyStart: Date?
+
     init(user: SessionUser, onOpenToday: (() -> Void)? = nil) {
         _viewModel = StateObject(wrappedValue: ProgressViewModel(user: user))
         self.onOpenToday = onOpenToday
+        historyStart = user.createdAt
     }
 
     #if DEBUG
@@ -85,6 +89,7 @@ struct ProgressTabView: View {
         // charts under it as well would be saying it twice.
         .refreshable { await viewModel.refresh() }
         .safeAreaInset(edge: .top) { errorBanner }
+        .onChange(of: historyStart) { _, start in viewModel.historyStarts(start) }
         .onChange(of: viewModel.errorMessage) { _, message in
             // The banner appears without moving VoiceOver focus, so it has to
             // announce itself or it is silent to a screen-reader user.

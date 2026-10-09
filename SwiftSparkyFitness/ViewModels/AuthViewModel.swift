@@ -162,6 +162,18 @@ final class AuthViewModel: ObservableObject {
         }
     }
 
+    /// Re-reads the user in place, with no restoring state in between —
+    /// for this device's diary, whose start moves earlier as older days
+    /// arrive from iCloud or a restored file. Never asks a server.
+    func refreshLocalSession() async {
+        guard AppMode.isLocal, restoreState == .done, session != nil else { return }
+        let generation = restoreGeneration
+        guard let user = try? await apiClient.currentSession(),
+              generation == restoreGeneration, AppMode.isLocal, session != nil,
+              user.createdAt != session?.createdAt else { return }
+        session = user
+    }
+
     func submit() async {
         clearErrors()
 

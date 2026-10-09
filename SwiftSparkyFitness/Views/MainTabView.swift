@@ -33,6 +33,7 @@ struct MainTabView: View {
     /// diary. "Not now" leaves a row in Settings to come back to.
     @State private var isOfferingHandoff = false
     @ObservedObject private var serverSync = ServerSync.shared
+    @ObservedObject private var cloud = CloudSyncStatus.shared
     @Environment(\.scenePhase) private var scenePhase
     /// A move of the diary made on another device, offered to follow.
     @State private var moveElsewhere: LocalHandoff?
@@ -87,15 +88,15 @@ struct MainTabView: View {
         .task {
             checkOtherDevices()
             if !AppMode.isLocal, PendingServerHandoff.isPending { isOfferingHandoff = true }
-            // Not over the handoff offer: someone bringing a diary along
-            // isn't new.
-            if !isOfferingHandoff, await OnboardingGate.shouldShow(account: serverSync.account) {
-                // No slide up over Today: on a first run it's the next screen
-                // after the start screen, not a sheet over an empty diary.
-                var transaction = Transaction()
-                transaction.disablesAnimations = true
-                withTransaction(transaction) { isOnboarding = true }
-            }
+            await offerOnboardingIfNew()
+        }
+        // The diary finished arriving from iCloud (or turned out not to be
+        // coming): what was put off for it — onboarding, the daily backup,
+        // a move made on another device — is decided now, on the real diary.
+        .onChange(of: cloud.isAwaitingInitialImport) { _, waiting in
+            guard !waiting, AppMode.isLocal else { return }
+            checkOtherDevices()
+            Task { await offerOnboardingIfNew() }
         }
         .fullScreenCover(isPresented: $isOnboarding) {
             OnboardingView(account: serverSync.account) {
@@ -155,6 +156,18 @@ extension MainTabView {
         moveElsewhere?.toMode == AppMode.server.rawValue ? "Your diary moved to a server" : "Your diary moved to iCloud"
     }
 
+    private func offerOnboardingIfNew() async {
+        // Not over the handoff offer: someone bringing a diary along
+        // isn't new.
+        guard !isOfferingHandoff, !isOnboarding,
+              await OnboardingGate.shouldShow(account: serverSync.account) else { return }
+        // No slide up over Today: on a first run it's the next screen
+        // after the start screen, not a sheet over an empty diary.
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { isOnboarding = true }
+    }
+
     /// What the other devices on this diary have done since this one last
     /// looked: moved it, logged into it after it moved, or (for the iCloud
     /// diary) left copies of the same rows.
@@ -166,6 +179,9 @@ extension MainTabView {
             // Apple ID change would be the new account's diary.
             Task {
                 await ICloudIdentity.check()
+                // Not a half-arrived diary: today's backup would be the
+                // partial one, kept for a day.
+                guard !cloud.isAwaitingInitialImport else { return }
                 AutoBackup.saveIfDue()
             }
         } else {
@@ -212,6 +228,9 @@ private extension View {
             if !AppMode.isLocal, sync.isActive, SyncBanner.shows(sync) {
                 SyncBanner(sync: sync)
                     .transition(.move(edge: .top).combined(with: .opacity))
+            } else {
+                // This device's diary still coming down from iCloud.
+                ICloudRestoreBanner()
             }
         }
         .animation(.snappy(duration: 0.25), value: SyncBanner.shows(sync))

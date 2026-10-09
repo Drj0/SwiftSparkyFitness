@@ -41,6 +41,7 @@ final class CloudSyncStatusTests: XCTestCase {
         // test (or from running the app on this simulator) would otherwise
         // decide what state these start in.
         UserDefaults.standard.removeObject(forKey: CloudSyncStatus.lastSyncedKey)
+        UserDefaults.standard.set(true, forKey: CloudSyncStatus.initialImportKey)
     }
 
     // MARK: - Account states
@@ -246,5 +247,90 @@ final class CloudSyncStatusTests: XCTestCase {
                 "\(state) can't produce a second copy, so the warning shouldn't be softened"
             )
         }
+    }
+
+    // MARK: - The first import (reinstall)
+
+    /// A fresh install: nothing tracked yet, no first-use date, never synced.
+    private func makeFreshInstallStatus(account: CKAccountStatus = .available) -> CloudSyncStatus {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: CloudSyncStatus.initialImportKey)
+        let firstUse = defaults.object(forKey: LocalAPIClient.firstUseKey)
+        defaults.removeObject(forKey: LocalAPIClient.firstUseKey)
+        addTeardownBlock { defaults.set(firstUse, forKey: LocalAPIClient.firstUseKey) }
+        return makeStatus(account: account)
+    }
+
+    func testAFreshInstallWaitsForItsFirstImport() {
+        let status = makeFreshInstallStatus()
+
+        XCTAssertFalse(status.hasCompletedInitialImport)
+        XCTAssertTrue(status.isAwaitingInitialImport)
+    }
+
+    /// Updating from a build that didn't track this mustn't put an
+    /// established diary behind the "checking iCloud" screen.
+    func testAnEstablishedInstallIsNotTakenForAFreshOne() {
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: CloudSyncStatus.initialImportKey)
+        let firstUse = defaults.object(forKey: LocalAPIClient.firstUseKey)
+        defer { defaults.set(firstUse, forKey: LocalAPIClient.firstUseKey) }
+        defaults.set(Date(), forKey: LocalAPIClient.firstUseKey)
+
+        XCTAssertTrue(makeStatus().hasCompletedInitialImport)
+        XCTAssertEqual(defaults.object(forKey: CloudSyncStatus.initialImportKey) as? Bool, true, "decided once")
+    }
+
+    func testOnlyASuccessfulImportEndsTheWait() {
+        let status = makeFreshInstallStatus()
+
+        status.apply(.setup, endDate: Date(), error: nil)
+        status.apply(.exporting, endDate: Date(), error: nil)
+        status.apply(.importing, endDate: nil, error: nil)
+        status.apply(.importing, endDate: Date(), error: CKError(.networkUnavailable))
+        XCTAssertTrue(status.isAwaitingInitialImport, "setup, an export, a running or a failed import don't bring the diary down")
+
+        status.apply(.importing, endDate: Date(), error: nil)
+        XCTAssertTrue(status.hasCompletedInitialImport)
+        XCTAssertFalse(status.isAwaitingInitialImport)
+        XCTAssertEqual(UserDefaults.standard.object(forKey: CloudSyncStatus.initialImportKey) as? Bool, true, "survives a relaunch")
+    }
+
+    /// Signed out, nothing is coming: the diary starts here, and onboarding
+    /// and the backup mustn't wait forever.
+    func testNoAccountMeansNothingToWaitFor() async {
+        let status = makeFreshInstallStatus(account: .noAccount)
+
+        await status.refreshAccountStatus()
+        // What CloudKit posts with no account, after the check had answered.
+        status.apply(.setup, endDate: Date(), error: CocoaError(CocoaError.Code(rawValue: 134400)))
+
+        XCTAssertFalse(status.hasCompletedInitialImport)
+        XCTAssertFalse(status.isAwaitingInitialImport, "a failed setup doesn't bring the wait back")
+    }
+
+    func testATransientAccountProblemStillWaits() async {
+        let status = makeFreshInstallStatus(account: .temporarilyUnavailable)
+
+        await status.refreshAccountStatus()
+
+        XCTAssertTrue(status.isAwaitingInitialImport, "the diary may still come; the screen offers Continue instead")
+    }
+
+    func testAStoreWithoutCloudKitHasNothingToWaitFor() {
+        UserDefaults.standard.removeObject(forKey: CloudSyncStatus.initialImportKey)
+        let status = CloudSyncStatus(probe: StubProbe(status: .available), syncingIsConfigured: { false }, observingNotifications: false)
+
+        XCTAssertFalse(status.isAwaitingInitialImport)
+    }
+
+    /// "Delete all local data" reopens an empty store against iCloud.
+    func testErasingThisDevicesCopyWaitsForICloudAgain() {
+        let status = makeStatus()
+        XCTAssertFalse(status.isAwaitingInitialImport)
+
+        status.restartInitialImport()
+
+        XCTAssertTrue(status.isAwaitingInitialImport)
     }
 }

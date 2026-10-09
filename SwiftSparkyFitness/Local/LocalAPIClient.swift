@@ -39,12 +39,17 @@ final class LocalAPIClient: APIClientProtocol {
     /// through unlimited empty days.
     static let firstUseKey = "localModeFirstUse"
 
+    /// Never later than the first day the diary has anything on: a diary
+    /// that came back from iCloud after a reinstall, or from another
+    /// device, is older than this install, and floored at the install date
+    /// all of it was unreachable from Today and Diary.
     var firstUseDate: Date {
         let defaults = UserDefaults.standard
-        if let stored = defaults.object(forKey: Self.firstUseKey) as? Date { return stored }
-        let now = Calendar.current.startOfDay(for: Date())
-        defaults.set(now, forKey: Self.firstUseKey)
-        return now
+        let stored = defaults.object(forKey: Self.firstUseKey) as? Date
+        var start = stored ?? Calendar.current.startOfDay(for: Date())
+        if let earliest = store.earliestEntryDay() { start = min(start, earliest) }
+        if start != stored { defaults.set(start, forKey: Self.firstUseKey) }
+        return start
     }
 
     /// Thrown by the few endpoints that can only mean something against a

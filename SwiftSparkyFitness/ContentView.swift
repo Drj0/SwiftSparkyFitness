@@ -22,6 +22,11 @@ struct ContentView: View {
     /// The on-device store is opened off the main thread before anything
     /// reads it; until then the screen is just the background.
     @State private var storeReady = false
+    /// Created here, before the store opens, so it hears the first import:
+    /// a reinstalled iPhone waits on it before showing the diary.
+    @ObservedObject private var cloud = CloudSyncStatus.shared
+    /// "Continue" on the iCloud screen, for this choice of mode.
+    @State private var skippedICloudWait = false
 
     var body: some View {
         Group {
@@ -29,6 +34,9 @@ struct ContentView: View {
                 AppColor.background.ignoresSafeArea()
             } else if modeRaw.isEmpty {
                 ModeChoiceView()
+                    .transition(.opacity)
+            } else if modeRaw == AppMode.local.rawValue, cloud.isAwaitingInitialImport, !skippedICloudWait {
+                ICloudRestoreView(cloud: cloud) { skippedICloudWait = true }
                     .transition(.opacity)
             } else {
                 // Keyed on the mode so switching it rebuilds the tab tree.
@@ -56,6 +64,9 @@ struct ContentView: View {
             LocalStore.shared.runCloudKitSchemaSeedIfRequested()
             #endif
             storeReady = true
+            // Asked now, while the start screen is up: a signed-out iPhone
+            // then never flashes the "checking iCloud" screen.
+            Task { await cloud.refreshAccountStatus() }
             if !modeRaw.isEmpty { await authViewModel.restoreSession() }
         }
         // Switching mode in Settings swaps which client every view model
@@ -73,6 +84,7 @@ struct ContentView: View {
         // request to a server the user just stepped away from.
         .onChange(of: modeRaw) { _, newValue in
             isRetrying = false
+            skippedICloudWait = false
             authViewModel.resetForModeChange(restoring: !newValue.isEmpty)
             guard !newValue.isEmpty else { return }
             Task { await authViewModel.restoreSession() }
@@ -80,6 +92,14 @@ struct ContentView: View {
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: authViewModel.session?.email)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: authViewModel.restoreState)
         .animation(reduceMotion ? nil : .easeInOut(duration: 0.28), value: modeRaw)
+        // Older days that arrive (iCloud, a restored file) move where this
+        // device's diary starts, which Today and Diary navigate back to.
+        .onChange(of: cloud.hasCompletedInitialImport) {
+            Task { await authViewModel.refreshLocalSession() }
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .referenceDataChanged)) { _ in
+            Task { await authViewModel.refreshLocalSession() }
+        }
         // Above accessibility3 the layout stops being usable rather than just
         // large — the ring's centre text outgrows the ring and the meal rows
         // lose their calorie column. Individual screens that can take more

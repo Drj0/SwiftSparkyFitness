@@ -106,7 +106,8 @@ extension LocalStore {
     }
 }
 
-/// Runs the clean-up once iCloud has gone quiet, rather than after each of
+/// Runs the clean-up once iCloud has gone quiet, then has the open screens
+/// re-read what arrived — rather than after each of
 /// the dozens of import events a first sync produces — each would re-read
 /// every row on the main actor. Local mode only: in server mode the iCloud
 /// diary isn't the one in use.
@@ -120,9 +121,12 @@ enum DuplicateSweep {
         pending = Task {
             try? await Task.sleep(for: delay)
             guard !Task.isCancelled, AppMode.isLocal else { return }
-            if LocalStore.shared.removeDuplicateRows() > 0 {
-                NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
-            }
+            LocalStore.shared.removeDuplicateRows()
+            // Always, not only when copies were removed: this runs after
+            // iCloud has delivered rows, and nothing else tells open screens
+            // to re-read. After a reinstall, Today sat empty over a diary
+            // that had already come back.
+            NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
         }
     }
 }

@@ -689,7 +689,10 @@ extension LocalStore {
     /// True when this device already holds a diary of its own — a choice to
     /// copy a server's diary here then has to say that the two merge.
     func hasDiaryEntries() -> Bool {
-        !all(LocalFoodEntry.self).isEmpty || !all(LocalExerciseEntry.self).isEmpty
-            || !all(LocalWaterEntry.self).isEmpty || !all(LocalCheckIn.self).isEmpty
+        // Counted, not fetched: this is asked while a whole diary is
+        // arriving from iCloud, and loading every row to see if one exists
+        // held the main thread.
+        func any<T: PersistentModel>(_: T.Type) -> Bool { ((try? context.fetchCount(FetchDescriptor<T>())) ?? 0) > 0 }
+        return any(LocalFoodEntry.self) || any(LocalExerciseEntry.self) || any(LocalWaterEntry.self) || any(LocalCheckIn.self)
     }
 }

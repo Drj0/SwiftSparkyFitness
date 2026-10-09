@@ -276,8 +276,6 @@ extension DiaryArchive {
         var updated = 0
         /// Rows this device already had in a newer (or the same) state.
         var kept = 0
-        /// The earliest day in the file, so the caller can make it reachable.
-        var earliestDay: Date?
     }
 
     /// Merges the file into `store` in one save: all of it or none of it.
@@ -377,9 +375,6 @@ extension DiaryArchive {
             store.context.rollback()
             throw store.lastSaveError ?? ArchiveError.couldNotSave
         }
-
-        let days = foodEntries.map(\.dayKey) + exerciseEntries.map(\.dayKey) + water.map(\.dayKey) + checkIns.map(\.dayKey)
-        result.earliestDay = days.filter { !$0.isEmpty }.min().flatMap(LocalDay.date)
         return result
     }
 

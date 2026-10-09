@@ -97,6 +97,36 @@ final class CloudSyncStatus: ObservableObject {
         didSet { UserDefaults.standard.set(lastSynced, forKey: Self.lastSyncedKey) }
     }
 
+    /// Whether this device's copy of the diary has had its first import
+    /// from iCloud. False on a fresh install (or after "Delete all local
+    /// data"), where the store starts empty and the diary is still on its
+    /// way down: until then an empty diary doesn't mean a new user, so
+    /// onboarding, the history start and the daily backup all wait for it.
+    static let initialImportKey = "cloudInitialImportDone"
+
+    @Published private(set) var hasCompletedInitialImport: Bool {
+        didSet { UserDefaults.standard.set(hasCompletedInitialImport, forKey: Self.initialImportKey) }
+    }
+
+    /// Waiting for the first import, and it can still come: the store
+    /// mirrors, and the account hasn't been found missing. With no account
+    /// there is nothing to wait for — the diary starts here.
+    var isAwaitingInitialImport: Bool {
+        !hasCompletedInitialImport && !accountRulesOutSync && syncingIsConfigured()
+    }
+
+    /// The last account check found no account, or one not allowed to sync.
+    /// Kept apart from `state`, which mirroring events overwrite: with no
+    /// account, CloudKit's setup fails, and that event landing after the
+    /// check made a signed-out install wait for a diary that couldn't come.
+    @Published private(set) var accountRulesOutSync = false
+
+    /// The store was emptied and reopened against iCloud, so its diary is
+    /// coming down again from the start.
+    func restartInitialImport() {
+        hasCompletedInitialImport = false
+    }
+
     private let probe: CloudAccountProbing
     /// Read lazily rather than captured: asking `LocalStore.shared` at init
     /// would open the SwiftData container on every launch, including server
@@ -114,7 +144,19 @@ final class CloudSyncStatus: ObservableObject {
     ) {
         self.probe = probe
         self.syncingIsConfigured = syncingIsConfigured
-        self.lastSynced = UserDefaults.standard.object(forKey: Self.lastSyncedKey) as? Date
+        let defaults = UserDefaults.standard
+        let lastSynced = defaults.object(forKey: Self.lastSyncedKey) as? Date
+        self.lastSynced = lastSynced
+        if let done = defaults.object(forKey: Self.initialImportKey) as? Bool {
+            hasCompletedInitialImport = done
+        } else {
+            // First launch of a build that tracks this. An install that has
+            // already opened its diary (first-use date) or reached iCloud
+            // isn't waiting for anything; a fresh one has neither yet.
+            let established = lastSynced != nil || defaults.object(forKey: LocalAPIClient.firstUseKey) != nil
+            hasCompletedInitialImport = established
+            defaults.set(established, forKey: Self.initialImportKey)
+        }
         if lastSynced != nil { state = .synced(lastSynced) }
 
         guard observingNotifications else { return }
@@ -188,6 +230,9 @@ final class CloudSyncStatus: ObservableObject {
         if activity == .exporting {
             lastSynced = endDate
         }
+        if activity == .importing, !hasCompletedInitialImport {
+            hasCompletedInitialImport = true
+        }
         state = .synced(lastSynced)
     }
 
@@ -224,7 +269,9 @@ final class CloudSyncStatus: ObservableObject {
             state = .unavailable(.notConfigured)
             return
         }
-        switch await probe.accountStatus() {
+        let status = await probe.accountStatus()
+        accountRulesOutSync = status == .noAccount || status == .restricted
+        switch status {
         case .available:
             // Don't overwrite a real result with an optimistic one: an
             // available account says syncing *can* happen, not that it has.
