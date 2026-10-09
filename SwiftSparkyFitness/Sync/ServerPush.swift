@@ -86,8 +86,10 @@ final class ServerPush {
     func plan() -> Plan {
         var plan = Plan()
         func count<Row: SyncTracked>(_ rows: [Row], include: (Row) -> Bool = { _ in true }) {
-            for row in rows where include(row) && store.needsPush(row, account: account) {
-                if store.link(for: row, account: account) == nil { plan.creates += 1 } else { plan.updates += 1 }
+            let stamps = store.linkStamps(kind: Row.syncKind, account: account)
+            for row in rows where include(row) {
+                guard let stamp = stamps[row.syncKey] else { plan.creates += 1; continue }
+                if row.updatedAt > stamp { plan.updates += 1 }
             }
         }
         count(store.all(LocalMealType.self), include: Self.shouldPush)
@@ -97,11 +99,25 @@ final class ServerPush {
         count(store.all(LocalCheckIn.self), include: Self.shouldPush)
         count(store.all(LocalGoalRow.self), include: Self.shouldPush)
         count(store.all(LocalPreferences.self), include: Self.shouldPush)
+        let linkedByKind = Dictionary(uniqueKeysWithValues: Self.deletableKinds.map {
+            ($0, store.linkStamps(kind: $0, account: account))
+        })
         plan.deletes = Set(store.all(LocalTombstone.self).filter {
-            Self.deletableKinds.contains($0.kind) && store.link(kind: $0.kind, localKey: $0.localKey, account: account) != nil
+            linkedByKind[$0.kind]?[$0.localKey] != nil
         }.map { "\($0.kind)|\($0.localKey)" }).count
-        plan.linked = store.all(LocalSyncLink.self).filter { $0.serverAccount == account }.count
+        let accountKey = account
+        plan.linked = (try? store.context.fetchCount(FetchDescriptor<LocalSyncLink>(
+            predicate: #Predicate { $0.serverAccount == accountKey }
+        ))) ?? 0
         return plan
+    }
+
+    /// The rows the server is behind on, with one link fetch for the kind
+    /// instead of one per row. Built per phase, not once per push: earlier
+    /// phases add links as they go.
+    private func dirty<Row: SyncTracked>(_ rows: [Row]) -> [Row] {
+        let stamps = store.linkStamps(kind: Row.syncKind, account: account)
+        return rows.filter { row in stamps[row.syncKey].map { row.updatedAt > $0 } ?? true }
     }
 
     /// Seeded rows nobody has touched carry no information — the server has
@@ -274,8 +290,7 @@ final class ServerPush {
     }
 
     private func pushFoodEntries() async throws {
-        let entries = store.all(LocalFoodEntry.self)
-            .filter { store.needsPush($0, account: account) }
+        let entries = dirty(store.all(LocalFoodEntry.self))
             .map {
                 FoodEntrySnapshot(id: $0.id, dayKey: $0.dayKey, foodId: $0.foodId, foodName: $0.foodName,
                                   mealTypeId: $0.mealTypeId, mealTypeName: $0.mealTypeName, unit: $0.unit,
@@ -385,8 +400,7 @@ final class ServerPush {
     }
 
     private func pushExerciseEntries() async throws {
-        let entries = store.all(LocalExerciseEntry.self)
-            .filter { store.needsPush($0, account: account) }
+        let entries = dirty(store.all(LocalExerciseEntry.self))
             .map {
                 ExerciseEntrySnapshot(id: $0.id, dayKey: $0.dayKey, exerciseId: $0.exerciseId, name: $0.name,
                                       entryDate: $0.entryDate, durationMinutes: $0.durationMinutes,
@@ -502,8 +516,7 @@ final class ServerPush {
 
     private func pushWater() async throws {
         struct Snapshot { let id, dayKey: String; let ml: Double; let loggedAt, version: Date }
-        let drinks = store.all(LocalWaterEntry.self)
-            .filter { Self.shouldPush($0) && store.needsPush($0, account: account) }
+        let drinks = dirty(store.all(LocalWaterEntry.self).filter(Self.shouldPush))
             .map { Snapshot(id: $0.id, dayKey: $0.dayKey, ml: $0.waterMl, loggedAt: $0.loggedAt, version: $0.updatedAt) }
         for drink in drinks {
             try await attempt(LocalWaterEntry.syncKind, drink.id) {
@@ -522,8 +535,7 @@ final class ServerPush {
         struct Snapshot { let id, dayKey: String; let values: [BodyField: Double?]; let version: Date }
         // Stored as shown; the server keeps metric.
         let units = LocalAPIClient.preferences(store.all(LocalPreferences.self).first)
-        let checkIns = store.all(LocalCheckIn.self)
-            .filter { Self.shouldPush($0) && store.needsPush($0, account: account) }
+        let checkIns = dirty(store.all(LocalCheckIn.self).filter(Self.shouldPush))
             .map { row -> Snapshot in
                 let measurements = LocalAPIClient.measurements(row)
                 // Once linked, every field, nil included: the upsert clears
@@ -553,8 +565,7 @@ final class ServerPush {
 
     private func pushGoals() async throws {
         struct Snapshot { let dayKey: String; let goals: NutritionGoals; let version: Date }
-        let rows = store.all(LocalGoalRow.self, sortBy: [SortDescriptor(\.dayKey)])
-            .filter { Self.shouldPush($0) && store.needsPush($0, account: account) }
+        let rows = dirty(store.all(LocalGoalRow.self, sortBy: [SortDescriptor(\.dayKey)]).filter(Self.shouldPush))
             .map { Snapshot(dayKey: $0.dayKey, goals: LocalAPIClient.goals(from: $0), version: $0.updatedAt) }
         for row in rows {
             guard let date = LocalDay.date(row.dayKey) else { continue }

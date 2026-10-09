@@ -238,6 +238,16 @@ extension LocalStore {
         fetch(LocalSyncLink.self, where: #Predicate { $0.kind == kind && $0.serverAccount == account })
     }
 
+    /// Each row's newest link stamp for one kind, in one fetch. For a scan
+    /// over a whole table, where `needsPush` per row is a fetch per row —
+    /// thousands of them on a year's diary, on every write. The newest stamp
+    /// is what `link(kind:localKey:account:)` returns, so the answers match.
+    func linkStamps(kind: String, account: String) -> [String: Date] {
+        links(kind: kind, account: account).reduce(into: [:]) { stamps, link in
+            stamps[link.localKey] = max(stamps[link.localKey] ?? .distantPast, link.linkedAt)
+        }
+    }
+
     func tombstones(kind: String) -> [LocalTombstone] {
         fetch(LocalTombstone.self, where: #Predicate { $0.kind == kind }, sortBy: [SortDescriptor(\.deletedAt)])
     }

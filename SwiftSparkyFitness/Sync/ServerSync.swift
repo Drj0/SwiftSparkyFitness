@@ -66,6 +66,16 @@ final class ServerSync: ObservableObject {
     private var scheduled: Task<Void, Never>?
     private var periodic: Task<Void, Never>?
     private var refreshedAt: [String: Date] = [:]
+    /// The last routine or whole-history pull: day keys it covered, and when.
+    /// A day it covered under `dayFreshness` ago needs no pull of its own —
+    /// after launch, a foreground or a pull that changed something, Today and
+    /// Diary each used to queue one straight behind it.
+    private var rangePulled: (from: String, to: String, at: Date)?
+
+    private func recentPullCovers(_ key: String) -> Bool {
+        guard let pulled = rangePulled, Date().timeIntervalSince(pulled.at) < Self.dayFreshness else { return false }
+        return pulled.from <= key && key <= pulled.to
+    }
     private var pathMonitor: NWPathMonitor?
     private var lastPathSatisfied = true
     /// Bumped by every activate/deactivate. A sync that started under an
@@ -102,6 +112,7 @@ final class ServerSync: ObservableObject {
         if changed {
             generation += 1
             refreshedAt = [:]
+            rangePulled = nil
             lastSyncedAt = nil
             isReachable = true
             updatePending()
@@ -127,6 +138,7 @@ final class ServerSync: ObservableObject {
         pendingCount = 0
         lastSyncedAt = nil
         refreshedAt = [:]
+        rangePulled = nil
     }
 
     /// The next sync pulls the whole history again — after something wrote a
@@ -192,11 +204,14 @@ final class ServerSync: ObservableObject {
         guard isReachable else { return }
         let key = LocalDay.key(day)
         if let at = refreshedAt[key], Date().timeIntervalSince(at) < Self.dayFreshness { return }
+        if recentPullCovers(key) { return }
         refreshedAt[key] = Date()
 
         let handoff = RefreshHandoff()
         let task = enqueue { [weak self] in
             guard let self else { return }
+            // A routine sync queued ahead of this one may just have pulled it.
+            if self.recentPullCovers(key) { return }
             let changed = await self.sync(pullDays: (day, day))
             if changed && !handoff.callerWaiting {
                 NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
@@ -307,6 +322,7 @@ final class ServerSync: ObservableObject {
             guard generation == startedIn else { return false }
             if isFull { InitialPull.markDone(account: account) }
             lastSyncedAt = Date()
+            if pullDays == nil { rangePulled = (LocalDay.key(range.0), LocalDay.key(range.1), Date()) }
             isReachable = true
             // Rows the server refused stay waiting; saying "up to date" over
             // them would hide changes that never arrive.
@@ -415,7 +431,9 @@ final class ServerSync: ObservableObject {
                 try? await Task.sleep(for: Self.offlineRetryInterval)
                 guard !Task.isCancelled, let self else { return }
                 sinceLast += Self.offlineRetryInterval
-                if !self.isReachable || sinceLast >= Self.periodicInterval {
+                // No network at all: nothing to retry against, and
+                // `pathChanged` syncs the moment one comes back.
+                if self.lastPathSatisfied, !self.isReachable || sinceLast >= Self.periodicInterval {
                     sinceLast = .zero
                     self.schedule(after: .zero)
                 }

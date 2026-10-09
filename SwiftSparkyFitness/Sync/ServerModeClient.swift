@@ -440,7 +440,8 @@ final class ServerModeClient: APIClientProtocol {
     // MARK: - Health, body, ranges
 
     func syncActiveEnergy(kilocalories: Double, date: Date) async throws {
-        wrote(try await local.syncActiveEnergy(kilocalories: kilocalories, date: date))
+        // An unchanged figure is no change: no sync for it.
+        if try await local.upsertActiveEnergy(kilocalories: kilocalories, date: date) { sync.localChange() }
     }
     func bodyMeasurements(date: Date) async throws -> BodyMeasurements { try await local.bodyMeasurements(date: date) }
     func upsertBodyMeasurements(_ input: BodyMeasurementsInput) async throws -> BodyMeasurements {

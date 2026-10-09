@@ -49,10 +49,16 @@ struct BodyCard: View {
 
     private var staleCaption: String? {
         guard isShowingStaleWeight, let date = lastLoggedWeight?.date else { return nil }
+        return Self.relativeFormatter.localizedString(for: date, relativeTo: referenceDate)
+    }
+
+    /// Shared: the caption is read twice per render, and Today re-renders
+    /// this card on every change of its own.
+    private static let relativeFormatter: RelativeDateTimeFormatter = {
         let formatter = RelativeDateTimeFormatter()
         formatter.unitsStyle = .short
-        return formatter.localizedString(for: date, relativeTo: referenceDate)
-    }
+        return formatter
+    }()
 
     private var needsUpdate: Bool {
         guard isShowingStaleWeight, let date = lastLoggedWeight?.date else { return false }

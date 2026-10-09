@@ -259,10 +259,13 @@ extension LocalAPIClient {
     /// stands in for it.
     func recentExercises() async throws -> [Exercise] {
         let sentinel = ExerciseSessionSummary.healthActiveEnergyName
-        let recentIds = store.all(LocalExerciseEntry.self)
-            .filter { $0.name != sentinel }
-            .sorted { $0.entryDate > $1.entryDate }
-            .map(\.exerciseId)
+        // Filtered and sorted by the store: Health's row is one a day, so
+        // loading the table to drop it in Swift was half the work.
+        let recentIds = store.fetch(
+            LocalExerciseEntry.self,
+            where: #Predicate { $0.name != sentinel },
+            sortBy: [SortDescriptor(\.entryDate, order: .reverse)]
+        ).map(\.exerciseId)
         var seen = Set<String>()
         let orderedIds = recentIds.filter { seen.insert($0).inserted }.prefix(10)
         let exercisesById = Dictionary(uniqueKeysWithValues: store.all(LocalExercise.self).map { ($0.id, $0) })
@@ -285,20 +288,26 @@ extension LocalAPIClient {
             where: #Predicate { $0.dayKey >= startKey },
             sortBy: [SortDescriptor(\.dayKey), SortDescriptor(\.updatedAt)]
         )
+        // Only the newest row per exercise is kept, so its sets are decoded
+        // once at the end rather than for every row on the way there.
+        var newest: [String: (row: LocalExerciseEntry, thisWeek: Int)] = [:]
         for row in rows where row.name != sentinel {
             let key = ExerciseLastSession.key(row.name)
-            let thisWeek = (history[key]?.timesThisWeek ?? 0) + (row.dayKey >= weekKey ? 1 : 0)
-            let sets = row.setsJSON
-                .flatMap { $0.data(using: .utf8) }
-                .flatMap { try? JSONDecoder().decode([ExerciseSetInput].self, from: $0) } ?? []
+            newest[key] = (row, (newest[key]?.thisWeek ?? 0) + (row.dayKey >= weekKey ? 1 : 0))
+        }
+        let decoder = JSONDecoder()
+        for (key, last) in newest {
+            let row = last.row
             history[key] = ExerciseLastSession(
                 date: row.entryDate,
                 modality: row.modality.flatMap(ExerciseModality.init(rawValue:)),
                 durationMinutes: row.durationMinutes,
                 caloriesBurned: row.caloriesBurned,
                 distance: row.distance,
-                sets: sets,
-                timesThisWeek: thisWeek
+                sets: row.setsJSON
+                    .flatMap { $0.data(using: .utf8) }
+                    .flatMap { try? decoder.decode([ExerciseSetInput].self, from: $0) } ?? [],
+                timesThisWeek: last.thisWeek
             )
         }
         return history
@@ -403,15 +412,25 @@ extension LocalAPIClient {
     /// `max(active, logged)` rule reads it back through that same match.
     ///
     func syncActiveEnergy(kilocalories: Double, date: Date) async throws {
+        try await upsertActiveEnergy(kilocalories: kilocalories, date: date)
+    }
+
+    /// False when the day already held this figure. Today calls this on
+    /// every load, and an unconditional write re-stamped the row each time:
+    /// an iCloud export in local mode, a push-and-pull in server mode, for a
+    /// number that hadn't moved.
+    @discardableResult
+    func upsertActiveEnergy(kilocalories: Double, date: Date) async throws -> Bool {
         let key = LocalDay.key(date)
         let name = ExerciseSessionSummary.healthActiveEnergyName
         if let existing = store.fetch(
             LocalExerciseEntry.self,
             where: #Predicate { $0.dayKey == key && $0.name == name }
         ).first {
+            guard existing.caloriesBurned != kilocalories else { return false }
             existing.caloriesBurned = kilocalories
             store.save()
-            return
+            return true
         }
         let exercise = try await findOrCreateExercise(named: name)
         store.insert(LocalExerciseEntry(
@@ -421,5 +440,6 @@ extension LocalAPIClient {
             durationMinutes: 0,
             caloriesBurned: kilocalories
         ))
+        return true
     }
 }

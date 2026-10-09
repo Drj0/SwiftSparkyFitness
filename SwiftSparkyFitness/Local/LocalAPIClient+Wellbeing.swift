@@ -358,8 +358,8 @@ extension LocalAPIClient {
     /// The Health "Active Calories" sentinel is excluded, which the server
     /// does in SQL. It's a real entry row with zero duration, so counting it
     /// would inflate both the calorie total and the workout count on every
-    /// day Health has synced. The exclusion reuses `userLogged` rather than
-    /// re-testing the name, so there is one definition of what that row is.
+    /// day Health has synced. The exclusion compares against the one shared
+    /// `healthActiveEnergyName`, so there is one definition of what that row is.
     ///
     /// Buckets are emitted only for days that have exercise; padding the rest
     /// to zero is the view model's job and it already does it.
@@ -373,7 +373,10 @@ extension LocalAPIClient {
         )
 
         var byDay: [String: [LocalExerciseEntry]] = [:]
-        for row in rows where Self.exerciseSummary(row).isHealthActiveEnergy == false {
+        // The shared name, not a summary built per row: building one decoded
+        // the row's sets JSON just to read its name.
+        let sentinel = ExerciseSessionSummary.healthActiveEnergyName
+        for row in rows where row.name != sentinel {
             byDay[row.dayKey, default: []].append(row)
         }
 

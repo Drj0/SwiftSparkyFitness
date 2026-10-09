@@ -47,6 +47,11 @@ struct MainTabView: View {
     /// A returning user skips onboarding, which is where Health is asked
     /// for, so a reinstall would otherwise leave Health off for good.
     @State private var isOfferingHealth = false
+    /// `.active` also follows `.inactive` alone — Control Center, a Face ID
+    /// prompt, a system alert — and each of those used to cost a full sync
+    /// (server) or a sweep of every table (iCloud). Only a real return from
+    /// the background counts; launch is covered by `.task` and `activate`.
+    @State private var wasInBackground = false
 
     var body: some View {
         TabView(selection: $selection) {
@@ -81,9 +86,12 @@ struct MainTabView: View {
         .onChange(of: scenePhase) { _, phase in
             switch phase {
             case .active:
+                guard wasInBackground else { break }
+                wasInBackground = false
                 if !AppMode.isLocal { serverSync.becameActive() }
                 checkOtherDevices()
             case .background:
+                wasInBackground = true
                 if !AppMode.isLocal { serverSync.resignedActive() }
             default: break
             }

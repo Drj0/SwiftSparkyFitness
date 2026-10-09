@@ -72,7 +72,10 @@ struct DiaryView: View {
             guard let message, viewModel.summary != nil else { return }
             AccessibilityNotification.Announcement(message).post()
         }
-        .task { await viewModel.load() }
+        // The Exercise tab loads this shared view model on appear; loading
+        // again here ran a second full day load on every segment switch.
+        // Standalone (previews), nothing else loads it.
+        .task { if viewModel.summary == nil { await viewModel.load() } }
         .refreshable { await viewModel.load() }
         .sheet(item: $viewModel.editingFoodEntry, onDismiss: { Task { await viewModel.load() } }) { entry in
             editFoodSheet(entry)

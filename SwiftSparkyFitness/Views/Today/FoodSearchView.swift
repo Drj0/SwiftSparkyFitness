@@ -350,7 +350,9 @@ struct FoodSearchView: View {
     /// change it. In search results the "+" stays a cue for the row's tap:
     /// a new food deserves a look at its amount first.
     private func resultsListContent(_ foods: [Food], heading: String = "RESULTS", quickLog: Bool = false) -> some View {
-        VStack(spacing: 0) {
+        // Lazy: `query` re-renders this on every keystroke, and an eager
+        // stack rebuilt and laid out every row of every source each time.
+        LazyVStack(spacing: 0) {
             Text(heading)
                 .appBody(11, weight: .semibold)
                 .foregroundStyle(AppColor.placeholder)

@@ -186,8 +186,8 @@ final class TodayViewModel: ObservableObject {
     ///
     /// Runs *before* the summary is fetched so the figure is already in the
     /// balance the screen then renders — otherwise every launch would show a
-    /// burn total one load out of date. The write upserts, so repeating it on
-    /// every load is harmless.
+    /// burn total one load out of date. The write upserts and skips an
+    /// unchanged figure, so repeating it on every load costs one read.
     ///
     /// Deliberately silent on failure: an unavailable Health store, a refused
     /// permission and a day with no movement are indistinguishable here, and
