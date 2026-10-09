@@ -125,7 +125,7 @@ struct SettingsView: View {
                 loggingSection
                 healthSection
                 backupSection
-                experimentalSection
+                if AppDisplayMode.isExperimentAvailable { experimentalSection }
                 aboutSection
                 oneWayDoors
             }

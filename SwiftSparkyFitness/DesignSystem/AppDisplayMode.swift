@@ -7,7 +7,8 @@
 //  `.preferredColorScheme`, which turned out not to be reliable here. See
 //  `apply(_:)`.
 //
-//  Light only, unless dark mode is switched on under Settings → Experimental:
+//  Light only, unless dark mode is switched on under Settings → Experimental
+//  (debug builds only, see `isExperimentAvailable`):
 //  dark needs a proper pass before it's on by default, so a phone in dark
 //  mode no longer drags the app into it. The System/Light/Dark choice only
 //  counts while that switch is on.
@@ -23,7 +24,18 @@ enum AppDisplayMode: String, CaseIterable, Identifiable {
 
     /// What the app actually shows: Light, unless experimental dark mode is on.
     static func effective(raw: String, experimentalDark: Bool) -> AppDisplayMode {
-        experimentalDark ? AppDisplayMode(rawValue: raw) ?? .system : .light
+        experimentalDark && isExperimentAvailable ? AppDisplayMode(rawValue: raw) ?? .system : .light
+    }
+
+    /// Debug builds only. An unfinished feature can't ship in a release
+    /// (App Store guideline 2.2), and a switch left on in a debug install
+    /// mustn't carry dark mode into a release one.
+    static var isExperimentAvailable: Bool {
+        #if DEBUG
+        true
+        #else
+        false
+        #endif
     }
 
     var id: String { rawValue }
