@@ -34,22 +34,32 @@ enum OnboardingGate {
         UserDefaults.standard.bool(forKey: key(account: account))
     }
 
+    /// What the diary says about who this is. `unknown` — the server out of
+    /// reach, iCloud's copy still arriving, a read failing — is neither: it
+    /// asks again later, and must not be taken for a returning user.
+    enum Verdict { case new, returning, unknown }
+
     @MainActor
     static func shouldShow(account: String?) async -> Bool {
-        guard !isHandled(account: account) else { return false }
+        await verdict(account: account) == .new
+    }
+
+    @MainActor
+    static func verdict(account: String?) async -> Verdict {
+        guard !isHandled(account: account) else { return .returning }
         let start = Calendar.current.date(byAdding: .day, value: -90, to: Date()) ?? Date()
         if AppMode.isLocal {
             // A fresh install's diary is empty until iCloud's copy arrives;
             // asked before then, a returning user was taken for a new one,
             // and finishing onboarding replaced their goals and profile with
             // newer ones. MainTabView asks again once it has arrived.
-            guard !CloudSyncStatus.shared.isAwaitingInitialImport else { return false }
+            guard !CloudSyncStatus.shared.isAwaitingInitialImport else { return .unknown }
             // Goals alone would catch someone logging for months on the
             // defaults, who isn't new either.
             let client = AppServices.client
-            guard (try? await client.goals(date: Date()))?.isSet == false,
-                  let logged = try? await client.foodEntries(from: start, to: Date()) else { return false }
-            return logged.isEmpty
+            guard let goals = try? await client.goals(date: Date()),
+                  let logged = try? await client.foodEntries(from: start, to: Date()) else { return .unknown }
+            return !goals.isSet && logged.isEmpty ? .new : .returning
         }
         // A new server account answers goals with the server's defaults (it
         // seeds an undated row at sign-up), so goals can't say "never set".
@@ -59,10 +69,10 @@ enum OnboardingGate {
         // the server, not this device's copy, which may not have pulled yet.
         // Unreachable: ask next time.
         let server = APIClient.shared
-        guard let status = try? await server.onboardingStatus(),
-              !status.onboardingComplete, !status.onboardingSkipped else { return false }
-        guard let logged = try? await server.foodEntries(from: start, to: Date()) else { return false }
-        return logged.isEmpty
+        guard let status = try? await server.onboardingStatus() else { return .unknown }
+        guard !status.onboardingComplete, !status.onboardingSkipped else { return .returning }
+        guard let logged = try? await server.foodEntries(from: start, to: Date()) else { return .unknown }
+        return logged.isEmpty ? .new : .returning
     }
 
     /// "Skip" means don't ask again — here, and on the server's web app.

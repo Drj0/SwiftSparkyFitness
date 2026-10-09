@@ -183,9 +183,14 @@ extension MainTabView {
         // Not over the handoff offer: someone bringing a diary along
         // isn't new.
         guard !isOfferingHandoff, !isOnboarding else { return }
-        guard await OnboardingGate.shouldShow(account: serverSync.account) else {
+        switch await OnboardingGate.verdict(account: serverSync.account) {
+        case .new: break
+        case .returning:
             await offerHealthIfReturning()
             return
+        // Couldn't tell (server out of reach, say): neither onboarding nor
+        // a "welcome back"; both are asked again next time.
+        case .unknown: return
         }
         // No slide up over Today: on a first run it's the next screen
         // after the start screen, not a sheet over an empty diary.
@@ -202,7 +207,10 @@ extension MainTabView {
         guard !HealthSync.isEnabled, !defaults.bool(forKey: HealthSync.reconnectOfferedKey),
               !OnboardingGate.isHandled(account: serverSync.account),
               !(AppMode.isLocal && cloud.isAwaitingInitialImport),
-              await HealthKitService.shared.hasNeverAsked() else { return }
+              await HealthKitService.shared.hasNeverAsked(),
+              // Two alerts at once show one and drop the other; this one
+              // waits for next time rather than being spent unseen.
+              !isShowingMoveElsewhere, moveElsewhere == nil, deviceMoveError == nil else { return }
         defaults.set(true, forKey: HealthSync.reconnectOfferedKey)
         isOfferingHealth = true
     }
