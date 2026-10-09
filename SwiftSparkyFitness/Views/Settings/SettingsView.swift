@@ -756,6 +756,17 @@ struct SettingsView: View {
                 value: versionString
             )
             .accessibilityElement(children: .combine)
+
+            NavigationLink {
+                AcknowledgementsView()
+            } label: {
+                SettingsRow(
+                    icon: "heart.text.square",
+                    tint: AppColor.accent,
+                    title: "Acknowledgements",
+                    subtitle: "Where the food and exercise data comes from"
+                )
+            }
         } header: {
             sectionHeader("ABOUT")
         }
