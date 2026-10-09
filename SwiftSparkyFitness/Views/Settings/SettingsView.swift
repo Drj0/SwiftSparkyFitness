@@ -85,6 +85,9 @@ struct SettingsView: View {
     @State private var isRestoringArchive = false
     @State private var archiveNotice: String?
     @State private var archiveNoticeIsError = false
+    /// The notice answers the backup-restore row at the top (YOUR DATA), so
+    /// it shows there, not in BACKUP several sections below.
+    @State private var archiveNoticeIsNearTop = false
     @State private var lastExportedAt = DiaryExportRecord.lastExportedAt
     @AppStorage(PendingServerHandoff.defaultsKey) private var isHandoffPending = false
     @AppStorage(ICloudIdentity.changedAtKey) private var iCloudAccountChangedAtRaw: Double = 0
@@ -381,6 +384,10 @@ struct SettingsView: View {
 
                 if iCloudAccountChangedAt != nil, AutoBackup.beforeAccountChange() != nil {
                     footnote("This iPhone's iCloud account changed. If your diary is missing entries, restore the copy this iPhone kept.", color: AppColor.destructive)
+                }
+
+                if archiveNoticeIsNearTop, let archiveNotice {
+                    footnote(archiveNotice, color: archiveNoticeIsError ? AppColor.destructive : AppColor.secondaryText)
                 }
 
                 if isShowingDataDetail {
@@ -736,7 +743,7 @@ struct SettingsView: View {
             sectionHeader("BACKUP")
         } footer: {
             sectionFooter {
-                if let archiveNotice {
+                if let archiveNotice, !archiveNoticeIsNearTop {
                     footnote(archiveNotice, color: archiveNoticeIsError ? AppColor.destructive : AppColor.secondaryText)
                 } else if let lastExportedAt {
                     footnote("Last exported \(lastExportedAt.formatted(.relative(presentation: .named))).")
@@ -1061,18 +1068,19 @@ struct SettingsView: View {
             if let backup = AutoBackup.beforeAccountChange() {
                 let result = try AutoBackup.restore(backup)
                 NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
-                showArchiveNotice("Restored \(result.added) new and \(result.updated) updated items from this iPhone's backup.", isError: false)
+                showArchiveNotice("Restored \(result.added) new and \(result.updated) updated items from this iPhone's backup.", isError: false, nearTop: true)
                 Haptics.success()
             }
             ICloudIdentity.changedAt = nil
         } catch {
-            showArchiveNotice(error.localizedDescription, isError: true)
+            showArchiveNotice(error.localizedDescription, isError: true, nearTop: true)
         }
     }
 
-    private func showArchiveNotice(_ text: String, isError: Bool) {
+    private func showArchiveNotice(_ text: String, isError: Bool, nearTop: Bool = false) {
         archiveNotice = text
         archiveNoticeIsError = isError
+        archiveNoticeIsNearTop = nearTop
         if isError { Haptics.error() }
     }
 
