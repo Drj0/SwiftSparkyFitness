@@ -55,29 +55,21 @@ struct MainTabView: View {
 
     var body: some View {
         TabView(selection: $selection) {
-            Tab(value: AppTab.today) {
-                TodayView(user: user).offlineBanner(serverSync)
-            } label: {
-                Label(AppTab.today.label, systemImage: AppTab.today.symbol)
-            }
+            TodayView(user: user).offlineBanner(serverSync)
+                .tabItem { Label(AppTab.today.label, systemImage: AppTab.today.symbol) }
+                .tag(AppTab.today)
 
-            Tab(value: AppTab.diary) {
-                ExerciseTabView(user: user).offlineBanner(serverSync)
-            } label: {
-                Label(AppTab.diary.label, systemImage: AppTab.diary.symbol)
-            }
+            ExerciseTabView(user: user).offlineBanner(serverSync)
+                .tabItem { Label(AppTab.diary.label, systemImage: AppTab.diary.symbol) }
+                .tag(AppTab.diary)
 
-            Tab(value: AppTab.progress) {
-                ProgressTabView(user: user, onOpenToday: { selection = .today }).offlineBanner(serverSync)
-            } label: {
-                Label(AppTab.progress.label, systemImage: AppTab.progress.symbol)
-            }
+            ProgressTabView(user: user, onOpenToday: { selection = .today }).offlineBanner(serverSync)
+                .tabItem { Label(AppTab.progress.label, systemImage: AppTab.progress.symbol) }
+                .tag(AppTab.progress)
 
-            Tab(value: AppTab.settings) {
-                SettingsView(user: user, onSignOut: onSignOut).offlineBanner(serverSync)
-            } label: {
-                Label(AppTab.settings.label, systemImage: AppTab.settings.symbol)
-            }
+            SettingsView(user: user, onSignOut: onSignOut).offlineBanner(serverSync)
+                .tabItem { Label(AppTab.settings.label, systemImage: AppTab.settings.symbol) }
+                .tag(AppTab.settings)
         }
         .tint(AppColor.accent)
         // The system tab bar gives no haptic of its own on a switch; one

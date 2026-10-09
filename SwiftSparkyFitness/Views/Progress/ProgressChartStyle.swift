@@ -203,19 +203,27 @@ private struct ChartScrubLayer: View {
     @State private var scrubEndedAt = Date.distantPast
 
     var body: some View {
-        Rectangle()
-            .fill(.clear)
-            .contentShape(Rectangle())
-            .gesture(HoldToScrub(onChange: scrub))
-            .gesture(SwipeToScrub(onChange: scrub))
-            .onTapGesture(coordinateSpace: .local) { location in
-                guard Date().timeIntervalSince(scrubEndedAt) > 0.3,
-                      let tapped = target(at: location.x) else { return }
-                selection = selection == tapped ? nil : tapped
+        Group {
+            if #available(iOS 18, *) {
+                Rectangle()
+                    .fill(.clear)
+                    .contentShape(Rectangle())
+                    .gesture(HoldToScrub(onChange: scrub))
+                    .gesture(SwipeToScrub(onChange: scrub))
+                    .onTapGesture(coordinateSpace: .local, perform: tap)
+            } else {
+                LegacyScrubView(onChange: scrub, onTap: tap)
             }
-            // VoiceOver reads the marks themselves; this layer only catches
-            // touches.
-            .accessibilityHidden(true)
+        }
+        // VoiceOver reads the marks themselves; this layer only catches
+        // touches.
+        .accessibilityHidden(true)
+    }
+
+    private func tap(at location: CGPoint) {
+        guard Date().timeIntervalSince(scrubEndedAt) > 0.3,
+              let tapped = target(at: location.x) else { return }
+        selection = selection == tapped ? nil : tapped
     }
 
     private func scrub(to location: CGPoint?) {
@@ -244,19 +252,13 @@ private struct ChartScrubLayer: View {
 }
 
 /// A long press that keeps reporting the finger while it moves.
+@available(iOS 18, *)
 private struct HoldToScrub: UIGestureRecognizerRepresentable {
     /// The finger's position in the layer while held; nil when it lifts.
     let onChange: (CGPoint?) -> Void
 
     func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
-        let recognizer = UILongPressGestureRecognizer()
-        // UIKit's defaults are 0.5s and 10pt. 0.3s read as a long wait on
-        // top of the scroll view's own touch delay, and a resting thumb
-        // drifts past 10pt, which failed the press: "sometimes misses".
-        // 0.2s still lets a flick scroll first; 24pt is about half a finger.
-        recognizer.minimumPressDuration = 0.2
-        recognizer.allowableMovement = 24
-        return recognizer
+        .scrubHold()
     }
 
     func handleUIGestureRecognizerAction(_ recognizer: UILongPressGestureRecognizer, context: Context) {
@@ -267,12 +269,26 @@ private struct HoldToScrub: UIGestureRecognizerRepresentable {
     }
 }
 
+private extension UILongPressGestureRecognizer {
+    static func scrubHold(target: Any? = nil, action: Selector? = nil) -> UILongPressGestureRecognizer {
+        let recognizer = UILongPressGestureRecognizer(target: target, action: action)
+        // UIKit's defaults are 0.5s and 10pt. 0.3s read as a long wait on
+        // top of the scroll view's own touch delay, and a resting thumb
+        // drifts past 10pt, which failed the press: "sometimes misses".
+        // 0.2s still lets a flick scroll first; 24pt is about half a finger.
+        recognizer.minimumPressDuration = 0.2
+        recognizer.allowableMovement = 24
+        return recognizer
+    }
+}
+
 /// A pan that only starts on a mostly-sideways drag, so scrubbing needs no
 /// hold at all while a vertical swipe still goes to the page's scroll.
+@available(iOS 18, *)
 private struct SwipeToScrub: UIGestureRecognizerRepresentable {
     let onChange: (CGPoint?) -> Void
 
-    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> SidewaysPanDelegate { SidewaysPanDelegate() }
 
     func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
         let recognizer = UIPanGestureRecognizer()
@@ -286,14 +302,58 @@ private struct SwipeToScrub: UIGestureRecognizerRepresentable {
         default: onChange(nil)
         }
     }
+}
 
-    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
-        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
-            guard let pan = recognizer as? UIPanGestureRecognizer else { return true }
-            let velocity = pan.velocity(in: pan.view)
-            // ponytail: fixed 1.5× bias toward horizontal; tune if diagonal
-            // scrolls start scrubbing on device.
-            return abs(velocity.x) > abs(velocity.y) * 1.5
+/// Lets a pan begin only on a mostly-sideways drag.
+private class SidewaysPanDelegate: NSObject, UIGestureRecognizerDelegate {
+    func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+        guard let pan = recognizer as? UIPanGestureRecognizer else { return true }
+        let velocity = pan.velocity(in: pan.view)
+        // ponytail: fixed 1.5× bias toward horizontal; tune if diagonal
+        // scrolls start scrubbing on device.
+        return abs(velocity.x) > abs(velocity.y) * 1.5
+    }
+}
+
+/// iOS 17 has no `UIGestureRecognizerRepresentable`, so the same hold, swipe
+/// and tap go on a clear UIView instead. A UIKit view inside the scroll view
+/// leaves the page's own pan alone, as the representables do.
+private struct LegacyScrubView: UIViewRepresentable {
+    let onChange: (CGPoint?) -> Void
+    let onTap: (CGPoint) -> Void
+
+    func makeCoordinator() -> Coordinator { Coordinator() }
+
+    func makeUIView(context: Context) -> UIView {
+        let view = UIView()
+        view.backgroundColor = .clear
+        let coordinator = context.coordinator
+        view.addGestureRecognizer(UILongPressGestureRecognizer.scrubHold(target: coordinator, action: #selector(Coordinator.scrub)))
+        let pan = UIPanGestureRecognizer(target: coordinator, action: #selector(Coordinator.scrub))
+        pan.delegate = coordinator
+        view.addGestureRecognizer(pan)
+        view.addGestureRecognizer(UITapGestureRecognizer(target: coordinator, action: #selector(Coordinator.tap)))
+        return view
+    }
+
+    func updateUIView(_ view: UIView, context: Context) {
+        context.coordinator.onChange = onChange
+        context.coordinator.onTap = onTap
+    }
+
+    final class Coordinator: SidewaysPanDelegate {
+        var onChange: (CGPoint?) -> Void = { _ in }
+        var onTap: (CGPoint) -> Void = { _ in }
+
+        @objc func scrub(_ recognizer: UIGestureRecognizer) {
+            switch recognizer.state {
+            case .began, .changed: onChange(recognizer.location(in: recognizer.view))
+            default: onChange(nil)
+            }
+        }
+
+        @objc func tap(_ recognizer: UITapGestureRecognizer) {
+            onTap(recognizer.location(in: recognizer.view))
         }
     }
 }

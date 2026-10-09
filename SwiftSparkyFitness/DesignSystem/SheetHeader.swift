@@ -69,7 +69,7 @@ struct SheetHeader: View {
                 symbol(cancelSymbol)
                     .foregroundStyle(AppColor.ink)
             }
-            .buttonStyle(.glass)
+            .sheetButtonStyle(prominent: false)
             .accessibilityLabel(cancelTitle)
 
             Spacer(minLength: 0)
@@ -83,7 +83,7 @@ struct SheetHeader: View {
                         symbol("checkmark")
                     }
                 }
-                .buttonStyle(.glassProminent)
+                .sheetButtonStyle(prominent: true)
                 .tint(AppColor.accent)
                 .disabled(!isEnabled)
                 // While busy the label is a bare spinner, which VoiceOver read
@@ -136,5 +136,17 @@ struct SheetHeader: View {
         Image(systemName: name)
             .font(.system(size: 17, weight: .semibold))
             .frame(width: Self.symbolSide, height: Self.symbolSide)
+    }
+}
+
+private extension View {
+    /// Liquid Glass circles from iOS 26; before it, the bordered circles
+    /// iOS 17 drew for the same job.
+    @ViewBuilder func sheetButtonStyle(prominent: Bool) -> some View {
+        if #available(iOS 26, *) {
+            if prominent { buttonStyle(.glassProminent) } else { buttonStyle(.glass) }
+        } else {
+            if prominent { buttonStyle(.borderedProminent) } else { buttonStyle(.bordered) }
+        }
     }
 }

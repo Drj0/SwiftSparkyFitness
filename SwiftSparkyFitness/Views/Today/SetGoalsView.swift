@@ -100,24 +100,23 @@ struct SetGoalsView: View {
             if showsCancel {
                 // The system's ✕ and ✓, matching every other sheet's header
                 // (SheetHeader draws the same glass circles by hand).
+                // Before iOS 26 there's no ✕ or ✓ for a role: the words.
                 ToolbarItem(placement: .cancellationAction) {
-                    Button(role: .cancel) { if viewModel.isDirty { confirmingDiscard = true } else { dismiss() } }
-                        .tint(AppColor.ink)
+                    if #available(iOS 26, *) {
+                        Button(role: .cancel, action: cancel)
+                            .tint(AppColor.ink)
+                    } else {
+                        Button("Cancel", role: .cancel, action: cancel)
+                            .tint(AppColor.ink)
+                    }
                 }
             }
             ToolbarItem(placement: .confirmationAction) {
-                Button(role: .confirm) {
-                    Task {
-                        if await viewModel.save() {
-                            onSaved()
-                            dismiss()
-                        }
-                    }
-                } label: {
-                    if viewModel.isSaving {
-                        ProgressView().controlSize(.small)
+                Group {
+                    if #available(iOS 26, *) {
+                        Button(role: .confirm, action: save) { saveLabel }
                     } else {
-                        Label("Save", systemImage: "checkmark")
+                        Button(action: save) { saveLabel }
                     }
                 }
                 .disabled(!viewModel.canSave)
@@ -134,6 +133,27 @@ struct SetGoalsView: View {
                 Task { await viewModel.load() }
                 onSaved()
             }
+        }
+    }
+
+    private func cancel() {
+        if viewModel.isDirty { confirmingDiscard = true } else { dismiss() }
+    }
+
+    private func save() {
+        Task {
+            if await viewModel.save() {
+                onSaved()
+                dismiss()
+            }
+        }
+    }
+
+    @ViewBuilder private var saveLabel: some View {
+        if viewModel.isSaving {
+            ProgressView().controlSize(.small)
+        } else {
+            Label("Save", systemImage: "checkmark")
         }
     }
 

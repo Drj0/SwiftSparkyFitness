@@ -1445,19 +1445,31 @@ struct SettingsRow: View {
             .font(.system(size: min(glyphSize, 22), weight: .semibold))
             .foregroundStyle(tint)
 
-        switch reduceMotion ? SymbolEffect.none : symbolEffect {
-        case .none:
-            base
-        case .heartbeat:
-            // A repeating bounce, which is the pump. Bounded in practice:
-            // `.flowing` is only ever set by a request made in this session,
-            // so the heart beats as the answer to a question just asked and
-            // is back to still the next time the screen is opened.
-            base.symbolEffect(.bounce, options: .repeating)
-        case .waiting:
-            base.symbolEffect(.breathe, options: .repeating)
-        case .break:
-            base.symbolEffect(.bounce, options: .nonRepeating)
+        let effect = reduceMotion ? SymbolEffect.none : symbolEffect
+        if #available(iOS 18, *) {
+            switch effect {
+            case .none:
+                base
+            case .heartbeat:
+                // A repeating bounce, which is the pump. Bounded in practice:
+                // `.flowing` is only ever set by a request made in this session,
+                // so the heart beats as the answer to a question just asked and
+                // is back to still the next time the screen is opened.
+                base.symbolEffect(.bounce, options: .repeating)
+            case .waiting:
+                base.symbolEffect(.breathe, options: .repeating)
+            case .break:
+                base.symbolEffect(.bounce, options: .nonRepeating)
+            }
+        } else {
+            // iOS 17 can only bounce on a value change, and has no breathe:
+            // both loops pulse, and the one knock is left out.
+            switch effect {
+            case .none, .break:
+                base
+            case .heartbeat, .waiting:
+                base.symbolEffect(.pulse, options: .repeating)
+            }
         }
     }
 
