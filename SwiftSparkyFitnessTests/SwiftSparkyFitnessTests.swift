@@ -1250,7 +1250,7 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         var outcome: HealthAuthorizationOutcome = .answered
         var recentEnergy = false
 
-        func requestAuthorization() async throws -> HealthAuthorizationOutcome {
+        func requestAuthorization(includingWorkouts: Bool) async throws -> HealthAuthorizationOutcome {
             authorizationRequests += 1
             return outcome
         }
@@ -1270,7 +1270,8 @@ final class SwiftSparkyFitnessTests: XCTestCase {
     @MainActor
     func testHealthWorkoutImportsOnceWithMeasuredCalories() async {
         HealthSync.isEnabled = true
-        defer { HealthSync.isEnabled = false }
+        HealthSync.importsWorkouts = true
+        defer { HealthSync.isEnabled = false; UserDefaults.standard.removeObject(forKey: HealthSync.workoutsKey) }
         let workout = HealthWorkout(
             id: UUID(), catalogName: "Running", start: Date(), durationMinutes: 30,
             kilocalories: 312, distanceMeters: 5000
@@ -1302,7 +1303,8 @@ final class SwiftSparkyFitnessTests: XCTestCase {
     @MainActor
     func testConcurrentHealthImportsLogTheWorkoutOnce() async {
         HealthSync.isEnabled = true
-        defer { HealthSync.isEnabled = false }
+        HealthSync.importsWorkouts = true
+        defer { HealthSync.isEnabled = false; UserDefaults.standard.removeObject(forKey: HealthSync.workoutsKey) }
         let workout = HealthWorkout(id: UUID(), catalogName: "Cycling", start: Date(), durationMinutes: 45, kilocalories: 400, distanceMeters: 15000)
         defer {
             let key = "healthImportedWorkoutIDs"
@@ -1316,6 +1318,20 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         async let second = HealthWorkoutImporter.importWorkouts(on: Date(), apiClient: stub, health: health)
         _ = await (first, second)
         XCTAssertEqual(stub.createdExerciseEntries.count, 1)
+    }
+
+    /// Workouts are their own opt-in: Health on is not enough.
+    @MainActor
+    func testHealthWorkoutImportNeedsWorkoutsEnabled() async {
+        HealthSync.isEnabled = true
+        HealthSync.importsWorkouts = false
+        defer { HealthSync.isEnabled = false; UserDefaults.standard.removeObject(forKey: HealthSync.workoutsKey) }
+        let health = StubHealthKit()
+        health.workoutsToReturn = [HealthWorkout(id: UUID(), catalogName: "Yoga", start: Date(), durationMinutes: 20, kilocalories: 80, distanceMeters: nil)]
+        let stub = StubAPIClient()
+        let imported = await HealthWorkoutImporter.importWorkouts(on: Date(), apiClient: stub, health: health)
+        XCTAssertFalse(imported)
+        XCTAssertTrue(stub.createdExerciseEntries.isEmpty)
     }
 
     /// Nothing is read from Health unless the user turned sync on.

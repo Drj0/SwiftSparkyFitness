@@ -159,7 +159,8 @@ private struct ProgressChartAxes: ViewModifier {
 
 extension View {
     /// Inspect a chart without fighting the page's scroll: tap a day to pin
-    /// it (tap it again to let go), or touch and hold, then drag, to scrub.
+    /// it (tap it again to let go), drag sideways to scrub straight away, or
+    /// touch and hold, then drag.
     ///
     /// Not `chartXSelection`, and not a SwiftUI drag of any kind. Both were
     /// tried on the simulator and both kept the page from scrolling when a
@@ -205,14 +206,8 @@ private struct ChartScrubLayer: View {
         Rectangle()
             .fill(.clear)
             .contentShape(Rectangle())
-            .gesture(HoldToScrub { location in
-                if let location {
-                    let next = target(at: location.x)
-                    if next != selection { selection = next }
-                } else {
-                    scrubEndedAt = Date()
-                }
-            })
+            .gesture(HoldToScrub(onChange: scrub))
+            .gesture(SwipeToScrub(onChange: scrub))
             .onTapGesture(coordinateSpace: .local) { location in
                 guard Date().timeIntervalSince(scrubEndedAt) > 0.3,
                       let tapped = target(at: location.x) else { return }
@@ -221,6 +216,15 @@ private struct ChartScrubLayer: View {
             // VoiceOver reads the marks themselves; this layer only catches
             // touches.
             .accessibilityHidden(true)
+    }
+
+    private func scrub(to location: CGPoint?) {
+        if let location {
+            let next = target(at: location.x)
+            if next != selection { selection = next }
+        } else {
+            scrubEndedAt = Date()
+        }
     }
 
     /// What a touch at `x` selects: the reading it snaps to, or its bucket.
@@ -246,9 +250,12 @@ private struct HoldToScrub: UIGestureRecognizerRepresentable {
 
     func makeUIGestureRecognizer(context: Context) -> UILongPressGestureRecognizer {
         let recognizer = UILongPressGestureRecognizer()
-        // Long enough that a resting thumb mid-scroll doesn't grab a day,
-        // short enough to feel like touching the chart.
-        recognizer.minimumPressDuration = 0.3
+        // UIKit's defaults are 0.5s and 10pt. 0.3s read as a long wait on
+        // top of the scroll view's own touch delay, and a resting thumb
+        // drifts past 10pt, which failed the press: "sometimes misses".
+        // 0.2s still lets a flick scroll first; 24pt is about half a finger.
+        recognizer.minimumPressDuration = 0.2
+        recognizer.allowableMovement = 24
         return recognizer
     }
 
@@ -256,6 +263,37 @@ private struct HoldToScrub: UIGestureRecognizerRepresentable {
         switch recognizer.state {
         case .began, .changed: onChange(context.converter.localLocation)
         default: onChange(nil)
+        }
+    }
+}
+
+/// A pan that only starts on a mostly-sideways drag, so scrubbing needs no
+/// hold at all while a vertical swipe still goes to the page's scroll.
+private struct SwipeToScrub: UIGestureRecognizerRepresentable {
+    let onChange: (CGPoint?) -> Void
+
+    func makeCoordinator(converter: CoordinateSpaceConverter) -> Coordinator { Coordinator() }
+
+    func makeUIGestureRecognizer(context: Context) -> UIPanGestureRecognizer {
+        let recognizer = UIPanGestureRecognizer()
+        recognizer.delegate = context.coordinator
+        return recognizer
+    }
+
+    func handleUIGestureRecognizerAction(_ recognizer: UIPanGestureRecognizer, context: Context) {
+        switch recognizer.state {
+        case .began, .changed: onChange(context.converter.localLocation)
+        default: onChange(nil)
+        }
+    }
+
+    final class Coordinator: NSObject, UIGestureRecognizerDelegate {
+        func gestureRecognizerShouldBegin(_ recognizer: UIGestureRecognizer) -> Bool {
+            guard let pan = recognizer as? UIPanGestureRecognizer else { return true }
+            let velocity = pan.velocity(in: pan.view)
+            // ponytail: fixed 1.5× bias toward horizontal; tune if diagonal
+            // scrolls start scrubbing on device.
+            return abs(velocity.x) > abs(velocity.y) * 1.5
         }
     }
 }

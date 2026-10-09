@@ -246,8 +246,19 @@ final class ProgressViewModel: ObservableObject {
         }
     }
 
+    private var rangeLoad: Task<Void, Never>?
+
+    /// Tapping through 1W→1M→3M→1Y used to start four full loads, each
+    /// running to completion on the main thread only to be discarded. Now a
+    /// change waits a beat, and a newer change replaces it. Only this task is
+    /// cancelled — never `.task`/`.refreshable`'s (see `load()`).
     private func reloadForRangeChange() {
-        Task { await load() }
+        rangeLoad?.cancel()
+        rangeLoad = Task {
+            try? await Task.sleep(for: .milliseconds(150))
+            guard !Task.isCancelled else { return }
+            await load()
+        }
     }
 
     // MARK: - Loading
@@ -274,6 +285,9 @@ final class ProgressViewModel: ObservableObject {
     /// Measured: every return to the tab used to run a full dimmed load.
     func refresh() async {
         if isPreviewSeeded { return }
+        // Something may have been logged since: the empty-range lookup is
+        // stale.
+        lastEntryLookup = nil
         guard hasLoadedOnce else { return await load() }
         await performLoad(showsProgress: false)
     }
@@ -297,7 +311,11 @@ final class ProgressViewModel: ObservableObject {
         async let goals = result { try await self.apiClient.goals(from: window.start, to: window.end) }
         async let body = result { try await self.apiClient.bodyMeasurements(from: window.start, to: window.end) }
         async let workouts = result { try await self.apiClient.exerciseSummary(from: window.start, to: window.end) }
-        async let prefs = result { try await self.apiClient.userPreferences() }
+        // Preferences don't depend on the range, so a range change doesn't
+        // re-read them; the first load and a refresh (which Settings'
+        // changes trigger) do.
+        let needsPrefs = !hasLoadedOnce || !showsProgress
+        async let prefs = needsPrefs ? result { try await self.apiClient.userPreferences() } : nil
 
         let (entriesResult, goalsResult, bodyResult, workoutsResult, prefsResult) =
             await (entries, goals, body, workouts, prefs)
@@ -343,7 +361,7 @@ final class ProgressViewModel: ObservableObject {
             failures.append("exercise")
             if isNewWindow { exerciseTotals = nil; exercise = [] }
         }
-        if case .success(let value) = prefsResult { preferences = value }
+        if case .success(let value)? = prefsResult { preferences = value }
 
         loadedRange = window
         rebuildDerived()
@@ -354,9 +372,16 @@ final class ProgressViewModel: ObservableObject {
         if hasAnyData || didFailToLoad {
             earlierHistory = .unknown
         } else if earlierHistory == .unknown || isNewWindow {
-            earlierHistory = .unknown
-            // Its own task, so the empty state isn't held dimmed behind it.
-            Task { await findLastEntry(outside: window) }
+            // The look covers the year up to today whatever the window, so
+            // one answer serves every empty range until today moves or
+            // something is logged.
+            if let cached = lastEntryLookup, cached.end == maxDate {
+                earlierHistory = cached.history
+            } else {
+                earlierHistory = .unknown
+                // Its own task, so the empty state isn't held dimmed behind it.
+                Task { await findLastEntry(outside: window) }
+            }
         }
     }
 
@@ -367,6 +392,8 @@ final class ProgressViewModel: ObservableObject {
     /// history that their trends start here. The range itself is empty, so
     /// including it costs nothing. Three reads, only ever for an empty
     /// range.
+    private var lastEntryLookup: (end: Date, history: EarlierHistory)?
+
     private func findLastEntry(outside window: ProgressDateRange) async {
         let calendar = Calendar.current
         let end = maxDate
@@ -393,6 +420,7 @@ final class ProgressViewModel: ObservableObject {
         } else {
             earlierHistory = .none
         }
+        lastEntryLookup = (end, earlierHistory)
     }
 
     /// Wraps a throwing call so one failing read can't cancel its siblings.

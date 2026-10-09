@@ -24,7 +24,6 @@ enum HealthWorkoutImporter {
     static let note = "Imported from Apple Health"
 
     private static let importedKey = "healthImportedWorkoutIDs"
-    private static let authorizationKey = "healthWorkoutsAuthorizationRequested"
 
     private static let timeFormatter: DateFormatter = {
         let formatter = DateFormatter()
@@ -56,16 +55,9 @@ enum HealthWorkoutImporter {
     private static var inFlight: [String: Task<Bool, Never>] = [:]
 
     private static func run(on date: Date, apiClient: APIClientProtocol, health: HealthKitReading) async -> Bool {
-        guard HealthSync.isEnabled, health.isAvailable else { return false }
-
-        // Anyone who connected Health before workouts were read has only
-        // granted active energy. Ask once for the newer types; HealthKit
-        // shows the sheet only for types not yet asked about.
+        // Its own opt-in, asked for from Settings: see HealthSync.
+        guard HealthSync.isEnabled, HealthSync.importsWorkouts, health.isAvailable else { return false }
         let defaults = UserDefaults.standard
-        if !defaults.bool(forKey: authorizationKey) {
-            _ = try? await health.requestAuthorization()
-            defaults.set(true, forKey: authorizationKey)
-        }
 
         guard let workouts = try? await health.workouts(on: date), !workouts.isEmpty else { return false }
         var imported = Set(defaults.stringArray(forKey: importedKey) ?? [])

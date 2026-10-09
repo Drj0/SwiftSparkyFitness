@@ -29,9 +29,14 @@ enum OnboardingGate {
         UserDefaults.standard.set(true, forKey: key(account: account))
     }
 
+    /// Onboarding ran (or was skipped) on this install, Health step included.
+    static func isHandled(account: String?) -> Bool {
+        UserDefaults.standard.bool(forKey: key(account: account))
+    }
+
     @MainActor
     static func shouldShow(account: String?) async -> Bool {
-        guard !UserDefaults.standard.bool(forKey: key(account: account)) else { return false }
+        guard !isHandled(account: account) else { return false }
         let start = Calendar.current.date(byAdding: .day, value: -90, to: Date()) ?? Date()
         if AppMode.isLocal {
             // A fresh install's diary is empty until iCloud's copy arrives;

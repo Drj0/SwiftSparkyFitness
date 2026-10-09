@@ -38,6 +38,9 @@ final class DiaryViewModel: ObservableObject {
     /// tracking an "expanded" set, so a newly-appearing section (e.g. the
     /// first time Water has anything in it) defaults to visible.
     @Published var collapsedSections: Set<String> = []
+    /// Empty sections start closed — a column of "Nothing logged" rows was
+    /// most of the screen on a light day. These are the ones opened anyway.
+    @Published var openedEmptySections: Set<String> = []
 
     @Published var editingFoodEntry: FoodEntrySummary?
     @Published var editingExerciseEntry: ExerciseSessionSummary?
@@ -198,8 +201,8 @@ final class DiaryViewModel: ObservableObject {
     /// job.
     var loggableMealTypes: [MealType] { mealTypes.visibleOnly }
 
-    func isCollapsed(_ sectionId: String) -> Bool {
-        collapsedSections.contains(sectionId)
+    func isCollapsed(_ sectionId: String, isEmpty: Bool = false) -> Bool {
+        isEmpty ? !openedEmptySections.contains(sectionId) : collapsedSections.contains(sectionId)
     }
 
     /// Collapsing used to mutate the set bare, so a whole meal's rows blinked
@@ -207,21 +210,22 @@ final class DiaryViewModel: ObservableObject {
     /// to be wrapped here rather than at the call site's `isCollapsed` read.
     /// `animated` comes from the view because Reduce Motion lives in the
     /// SwiftUI environment, which a view model can't see.
-    func toggleSection(_ sectionId: String, animated: Bool = true) {
+    func toggleSection(_ sectionId: String, isEmpty: Bool = false, animated: Bool = true) {
         guard !isMidDaySwipe else { return }
         // A hand-rolled disclosure control: the system would fire this for a
         // real DisclosureGroup, so it has to be fired by hand here.
         Haptics.selection()
-        var next = collapsedSections
-        if next.contains(sectionId) {
-            next.remove(sectionId)
-        } else {
-            next.insert(sectionId)
+        let toggle = {
+            if isEmpty {
+                self.openedEmptySections.formSymmetricDifference([sectionId])
+            } else {
+                self.collapsedSections.formSymmetricDifference([sectionId])
+            }
         }
         if animated {
-            withAnimation(.snappy(duration: 0.28)) { collapsedSections = next }
+            withAnimation(.snappy(duration: 0.28), toggle)
         } else {
-            collapsedSections = next
+            toggle()
         }
     }
 

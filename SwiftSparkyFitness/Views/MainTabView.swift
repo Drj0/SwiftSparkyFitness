@@ -44,6 +44,9 @@ struct MainTabView: View {
     @State private var deviceMoveError: String?
     /// First-run setup, opened on its own while there's no goal yet.
     @State private var isOnboarding = false
+    /// A returning user skips onboarding, which is where Health is asked
+    /// for, so a reinstall would otherwise leave Health off for good.
+    @State private var isOfferingHealth = false
 
     var body: some View {
         TabView(selection: $selection) {
@@ -97,6 +100,18 @@ struct MainTabView: View {
             guard !waiting, AppMode.isLocal else { return }
             checkOtherDevices()
             Task { await offerOnboardingIfNew() }
+        }
+        .alert("Reconnect Apple Health?", isPresented: $isOfferingHealth) {
+            Button("Not now", role: .cancel) {}
+            Button("Connect") {
+                Task {
+                    let outcome = try? await HealthKitService.shared.requestAuthorization()
+                    HealthSync.isEnabled = outcome == .answered
+                    NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+                }
+            }
+        } message: {
+            Text("Your diary is back. Connect Health so your steps and active energy count towards your day again.")
         }
         .fullScreenCover(isPresented: $isOnboarding) {
             OnboardingView(account: serverSync.account) {
@@ -159,13 +174,29 @@ extension MainTabView {
     private func offerOnboardingIfNew() async {
         // Not over the handoff offer: someone bringing a diary along
         // isn't new.
-        guard !isOfferingHandoff, !isOnboarding,
-              await OnboardingGate.shouldShow(account: serverSync.account) else { return }
+        guard !isOfferingHandoff, !isOnboarding else { return }
+        guard await OnboardingGate.shouldShow(account: serverSync.account) else {
+            await offerHealthIfReturning()
+            return
+        }
         // No slide up over Today: on a first run it's the next screen
         // after the start screen, not a sheet over an empty diary.
         var transaction = Transaction()
         transaction.disablesAnimations = true
         withTransaction(transaction) { isOnboarding = true }
+    }
+
+    /// Once per install, for someone onboarding didn't ask: Health is off,
+    /// HealthKit has never been asked here (a reinstall drops the old
+    /// answer), and this isn't a diary still arriving from iCloud.
+    private func offerHealthIfReturning() async {
+        let defaults = UserDefaults.standard
+        guard !HealthSync.isEnabled, !defaults.bool(forKey: HealthSync.reconnectOfferedKey),
+              !OnboardingGate.isHandled(account: serverSync.account),
+              !(AppMode.isLocal && cloud.isAwaitingInitialImport),
+              await HealthKitService.shared.hasNeverAsked() else { return }
+        defaults.set(true, forKey: HealthSync.reconnectOfferedKey)
+        isOfferingHealth = true
     }
 
     /// What the other devices on this diary have done since this one last

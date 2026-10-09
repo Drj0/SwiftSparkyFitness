@@ -613,14 +613,12 @@ struct OnboardingView: View {
             VStack(spacing: 0) {
                 healthRow("flame.fill", AppColor.energy, "Active energy", "Adds to the calories you can eat")
                 Rectangle().fill(AppColor.hairline).frame(height: 1).padding(.leading, 56)
-                healthRow("figure.run", AppColor.accent, "Workouts", "Appear in your exercise log")
-                Rectangle().fill(AppColor.hairline).frame(height: 1).padding(.leading, 56)
                 healthRow("shoeprints.fill", AppColor.carbs, "Steps", "Shown on Today")
             }
             .background(AppColor.surface, in: RoundedRectangle(cornerRadius: AppRadius.md))
             .overlay(RoundedRectangle(cornerRadius: AppRadius.md).stroke(AppColor.hairline, lineWidth: 1))
 
-            Label("Sparky only reads from Health. Turn it off anytime in Settings.", systemImage: "lock.fill")
+            Label("Sparky only reads from Health. Workout import and everything else is in Settings.", systemImage: "lock.fill")
                 .appBody(12)
                 .foregroundStyle(AppColor.placeholder)
                 .padding(.top, 12)

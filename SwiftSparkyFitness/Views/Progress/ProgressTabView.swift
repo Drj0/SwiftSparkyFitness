@@ -66,9 +66,15 @@ struct ProgressTabView: View {
                     // blanking the screen, the same way Diary handles paging
                     // to a new day. Only the charts: the range control you
                     // just tapped stays at full strength.
-                    .opacity(viewModel.isLoading && viewModel.hasLoadedOnce ? 0.5 : 1)
+                    //
+                    // The animation is scoped to the opacity alone: new data
+                    // lands in the same update as `isLoading = false`, and a
+                    // value-scoped `.animation` here made Charts interpolate
+                    // every mark of every card on each range change.
+                    .animation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+                        $0.opacity(viewModel.isLoading && viewModel.hasLoadedOnce ? 0.5 : 1)
+                    }
                     .allowsHitTesting(!(viewModel.isLoading && viewModel.hasLoadedOnce))
-                    .animation(reduceMotion ? nil : .easeOut(duration: 0.18), value: viewModel.isLoading)
             }
             .padding(AppSpacing.screenPad)
         }

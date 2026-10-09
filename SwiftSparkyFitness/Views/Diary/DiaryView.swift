@@ -26,6 +26,8 @@ struct DiaryView: View {
     @ObservedObject private var viewModel: DiaryViewModel
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isLoggingFood = false
+    /// The meal a section's own "Log" row opened the search for.
+    @State private var loggingMealType: MealType?
 
     /// Standalone use (previews, tests) builds its own view model; the
     /// Exercise tab passes one down so both segments share a single day's
@@ -58,6 +60,9 @@ struct DiaryView: View {
                 .animation(reduceMotion ? nil : .easeOut(duration: 0.2), value: isShowingStaleDay)
         }
         .listStyle(.plain)
+        // A run of closed sections was mostly air: 64pt per header plus a
+        // 22pt gap. The header's own 44pt target is the spacing now.
+        .listSectionSpacing(0)
         .scrollContentBackground(.hidden)
         .background(AppColor.background)
         .safeAreaInset(edge: .top) { errorInset }
@@ -76,7 +81,7 @@ struct DiaryView: View {
         // does; today keeps the time of day, as Today's logging does.
         .sheet(isPresented: $isLoggingFood, onDismiss: { Task { await viewModel.load() } }) {
             FoodSearchView(
-                mealTypes: viewModel.mealTypes.visibleOnly, initialMealType: nil,
+                mealTypes: viewModel.mealTypes.visibleOnly, initialMealType: loggingMealType,
                 entryDate: Calendar.current.isDateInToday(viewModel.selectedDate) ? Date() : viewModel.selectedDate
             ) {
                 isLoggingFood = false
@@ -216,7 +221,7 @@ struct DiaryView: View {
                 .foregroundStyle(AppColor.ink)
                 .multilineTextAlignment(.center)
                 .accessibilityAddTraits(.isHeader)
-            Text("Log a meal or a snack for this day. Water is on Today.")
+            Text("Log a meal, a snack or a drink for this day.")
                 .appBody(14)
                 .foregroundStyle(AppColor.secondaryText)
                 .multilineTextAlignment(.center)
@@ -225,9 +230,21 @@ struct DiaryView: View {
                 // A day swipe across the card ends on this button.
                 guard !viewModel.isMidDaySwipe else { return }
                 Haptics.light()
+                loggingMealType = nil
                 isLoggingFood = true
             }
             .padding(.top, 6)
+            Button {
+                guard !viewModel.isMidDaySwipe else { return }
+                addDrink()
+            } label: {
+                Label("Add a drink", systemImage: "drop.fill")
+                    .appBody(15, weight: .semibold)
+                    .foregroundStyle(AppColor.water)
+                    .frame(maxWidth: .infinity, minHeight: 44)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.pressable)
         }
         .frame(maxWidth: .infinity)
         .padding(.horizontal, 24)
@@ -256,16 +273,12 @@ struct DiaryView: View {
     private func mealSection(_ mealType: MealType, _ entries: [FoodEntrySummary]) -> some View {
         let total = entries.reduce(0) { $0 + $1.calories }
         return Section {
-            if !viewModel.isCollapsed(mealType.id) {
+            if !viewModel.isCollapsed(mealType.id, isEmpty: entries.isEmpty) {
                 if entries.isEmpty {
-                    Text("Nothing logged")
-                        .appBody(13)
-                        .foregroundStyle(AppColor.placeholder)
-                        .padding(.horizontal, AppSpacing.screenPad)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .diaryRow()
-                        .diaryDayPaging(viewModel)
+                    emptyRow("Log \(mealType.name.lowercased())", symbol: "plus", tint: AppColor.accent) {
+                        loggingMealType = mealType
+                        isLoggingFood = true
+                    }
                 } else {
                     ForEach(entries) { entry in
                         foodRow(entry)
@@ -285,7 +298,10 @@ struct DiaryView: View {
                 }
             }
         } header: {
-            sectionHeader(id: mealType.id, title: "\(mealType.name.capitalized) · \(Int(total.rounded())) kcal")
+            sectionHeader(
+                id: mealType.id, isEmpty: entries.isEmpty,
+                title: entries.isEmpty ? mealType.name.capitalized : "\(mealType.name.capitalized) · \(Int(total.rounded())) kcal"
+            )
         }
     }
 
@@ -330,18 +346,10 @@ struct DiaryView: View {
 
     private func waterSection() -> some View {
         let entries = viewModel.water.entries
+        let isEmpty = viewModel.water.totalMl <= 0
         return Section {
-            if !viewModel.isCollapsed("water") {
-                if entries.isEmpty {
-                    Text("Nothing logged")
-                        .appBody(13)
-                        .foregroundStyle(AppColor.placeholder)
-                        .padding(.horizontal, AppSpacing.screenPad)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .diaryRow()
-                        .diaryDayPaging(viewModel)
-                } else {
+            if !viewModel.isCollapsed("water", isEmpty: isEmpty) {
+                if !entries.isEmpty {
                     ForEach(entries) { entry in
                         waterRow(entry)
                             .padding(.horizontal, AppSpacing.screenPad)
@@ -373,15 +381,28 @@ struct DiaryView: View {
                         .padding(.horizontal, AppSpacing.screenPad)
                         .diaryRow()
                 }
+
+                // Always offered, not only when empty: one tap per glass is
+                // what the water card on Today does, and this day may not be
+                // today.
+                emptyRow("Add a drink · \(viewModel.water.drinkLabel)", symbol: "plus", tint: AppColor.water, action: addDrink)
             }
         } header: {
-            sectionHeader(id: "water", title: "Water · \(Int(viewModel.water.totalMl.rounded())) ml")
+            sectionHeader(
+                id: "water", isEmpty: isEmpty,
+                title: isEmpty ? "Water" : "Water · \(Int(viewModel.water.totalMl.rounded())) ml"
+            )
         }
     }
 
     private func waterRow(_ entry: WaterLogEntry) -> some View {
-        HStack(spacing: 10) {
-            Text("💧").font(.system(size: 16))
+        HStack(spacing: 12) {
+            Image(systemName: "drop.fill")
+                .font(.system(size: 14, weight: .semibold))
+                .foregroundStyle(AppColor.water)
+                .frame(width: 28, height: 28)
+                .background(AppColor.waterSoft, in: Circle())
+                .accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 2) {
                 Text("\(Int(entry.waterMl.rounded())) ml")
                     .appBody(15, weight: .semibold)
@@ -399,9 +420,48 @@ struct DiaryView: View {
                     .foregroundStyle(AppColor.secondaryText)
             }
         }
-        .padding(14)
-        .background(AppColor.waterSoft)
-        .clipShape(RoundedRectangle(cornerRadius: AppRadius.md))
+        // The food row's card, so a day reads as one list rather than two
+        // styles stacked: a full tinted block per glass was the heaviest
+        // thing on the screen for the least information.
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        .background(AppColor.surface)
+        .overlay(RoundedRectangle(cornerRadius: 14).stroke(AppColor.hairline, lineWidth: 1))
+        .clipShape(RoundedRectangle(cornerRadius: 14))
+        .accessibilityElement(children: .combine)
+    }
+
+    private func addDrink() {
+        Haptics.light()
+        Task {
+            await viewModel.water.adjust(drinks: 1)
+            await viewModel.water.loadEntries()
+        }
+    }
+
+    /// What an empty section shows once opened: the thing to do here, rather
+    /// than a line saying there's nothing.
+    private func emptyRow(_ title: String, symbol: String, tint: Color, action: @escaping () -> Void) -> some View {
+        Button {
+            guard !viewModel.isMidDaySwipe else { return }
+            action()
+        } label: {
+            Label(title, systemImage: symbol)
+                .appBody(14, weight: .semibold)
+                .foregroundStyle(tint)
+                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                .padding(.horizontal, 14)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14)
+                        .stroke(style: StrokeStyle(lineWidth: 1, dash: [4, 4]))
+                        .foregroundStyle(AppColor.dashedBorder)
+                )
+                .contentShape(Rectangle())
+        }
+        .buttonStyle(.pressable)
+        .padding(.horizontal, AppSpacing.screenPad)
+        .diaryRow()
+        .diaryDayPaging(viewModel)
     }
 
     private static let timeFormatter: DateFormatter = {
@@ -420,16 +480,11 @@ struct DiaryView: View {
     private func bodySection() -> some View {
         let fields = viewModel.bodyMeasurements.populatedFields
         return Section {
-            if !viewModel.isCollapsed("body") {
+            if !viewModel.isCollapsed("body", isEmpty: fields.isEmpty) {
                 if fields.isEmpty {
-                    Text("Nothing logged")
-                        .appBody(13)
-                        .foregroundStyle(AppColor.placeholder)
-                        .padding(.horizontal, AppSpacing.screenPad)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .contentShape(Rectangle())
-                        .diaryRow()
-                        .diaryDayPaging(viewModel)
+                    emptyRow("Log weight", symbol: "plus", tint: AppColor.accent) {
+                        viewModel.isPresentingBodySheet = .weight
+                    }
                 } else {
                     bodyRow(fields)
                         .padding(.horizontal, AppSpacing.screenPad)
@@ -447,7 +502,7 @@ struct DiaryView: View {
                 }
             }
         } header: {
-            sectionHeader(id: "body", title: "Body")
+            sectionHeader(id: "body", isEmpty: fields.isEmpty, title: "Body")
         }
     }
 
@@ -497,15 +552,16 @@ struct DiaryView: View {
             : "\(formatted) \(field.unitLabel(viewModel.preferences))"
     }
 
-    private func sectionHeader(id: String, title: String) -> some View {
-        let isCollapsed = viewModel.isCollapsed(id)
+    private func sectionHeader(id: String, isEmpty: Bool, title: String) -> some View {
+        let isCollapsed = viewModel.isCollapsed(id, isEmpty: isEmpty)
         return Button {
-            viewModel.toggleSection(id, animated: !reduceMotion)
+            viewModel.toggleSection(id, isEmpty: isEmpty, animated: !reduceMotion)
         } label: {
             HStack {
                 Text(title)
                     .appBody(12, weight: .semibold)
-                    .foregroundStyle(AppColor.secondaryText)
+                    // Empty sections recede, so the eye lands on what was logged.
+                    .foregroundStyle(isEmpty ? AppColor.placeholder : AppColor.secondaryText)
                     .textCase(.uppercase)
                     // The kcal total changes under the same heading after a
                     // delete or an edit; digits should roll, not hard-cut.
@@ -531,6 +587,7 @@ struct DiaryView: View {
         .accessibilityHint(isCollapsed ? "Expands this section" : "Collapses this section")
         .padding(.horizontal, AppSpacing.screenPad)
         .textCase(nil)
+        .listRowInsets(EdgeInsets())
         .diaryDayPaging(viewModel)
     }
 }

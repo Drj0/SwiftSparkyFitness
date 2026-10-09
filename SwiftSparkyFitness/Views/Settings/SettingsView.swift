@@ -43,6 +43,7 @@
 //    GOALS & UNITS — how the app is set up for me
 //    LOGGING     — what logging something does
 //    APPLE HEALTH — a connection to another app with its own permissions
+//    BACKUP      — the export file; occasional, so below the daily things
 //    ABOUT       — information, not a control
 //    (unheaded)  — irreversible
 //
@@ -69,6 +70,8 @@ struct SettingsView: View {
     /// Collapsed by default. See `localDataSection`.
     @State private var isShowingDataDetail = false
     @State private var healthRequest: HealthRequestState = .idle
+    /// Not `@AppStorage`: its default depends on a legacy key. See HealthSync.
+    @State private var importsWorkouts = HealthSync.importsWorkouts
     /// Switching to this device only asks first: copy the server's diary
     /// over, or start with an empty one.
     @State private var isChoosingLocalData = false
@@ -108,15 +111,20 @@ struct SettingsView: View {
                 // First, because in local mode it is the most consequential
                 // thing on the screen: whether a second copy of your diary
                 // exists anywhere.
-                if isLocal { localDataSection } else { serverSection }
-
-                // Server mode only. Local mode has no account, and showing one
-                // inert would imply it might one day apply here.
-                if !isLocal { accountSection }
+                // Server mode leads with who is signed in. Local mode has no
+                // account, and showing one inert would imply it might one day
+                // apply here.
+                if isLocal {
+                    localDataSection
+                } else {
+                    accountSection
+                    serverSection
+                }
 
                 goalsSection
                 loggingSection
                 healthSection
+                backupSection
                 experimentalSection
                 aboutSection
                 oneWayDoors
@@ -291,8 +299,6 @@ struct SettingsView: View {
             .disabled(serverSync.status == .syncing)
             .accessibilityHint("Syncs now")
 
-            actionRow("Export diary", icon: "square.and.arrow.up", action: exportDiary)
-
             // Until the offer made after sign-in is answered.
             if isHandoffPending {
                 actionRow("Send this iPhone's diary", icon: "square.and.arrow.up.on.square") {
@@ -362,20 +368,6 @@ struct SettingsView: View {
                 }
             }
 
-            // The copy that works when neither iCloud nor a server can: a
-            // file the user keeps in Files, another app, or another device.
-            actionRow("Export diary", icon: "square.and.arrow.up", action: exportDiary)
-            actionRow("Restore from export", icon: "square.and.arrow.down") {
-                // Mid-download, iCloud's copies of these rows haven't landed
-                // yet, so restoring would create a second row for each one
-                // (nothing can enforce uniqueness across CloudKit).
-                if case .syncing = sync.state {
-                    showArchiveNotice("iCloud is still bringing this iPhone up to date. Restore once it says Synced.", isError: true)
-                } else {
-                    isRestoringArchive = true
-                }
-            }
-
             actionRow("Connect SparkyFitness server", icon: "externaldrive.connected.to.line.below") {
                 isPresentingConnect = true
             }
@@ -389,12 +381,6 @@ struct SettingsView: View {
 
                 if iCloudAccountChangedAt != nil, AutoBackup.beforeAccountChange() != nil {
                     footnote("This iPhone's iCloud account changed. If your diary is missing entries, restore the copy this iPhone kept.", color: AppColor.destructive)
-                }
-
-                if let archiveNotice {
-                    footnote(archiveNotice, color: archiveNoticeIsError ? AppColor.destructive : AppColor.secondaryText)
-                } else if let lastExportedAt {
-                    footnote("Last exported \(lastExportedAt.formatted(.relative(presentation: .named))).")
                 }
 
                 if isShowingDataDetail {
@@ -670,6 +656,28 @@ struct SettingsView: View {
                     )
                 }
                 .tint(AppColor.accent)
+
+                // Asked for separately so the first sheet lists only what
+                // every iPhone records. Turning it on is the signal there are
+                // workouts in Health worth asking about.
+                if healthSyncEnabled {
+                    Toggle(isOn: Binding(
+                        get: { importsWorkouts },
+                        set: { wants in
+                            importsWorkouts = wants
+                            guard wants else { HealthSync.importsWorkouts = false; return }
+                            Task { await connectWorkouts() }
+                        }
+                    )) {
+                        SettingsRow(
+                            icon: "figure.run",
+                            tint: AppColor.accent,
+                            title: "Import workouts",
+                            subtitle: "From Apple Watch and fitness apps"
+                        )
+                    }
+                    .tint(AppColor.accent)
+                }
             } else {
                 SettingsRow(
                     icon: "heart.slash",
@@ -703,6 +711,40 @@ struct SettingsView: View {
         // footer, this is the only thing left that moves.
         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: healthRequest)
         .animation(reduceMotion ? nil : .snappy(duration: 0.2), value: healthSyncEnabled)
+    }
+
+    /// The copy that works when neither iCloud nor a server can: a file the
+    /// user keeps in Files, another app, or another device. Used rarely, so it
+    /// sits below the things people open Settings for. Restore is local mode
+    /// only — in server mode the server is the source of truth.
+    private var backupSection: some View {
+        Section {
+            actionRow("Export diary", icon: "square.and.arrow.up", action: exportDiary)
+            if isLocal {
+                actionRow("Restore from export", icon: "square.and.arrow.down") {
+                    // Mid-download, iCloud's copies of these rows haven't landed
+                    // yet, so restoring would create a second row for each one
+                    // (nothing can enforce uniqueness across CloudKit).
+                    if case .syncing = sync.state {
+                        showArchiveNotice("iCloud is still bringing this iPhone up to date. Restore once it says Synced.", isError: true)
+                    } else {
+                        isRestoringArchive = true
+                    }
+                }
+            }
+        } header: {
+            sectionHeader("BACKUP")
+        } footer: {
+            sectionFooter {
+                if let archiveNotice {
+                    footnote(archiveNotice, color: archiveNoticeIsError ? AppColor.destructive : AppColor.secondaryText)
+                } else if let lastExportedAt {
+                    footnote("Last exported \(lastExportedAt.formatted(.relative(presentation: .named))).")
+                }
+            }
+        }
+        .listRowBackground(AppColor.surface)
+        .listRowSeparatorTint(AppColor.hairline)
     }
 
     private var aboutSection: some View {
@@ -803,6 +845,19 @@ struct SettingsView: View {
         // notification haptic for an outcome the user is watching for is the
         // same noise a beat later.
         if resolved == .refused {
+            Haptics.warning()
+        }
+    }
+
+    /// Workouts and their distances. A dismissed sheet granted nothing, so
+    /// the switch goes back off, as the main Health switch does.
+    private func connectWorkouts() async {
+        let answered = (try? await health.requestAuthorization(includingWorkouts: true)) == .answered
+        HealthSync.importsWorkouts = answered
+        importsWorkouts = answered
+        if answered {
+            NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
+        } else {
             Haptics.warning()
         }
     }

@@ -85,10 +85,26 @@ enum EnergyReading: Equatable {
 /// read is indistinguishable from an empty one, would do so silently forever.
 enum HealthSync {
     static let defaultsKey = "healthSyncEnabled"
+    static let workoutsKey = "healthWorkoutsEnabled"
+    /// Set the first time this install asked for the workout types, before
+    /// workouts had their own switch.
+    static let legacyWorkoutsAskedKey = "healthWorkoutsAuthorizationRequested"
+    static let reconnectOfferedKey = "healthReconnectOffered"
 
     static var isEnabled: Bool {
         get { UserDefaults.standard.bool(forKey: defaultsKey) }
         set { UserDefaults.standard.set(newValue, forKey: defaultsKey) }
+    }
+
+    /// Workout import is its own opt-in: it needs workouts plus three
+    /// distance types, which most people — counting steps on an iPhone —
+    /// have nothing in. Anyone who was already asked for them keeps it on.
+    static var importsWorkouts: Bool {
+        get {
+            let defaults = UserDefaults.standard
+            return defaults.object(forKey: workoutsKey) as? Bool ?? defaults.bool(forKey: legacyWorkoutsAskedKey)
+        }
+        set { UserDefaults.standard.set(newValue, forKey: workoutsKey) }
     }
 }
 
@@ -105,7 +121,8 @@ enum HealthAuthorizationOutcome: Equatable {
 
 protocol HealthKitReading {
     var isAvailable: Bool { get }
-    func requestAuthorization() async throws -> HealthAuthorizationOutcome
+    /// The core types always; workouts and their distances only when asked.
+    func requestAuthorization(includingWorkouts: Bool) async throws -> HealthAuthorizationOutcome
     func activeEnergy(on date: Date) async throws -> EnergyReading
     /// Whether Health has handed over any active energy in the last `days`.
     /// False means "nothing arrived", never "you were refused".
@@ -117,6 +134,9 @@ protocol HealthKitReading {
 }
 
 extension HealthKitReading {
+    func requestAuthorization() async throws -> HealthAuthorizationOutcome {
+        try await requestAuthorization(includingWorkouts: false)
+    }
     func workouts(on date: Date) async throws -> [HealthWorkout] { [] }
     func steps(on date: Date) async throws -> Int? { nil }
 }
@@ -140,26 +160,42 @@ final class HealthKitService: HealthKitReading {
     private let store = HKHealthStore()
     private let energyType = HKQuantityType(.activeEnergyBurned)
 
-    /// Workouts and their distances, alongside active energy: an imported
-    /// workout's calories and distance are read from its statistics, which
-    /// needs read access to those quantity types too.
-    private var readTypes: Set<HKObjectType> {
-        [energyType, HKQuantityType(.stepCount), .workoutType(),
-         HKQuantityType(.distanceWalkingRunning), HKQuantityType(.distanceCycling), HKQuantityType(.distanceSwimming)]
-    }
+    /// What every iPhone records on its own, so the sheet never lists a type
+    /// the user has nothing in. Active energy is the one the calorie balance
+    /// uses; steps are what Today shows.
+    ///
+    /// HealthKit can't say whether a type has data before it's granted (that
+    /// would leak it), so the rest is asked for only when the user turns on
+    /// workout import, the one signal there's something there.
+    private var coreTypes: Set<HKObjectType> { [energyType, HKQuantityType(.stepCount)] }
+
+    /// An imported workout's distance is read from its statistics, which
+    /// needs read access to the distance types too.
+    private static let distanceTypes = [
+        HKQuantityType(.distanceWalkingRunning), HKQuantityType(.distanceCycling), HKQuantityType(.distanceSwimming)
+    ]
+    private var workoutTypes: Set<HKObjectType> { Set(Self.distanceTypes).union([.workoutType(), energyType]) }
 
     var isAvailable: Bool { HKHealthStore.isHealthDataAvailable() }
 
     /// Presents the permission sheet and reports whether it was answered at
     /// all. Never reports *how* — see the note at the top of this file.
-    func requestAuthorization() async throws -> HealthAuthorizationOutcome {
+    func requestAuthorization(includingWorkouts: Bool) async throws -> HealthAuthorizationOutcome {
         guard isAvailable else { return .unanswered }
+        let readTypes = includingWorkouts ? coreTypes.union(workoutTypes) : coreTypes
         try await store.requestAuthorization(toShare: [], read: readTypes)
 
         // Still `.shouldRequest` means the sheet came and went without a
         // choice, so there is definitely no permission to act on.
         let status = try await store.statusForAuthorizationRequest(toShare: [], read: readTypes)
         return status == .shouldRequest ? .unanswered : .answered
+    }
+
+    /// True while this install has never asked for the core types — after a
+    /// reinstall, for instance, where the old answer went with the app.
+    func hasNeverAsked() async -> Bool {
+        guard isAvailable else { return false }
+        return (try? await store.statusForAuthorizationRequest(toShare: [], read: coreTypes)) == .shouldRequest
     }
 
     /// One statistics query across the whole window rather than a query per
@@ -236,7 +272,6 @@ extension HealthKitService {
             predicates: [.workout(HKQuery.predicateForSamples(withStart: start, end: end))],
             sortDescriptors: [SortDescriptor(\.startDate)]
         )
-        let distanceTypes = [HKQuantityType(.distanceWalkingRunning), HKQuantityType(.distanceCycling), HKQuantityType(.distanceSwimming)]
         return try await descriptor.result(for: store).map { workout in
             HealthWorkout(
                 id: workout.uuid,
@@ -244,7 +279,7 @@ extension HealthKitService {
                 start: workout.startDate,
                 durationMinutes: workout.duration / 60,
                 kilocalories: workout.statistics(for: energyType)?.sumQuantity()?.doubleValue(for: .kilocalorie()),
-                distanceMeters: distanceTypes.lazy
+                distanceMeters: Self.distanceTypes.lazy
                     .compactMap { workout.statistics(for: $0)?.sumQuantity()?.doubleValue(for: .meter()) }
                     .first { $0 > 0 }
             )
