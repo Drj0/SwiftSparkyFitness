@@ -97,6 +97,9 @@ struct MainTabView: View {
             }
         }
         .task {
+            // Launched in the background (an iCloud push): the first time
+            // the user opens it is a return, and gets the foreground work.
+            if scenePhase == .background { wasInBackground = true }
             checkOtherDevices()
             if !AppMode.isLocal, PendingServerHandoff.isPending { isOfferingHandoff = true }
             await offerOnboardingIfNew()
@@ -109,7 +112,9 @@ struct MainTabView: View {
             checkOtherDevices()
             Task { await offerOnboardingIfNew() }
         }
-        .alert("Reconnect Apple Health?", isPresented: $isOfferingHealth) {
+        // Worded for anyone onboarding didn't ask — someone back after a
+        // reinstall, or someone who never connected Health at all.
+        .alert("Connect Apple Health?", isPresented: $isOfferingHealth) {
             Button("Not now", role: .cancel) {}
             Button("Connect") {
                 Task {
@@ -119,7 +124,7 @@ struct MainTabView: View {
                 }
             }
         } message: {
-            Text("Your diary is back. Connect Health so your steps and active energy count towards your day again.")
+            Text("Steps and active energy from your iPhone or Watch can count towards your day. Sparky only reads from Health.")
         }
         .fullScreenCover(isPresented: $isOnboarding) {
             OnboardingView(account: serverSync.account) {
