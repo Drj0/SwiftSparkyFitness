@@ -247,6 +247,9 @@ final class ProgressViewModel: ObservableObject {
     }
 
     private var rangeLoad: Task<Void, Never>?
+    /// Whether the units have been read at all: a first load that failed
+    /// still counts as loaded once, and its Retry must read them again.
+    private var hasPreferences = false
 
     /// Tapping through 1W→1M→3M→1Y used to start four full loads, each
     /// running to completion on the main thread only to be discarded. Now a
@@ -322,7 +325,7 @@ final class ProgressViewModel: ObservableObject {
         // Preferences don't depend on the range, so a range change doesn't
         // re-read them; the first load and a refresh (which Settings'
         // changes trigger) do.
-        let needsPrefs = !hasLoadedOnce || !showsProgress
+        let needsPrefs = !hasPreferences || !showsProgress
         async let prefs = needsPrefs ? result { try await self.apiClient.userPreferences() } : nil
 
         let (entriesResult, goalsResult, bodyResult, workoutsResult, prefsResult) =
@@ -369,7 +372,10 @@ final class ProgressViewModel: ObservableObject {
             failures.append("exercise")
             if isNewWindow { exerciseTotals = nil; exercise = [] }
         }
-        if case .success(let value)? = prefsResult { preferences = value }
+        if case .success(let value)? = prefsResult {
+            preferences = value
+            hasPreferences = true
+        }
 
         loadedRange = window
         rebuildDerived()
