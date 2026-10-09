@@ -195,6 +195,9 @@ final class TodayViewModel: ObservableObject {
     private func syncHealthActiveEnergy() async {
         // Only the live day: browsing a past day shouldn't write to it.
         guard HealthSync.isEnabled, isViewingToday else { return }
+        // This iPhone's diary reads Health live for the summary itself, and
+        // stores nothing: reading it here as well was a wasted query.
+        if (apiClient as? LocalAPIClient)?.readsHealthLive == true { return }
         guard case .kilocalories(let kilocalories)? = try? await health.activeEnergy(on: today) else { return }
         try? await apiClient.syncActiveEnergy(kilocalories: kilocalories, date: today)
     }
