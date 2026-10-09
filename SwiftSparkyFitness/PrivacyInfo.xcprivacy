@@ -2,19 +2,12 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- No tracking, no tracking domains. -->
 	<key>NSPrivacyTracking</key>
 	<false/>
 	<key>NSPrivacyTrackingDomains</key>
 	<array/>
-
-	<!-- Nothing is collected by the developer: the diary stays on the
-	     device, in the user's own iCloud, or on a server the user runs. -->
 	<key>NSPrivacyCollectedDataTypes</key>
 	<array/>
-
-	<!-- UserDefaults holds this app's own settings and state only (mode,
-	     server address, sync bookkeeping): reason CA92.1. -->
 	<key>NSPrivacyAccessedAPITypes</key>
 	<array>
 		<dict>
