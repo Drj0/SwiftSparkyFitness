@@ -59,6 +59,7 @@ struct SettingsView: View {
     @AppStorage(AppMode.defaultsKey) private var modeRaw = AppMode.server.rawValue
     @AppStorage(HealthSync.defaultsKey) private var healthSyncEnabled = false
     @AppStorage(AppDisplayMode.defaultsKey) private var displayModeRaw = AppDisplayMode.system.rawValue
+    @AppStorage(AppDisplayMode.experimentalDarkKey) private var experimentalDark = false
 
     @State private var isPresentingServer = false
     @State private var isPresentingConnect = false
@@ -113,10 +114,10 @@ struct SettingsView: View {
                 // inert would imply it might one day apply here.
                 if !isLocal { accountSection }
 
-                appearanceSection
                 goalsSection
                 loggingSection
                 healthSection
+                experimentalSection
                 aboutSection
                 oneWayDoors
             }
@@ -131,9 +132,8 @@ struct SettingsView: View {
         // updated the stored value but the window never got told. This view
         // is where the value actually changes, so it's also where applying
         // it is reliable.
-        .onChange(of: displayModeRaw) { _, newValue in
-            AppDisplayMode.apply(AppDisplayMode(rawValue: newValue) ?? .system)
-        }
+        .onChange(of: displayModeRaw) { _, _ in applyDisplayMode() }
+        .onChange(of: experimentalDark) { _, _ in applyDisplayMode() }
         // Only in local mode: in server mode the local store isn't the user's
         // data at all, so its sync state would be meaningless.
         .task { if isLocal { await sync.refreshAccountStatus() } }
@@ -145,7 +145,7 @@ struct SettingsView: View {
             ServerAddressSheet {
                 NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
             }
-            .presentationDetents([.medium, .large])
+            .fittedDetent()
             .presentationDragIndicator(.visible)
         }
         // Switching to server mode asks for the address first, rather than
@@ -165,7 +165,7 @@ struct SettingsView: View {
                 PendingServerHandoff.isPending = LocalStore.shared.hasDiaryEntries()
                 switchMode(to: .server)
             }
-            .presentationDetents([.medium, .large])
+            .fittedDetent()
             .presentationDragIndicator(.visible)
         }
         // An alert rather than a confirmation dialog, and that's deliberate:
@@ -491,19 +491,58 @@ struct SettingsView: View {
         .listRowSeparatorTint(AppColor.hairline)
     }
 
-    private var appearanceSection: some View {
+    private func applyDisplayMode() {
+        AppDisplayMode.apply(.effective(raw: displayModeRaw, experimentalDark: experimentalDark))
+    }
+
+    /// Features that work but aren't finished. Dark mode is here, off by
+    /// default, until it gets its proper pass — the app is light otherwise,
+    /// whatever the phone is set to.
+    ///
+    /// Switching it on goes dark straight away: it used to keep the saved
+    /// "System", so on a phone in light mode the switch seemed to do nothing.
+    /// Then one choice — always dark, or follow the iPhone. "Light" isn't
+    /// offered: that's the switch off.
+    private var experimentalSection: some View {
         Section {
-            Picker("Appearance", selection: $displayModeRaw) {
-                ForEach(AppDisplayMode.allCases) { mode in
-                    Text(mode.label).tag(mode.rawValue)
+            Toggle(isOn: Binding(
+                get: { experimentalDark },
+                set: { isOn in
+                    withAnimation(.snappy) {
+                        if isOn { displayModeRaw = AppDisplayMode.dark.rawValue }
+                        experimentalDark = isOn
+                    }
                 }
+            )) {
+                SettingsRow(
+                    icon: "moon.fill",
+                    tint: AppColor.protein,
+                    title: "Dark mode",
+                    subtitle: "Preview"
+                )
             }
-            .pickerStyle(.segmented)
-            .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+            .tint(AppColor.accent)
+
+            if experimentalDark {
+                Picker("Dark mode", selection: Binding(
+                    get: { displayModeRaw == AppDisplayMode.system.rawValue ? AppDisplayMode.system : .dark },
+                    set: { displayModeRaw = $0.rawValue }
+                )) {
+                    Text("Always").tag(AppDisplayMode.dark)
+                    Text("Match iPhone").tag(AppDisplayMode.system)
+                }
+                .pickerStyle(.segmented)
+                .listRowInsets(EdgeInsets(top: 10, leading: 16, bottom: 10, trailing: 16))
+            }
         } header: {
-            sectionHeader("APPEARANCE")
+            sectionHeader("EXPERIMENTAL")
+        } footer: {
+            sectionFooter {
+                footnote("Dark mode isn't finished, so some screens may not look right yet. Turn it off to go back to light.")
+            }
         }
         .listRowBackground(AppColor.surface)
+        .listRowSeparatorTint(AppColor.hairline)
     }
 
     private var goalsSection: some View {

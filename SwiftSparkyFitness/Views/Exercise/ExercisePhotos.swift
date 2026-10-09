@@ -25,10 +25,15 @@ struct ExercisePhotos: View {
     @State private var reservesSpace: Bool
 
     private let height: CGFloat
+    /// Gap under the photos, only when there are photos — the parent's stack
+    /// spacing would also space out this view when it's empty, leaving a
+    /// blank band over the form of an exercise without pictures.
+    private let spacingBelow: CGFloat
 
-    init(exerciseName: String, height: CGFloat = 132) {
+    init(exerciseName: String, height: CGFloat = 132, spacingBelow: CGFloat = 0) {
         self.exerciseName = exerciseName
         self.height = height
+        self.spacingBelow = spacingBelow
         let cached = ExercisePhotoStore.cached(for: exerciseName)
         _images = State(initialValue: cached ?? [])
         _reservesSpace = State(initialValue: cached == nil && ExercisePhotoStore.expectsPhotos(for: exerciseName))
@@ -47,9 +52,11 @@ struct ExercisePhotos: View {
                 }
                 .accessibilityElement(children: .ignore)
                 .accessibilityLabel("Photos showing \(exerciseName)")
+                .padding(.bottom, spacingBelow)
                 .transition(.opacity)
             } else if reservesSpace {
                 frames(count: 2) { _ in AppColor.inputBackground }
+                    .padding(.bottom, spacingBelow)
                     .accessibilityHidden(true)
             }
         }

@@ -45,7 +45,7 @@ struct AuthContainerView: View {
         }
         .sheet(isPresented: $isEditingServer) {
             ServerAddressSheet()
-                .presentationDetents([.medium, .large])
+                .fittedDetent()
                 .presentationDragIndicator(.visible)
         }
     }

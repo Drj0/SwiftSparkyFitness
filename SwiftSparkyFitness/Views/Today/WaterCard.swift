@@ -91,7 +91,7 @@ struct WaterCard: View {
         .sensoryFeedback(trigger: reachedGoal) { old, new in !old && new ? .success : nil }
         .sheet(isPresented: $isLoggingAmount) {
             LogWaterAmountView(viewModel: viewModel)
-                .presentationDetents([.height(300)])
+                .fittedDetent()
                 .presentationDragIndicator(.visible)
         }
     }
@@ -237,6 +237,7 @@ struct LogWaterAmountView: View {
                     Task { await add() }
                 }
             )
+            .sheetHeightPart()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
@@ -276,6 +277,7 @@ struct LogWaterAmountView: View {
                         .foregroundStyle(AppColor.secondaryText)
                 }
                 .padding(18)
+                .sheetHeightPart()
             }
         }
         .background(AppColor.surface)

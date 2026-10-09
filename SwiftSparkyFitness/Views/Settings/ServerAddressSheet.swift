@@ -92,6 +92,7 @@ struct ServerAddressSheet: View {
                     perform: save
                 )
             )
+            .sheetHeightPart()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 12) {
@@ -145,6 +146,7 @@ struct ServerAddressSheet: View {
                     }
                 }
                 .padding(18)
+                .sheetHeightPart()
             }
         }
         .background(AppColor.surface)

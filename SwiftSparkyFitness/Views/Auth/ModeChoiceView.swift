@@ -90,7 +90,7 @@ struct ModeChoiceView: View {
                 saveTitle: "Connect",
                 note: "Next, you'll sign in with your SparkyFitness account."
             ) { serverIsReady = true }
-                .presentationDetents([.medium, .large])
+                .fittedDetent()
                 .presentationDragIndicator(.visible)
         }
     }

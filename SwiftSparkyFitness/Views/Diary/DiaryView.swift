@@ -80,7 +80,7 @@ struct DiaryView: View {
             ) {
                 Task { await viewModel.load() }
             }
-            .presentationDetents([.medium, .large])
+            .fittedDetent()
             .presentationDragIndicator(.visible)
         }
     }
@@ -175,7 +175,7 @@ struct DiaryView: View {
                     food: food, mealTypes: viewModel.loggableMealTypes, initialMealType: initialMealType,
                     existingEntryId: entry.id, initialQuantity: entry.quantity, entryDate: viewModel.selectedDate
                 ) {}
-                .presentationDetents([.medium, .large])
+                .fittedDetent()
                 .presentationDragIndicator(.visible)
             }
         }

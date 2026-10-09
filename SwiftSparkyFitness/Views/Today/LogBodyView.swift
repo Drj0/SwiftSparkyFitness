@@ -65,6 +65,7 @@ struct LogBodyView: View {
                     }
                 }
             )
+            .sheetHeightPart()
 
             if viewModel.kind == .weight {
                 weightLayout
@@ -81,6 +82,7 @@ struct LogBodyView: View {
                             .foregroundStyle(AppColor.secondaryText)
                     }
                     .padding(18)
+                    .sheetHeightPart()
                     .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.bannerMessage)
                 }
             }
@@ -100,28 +102,23 @@ struct LogBodyView: View {
     // MARK: - Weight
 
     /// One number is the whole job, so it's the hero: large serif digits
-    /// (the ring's typeface) centred in the space above the keyboard, with
-    /// − / + for small changes and the date as a single row at the bottom.
-    /// The old form was a pill and a field at the top of an empty sheet.
+    /// (the ring's typeface) with − / + for small changes and the date as a
+    /// single row under it. The sheet is sized to just this, sitting on the
+    /// keyboard — it used to fill a taller sheet with the hero centred in
+    /// blank space above and below.
     private var weightLayout: some View {
-        GeometryReader { proxy in
-            ScrollView {
-                VStack(spacing: 0) {
-                    banner
-                    Spacer(minLength: 20)
-                    weightHero
-                    Spacer(minLength: 20)
-                    dateRow
-                }
-                .padding(18)
-                // Fills the visible height (which the keyboard already
-                // shrinks), so the hero sits centred and the date row rests
-                // just above the keys instead of floating under the header.
-                .frame(minHeight: proxy.size.height)
-                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.bannerMessage)
+        ScrollView {
+            VStack(spacing: 0) {
+                banner
+                weightHero
+                    .padding(.vertical, 28)
+                dateRow
             }
-            .scrollBounceBehavior(.basedOnSize)
+            .padding(18)
+            .sheetHeightPart()
+            .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.bannerMessage)
         }
+        .scrollBounceBehavior(.basedOnSize)
     }
 
     private var weightHero: some View {

@@ -78,7 +78,7 @@ struct LoginView: View {
             .frame(maxWidth: .infinity, alignment: .trailing)
             .sheet(isPresented: $showsForgotPassword) {
                 ForgotPasswordSheet(viewModel: viewModel)
-                    .presentationDetents([.medium, .large])
+                    .fittedDetent()
             }
 
             PrimaryButton(title: "Log in", isLoading: viewModel.isLoading) {

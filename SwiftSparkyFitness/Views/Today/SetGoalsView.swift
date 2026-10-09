@@ -98,13 +98,15 @@ struct SetGoalsView: View {
                 }
             }
             if showsCancel {
-                ToolbarItem(placement: .topBarLeading) {
-                    Button("Cancel") { if viewModel.isDirty { confirmingDiscard = true } else { dismiss() } }
-                        .tint(AppColor.secondaryText)
+                // The system's ✕ and ✓, matching every other sheet's header
+                // (SheetHeader draws the same glass circles by hand).
+                ToolbarItem(placement: .cancellationAction) {
+                    Button(role: .cancel) { if viewModel.isDirty { confirmingDiscard = true } else { dismiss() } }
+                        .tint(AppColor.ink)
                 }
             }
-            ToolbarItem(placement: .topBarTrailing) {
-                Button {
+            ToolbarItem(placement: .confirmationAction) {
+                Button(role: .confirm) {
                     Task {
                         if await viewModel.save() {
                             onSaved()
@@ -115,7 +117,7 @@ struct SetGoalsView: View {
                     if viewModel.isSaving {
                         ProgressView().controlSize(.small)
                     } else {
-                        Text("Save").appBody(15, weight: .semibold)
+                        Label("Save", systemImage: "checkmark")
                     }
                 }
                 .disabled(!viewModel.canSave)

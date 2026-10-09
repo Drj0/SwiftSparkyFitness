@@ -10,6 +10,7 @@ import SwiftUI
 @main
 struct SwiftSparkyFitnessApp: App {
     @AppStorage(AppDisplayMode.defaultsKey) private var displayModeRaw = AppDisplayMode.system.rawValue
+    @AppStorage(AppDisplayMode.experimentalDarkKey) private var experimentalDark = false
 
     /// Nav-bar titles in the app's serif. Has to happen before the first bar
     /// is built, and the appearance proxy is process-wide, so it lives here
@@ -29,7 +30,7 @@ struct SwiftSparkyFitnessApp: App {
                 // same modifier on `SettingsView` — the one place the value
                 // actually changes — does. `SettingsView.onChange` owns the
                 // live case; this owns the value already on disk at launch.
-                .onAppear { AppDisplayMode.apply(AppDisplayMode(rawValue: displayModeRaw) ?? .system) }
+                .onAppear { AppDisplayMode.apply(.effective(raw: displayModeRaw, experimentalDark: experimentalDark)) }
         }
     }
 }

@@ -42,7 +42,7 @@ struct ContentView: View {
         }
         .sheet(isPresented: $isEditingServer) {
             ServerAddressSheet { Task { await authViewModel.restoreSession() } }
-                .presentationDetents([.medium, .large])
+                .fittedDetent()
                 .presentationDragIndicator(.visible)
         }
         // Gated on a mode being chosen: before that there is nothing to

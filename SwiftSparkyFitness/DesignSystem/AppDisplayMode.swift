@@ -7,6 +7,11 @@
 //  `.preferredColorScheme`, which turned out not to be reliable here. See
 //  `apply(_:)`.
 //
+//  Light only, unless dark mode is switched on under Settings → Experimental:
+//  dark needs a proper pass before it's on by default, so a phone in dark
+//  mode no longer drags the app into it. The System/Light/Dark choice only
+//  counts while that switch is on.
+//
 
 import SwiftUI
 
@@ -14,6 +19,12 @@ enum AppDisplayMode: String, CaseIterable, Identifiable {
     case system, light, dark
 
     static let defaultsKey = "appDisplayMode"
+    static let experimentalDarkKey = "experimentalDarkMode"
+
+    /// What the app actually shows: Light, unless experimental dark mode is on.
+    static func effective(raw: String, experimentalDark: Bool) -> AppDisplayMode {
+        experimentalDark ? AppDisplayMode(rawValue: raw) ?? .system : .light
+    }
 
     var id: String { rawValue }
 

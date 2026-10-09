@@ -18,6 +18,9 @@ struct FoodDetailView: View {
     /// Food): going Back here first slid the search list in under a sheet
     /// already on its way down.
     private let dismissesOnSave: Bool
+    /// Set when the detail is slid over Log Food's list rather than
+    /// presented: Back goes back to the list instead of closing the sheet.
+    private var closes: (() -> Void)?
 
     init(
         food: Food, mealTypes: [MealType], initialMealType: MealType,
@@ -33,9 +36,22 @@ struct FoodDetailView: View {
         self.onLogged = onLogged
     }
 
+    func onClose(_ close: @escaping () -> Void) -> Self {
+        var copy = self
+        copy.closes = close
+        return copy
+    }
+
+    private func close() {
+        if let closes { closes() } else { dismiss() }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
+            // The sheet fits the food: a long name or brand, or bigger text,
+            // grows it; at a fixed half height the macros sat under the button.
             header
+                .sheetHeightPart()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 18) {
@@ -57,6 +73,7 @@ struct FoodDetailView: View {
                     macroCard
                 }
                 .padding(20)
+                .sheetHeightPart()
             }
 
             PrimaryButton(
@@ -65,9 +82,10 @@ struct FoodDetailView: View {
             ) { save() }
             .padding(20)
             .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .top)
+            .sheetHeightPart()
         }
         .background(AppColor.surface)
-        .discardGuard(isDirty: viewModel.isDirty, isPresented: $confirmingDiscard) { dismiss() }
+        .discardGuard(isDirty: viewModel.isDirty, isPresented: $confirmingDiscard) { close() }
         .alert("Couldn't log that", isPresented: Binding(
             get: { viewModel.errorMessage != nil },
             set: { isPresented in if !isPresented { viewModel.errorMessage = nil } }
@@ -81,7 +99,7 @@ struct FoodDetailView: View {
     private func save() {
         Task {
             if await viewModel.save() {
-                if dismissesOnSave { dismiss() }
+                if dismissesOnSave { close() }
                 onLogged()
             }
         }
@@ -89,49 +107,18 @@ struct FoodDetailView: View {
 
     // Adding has no top-right action: the full-width button at the bottom is
     // the one way to add, and a second "Add" up here only competed with it.
-    // Editing gets a Save in the corner, in Liquid Glass like Goals' Save,
-    // that does exactly what "Save Changes" below does; like Goals it stays
-    // disabled until something has changed.
-    //
-    // Header padding drops from 14 to 2 because Back carries a 44pt touch
-    // target of its own; the row keeps its measured height.
+    // Editing gets the header's ✓, doing exactly what "Save Changes" below
+    // does; like Goals it stays disabled until something has changed.
     private var header: some View {
-        HStack {
-            Button { if viewModel.isDirty { confirmingDiscard = true } else { dismiss() } } label: {
-                Text("‹ Back")
-                    .appBody(15)
-                    .foregroundStyle(AppColor.accent)
-                    .frame(minWidth: 44, minHeight: 44, alignment: .leading)
-                    .contentShape(Rectangle())
-            }
-            .buttonStyle(.pressable)
-            .accessibilityLabel("Back")
-
-            Spacer()
-
-            if viewModel.isEditing {
-                Button(action: save) {
-                    if viewModel.isSaving {
-                        ProgressView().controlSize(.small)
-                    } else {
-                        Text("Save").appBody(15, weight: .semibold)
-                    }
-                }
-                .buttonStyle(.glass)
-                .controlSize(.large)
-                .tint(AppColor.accent)
-                .disabled(!viewModel.isDirty || viewModel.isSaving)
-                .accessibilityLabel("Save")
-                .accessibilityValue(viewModel.isSaving ? "In progress" : "")
-            }
-        }
-        // The glass Save is taller than Back's 44pt; a floor of its height
-        // keeps the header, and everything under it, the same size in add
-        // mode, where there's no Save.
-        .frame(minHeight: 46)
-        .padding(.horizontal, 20)
-        .padding(.vertical, 2)
-        .overlay(Rectangle().fill(AppColor.hairline).frame(height: 1), alignment: .bottom)
+        SheetHeader(
+            title: "",
+            cancelTitle: "Back",
+            cancelSymbol: "chevron.left",
+            onCancel: { if viewModel.isDirty { confirmingDiscard = true } else { close() } },
+            action: viewModel.isEditing
+                ? SheetAction("Save", isEnabled: viewModel.isDirty, isBusy: viewModel.isSaving, perform: save)
+                : nil
+        )
     }
 
     private var quantityStepper: some View {

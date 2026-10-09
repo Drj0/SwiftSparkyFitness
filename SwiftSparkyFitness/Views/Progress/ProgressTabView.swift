@@ -106,7 +106,7 @@ struct ProgressTabView: View {
             ) {
                 Task { await viewModel.refresh() }
             }
-            .presentationDetents([.medium, .large])
+            .fittedDetent()
             .presentationDragIndicator(.visible)
         }
     }

@@ -22,6 +22,12 @@
 //  Describing the button instead means the 44pt target, the disabled colour
 //  and the press style are applied here, once, and no sheet can opt out.
 //
+//  The buttons are Liquid Glass circles — ✕ to leave, a tinted ✓ to confirm —
+//  as iOS's own sheets draw them. They were 15pt words: a target only as
+//  wide as the word, with nothing drawn to say where it was, tucked under
+//  the grabber. The circle is the whole target, and the word lives on as
+//  the VoiceOver label.
+//
 
 import SwiftUI
 
@@ -47,6 +53,8 @@ struct SheetAction {
 struct SheetHeader: View {
     let title: String
     var cancelTitle: String = "Cancel"
+    /// ✕ closes; a detail slid over a list goes back with a chevron instead.
+    var cancelSymbol: String = "xmark"
     let onCancel: () -> Void
     var action: SheetAction? = nil
     /// Log Food's header is the title bar *plus* a search field and meal
@@ -57,41 +65,61 @@ struct SheetHeader: View {
 
     var body: some View {
         HStack(spacing: 8) {
-            button(
-                title: cancelTitle,
-                tint: AppColor.secondaryText,
-                weight: .regular,
-                alignment: .leading,
-                isEnabled: true,
-                perform: onCancel
-            )
+            Button(action: onCancel) {
+                symbol(cancelSymbol)
+                    .foregroundStyle(AppColor.ink)
+            }
+            .buttonStyle(.glass)
+            .accessibilityLabel(cancelTitle)
 
             Spacer(minLength: 0)
 
             if let action {
-                button(
-                    title: action.title,
-                    tint: action.isEnabled && !action.isBusy ? AppColor.accent : AppColor.placeholder,
-                    weight: .semibold,
-                    alignment: .trailing,
-                    isEnabled: action.isEnabled && !action.isBusy,
-                    isBusy: action.isBusy,
-                    perform: action.perform
-                )
+                let isEnabled = action.isEnabled && !action.isBusy
+                Button(action: action.perform) {
+                    if action.isBusy {
+                        ProgressView().tint(.white).frame(width: Self.symbolSide, height: Self.symbolSide)
+                    } else {
+                        symbol("checkmark")
+                    }
+                }
+                .buttonStyle(.glassProminent)
+                .tint(AppColor.accent)
+                .disabled(!isEnabled)
+                // While busy the label is a bare spinner, which VoiceOver read
+                // as an unnamed button; it keeps its title and says it's working.
+                .accessibilityLabel(action.title)
+                .accessibilityValue(action.isBusy ? "In progress" : "")
             }
         }
+        .buttonBorderShape(.circle)
         .overlay {
-            // Centred on the bar, not on the gap between the buttons. Padded
-            // so a long title truncates rather than sliding under them.
-            Text(title)
-                .appDisplay(18)
-                .foregroundStyle(AppColor.ink)
-                .lineLimit(1)
-                .padding(.horizontal, 72)
-                .accessibilityAddTraits(.isHeader)
-                .allowsHitTesting(false)
+            // Centred on the bar, not on the gap between the buttons. Inset
+            // past the circles plus a 12pt gap (it was 72pt, ~7pt clear of
+            // them). A long exercise name shrinks a little before it
+            // truncates.
+            if !title.isEmpty {
+                Text(title)
+                    .appDisplay(18)
+                    .foregroundStyle(AppColor.ink)
+                    .lineLimit(1)
+                    .minimumScaleFactor(0.8)
+                    .allowsTightening(true)
+                    .padding(.horizontal, Self.titleInset)
+                    .accessibilityAddTraits(.isHeader)
+                    .allowsHitTesting(false)
+            }
         }
-        .padding(.horizontal, AppSpacing.screenPad)
+        // Where the system puts toolbar buttons in a sheet (measured against
+        // Goals' native toolbar): 16pt in from the side and the top — clear of
+        // the grabber, whose drag competed with buttons pressed up against
+        // it, and the same distance from both edges of the rounded corner.
+        .padding(.horizontal, Self.edgeInset)
+        .padding(.top, Self.edgeInset)
+        .padding(.bottom, 10)
+        // Bar and buttons stop growing where nav bars do; past it the glass
+        // grew round shrinking ✕/✓ glyphs and the title filled the bar.
+        .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
         .overlay(alignment: .bottom) {
             if showsDivider {
                 Rectangle().fill(AppColor.hairline).frame(height: 1)
@@ -99,36 +127,14 @@ struct SheetHeader: View {
         }
     }
 
-    /// The 44pt target lives on the *label*, not on the Button — a frame
-    /// applied outside the button grows the layout slot without growing the
-    /// region that actually accepts a touch.
-    private func button(
-        title: String,
-        tint: Color,
-        weight: Font.Weight,
-        alignment: Alignment,
-        isEnabled: Bool,
-        isBusy: Bool = false,
-        perform: @escaping () -> Void
-    ) -> some View {
-        Button(action: perform) {
-            Group {
-                if isBusy {
-                    ProgressView().controlSize(.small)
-                } else {
-                    Text(title)
-                        .appBody(15, weight: weight)
-                        .foregroundStyle(tint)
-                }
-            }
-            .frame(minWidth: 44, minHeight: 44, alignment: alignment)
-            .contentShape(Rectangle())
-        }
-        .buttonStyle(.pressable)
-        .disabled(!isEnabled)
-        // While busy the label is a bare spinner, which VoiceOver read as an
-        // unnamed button; it keeps its title and says it's working.
-        .accessibilityLabel(title)
-        .accessibilityValue(isBusy ? "In progress" : "")
+    /// With the glass's own padding this draws a ~45pt circle.
+    private static let symbolSide: CGFloat = 32
+    private static let edgeInset: CGFloat = 16
+    private static let titleInset: CGFloat = edgeInset + 45 + 12
+
+    private func symbol(_ name: String) -> some View {
+        Image(systemName: name)
+            .font(.system(size: 17, weight: .semibold))
+            .frame(width: Self.symbolSide, height: Self.symbolSide)
     }
 }

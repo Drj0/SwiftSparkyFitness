@@ -48,6 +48,7 @@ struct ForgotPasswordSheet: View {
                     Task { await viewModel.requestPasswordReset() }
                 }
             )
+            .sheetHeightPart()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
@@ -60,6 +61,7 @@ struct ForgotPasswordSheet: View {
                 .padding(.horizontal, AppSpacing.screenPad)
                 .padding(.top, 18)
                 .padding(.bottom, 24)
+                .sheetHeightPart()
             }
         }
         .background(AppColor.background)

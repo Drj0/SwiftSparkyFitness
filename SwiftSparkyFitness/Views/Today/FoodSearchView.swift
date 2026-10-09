@@ -58,26 +58,39 @@ struct FoodSearchView: View {
     // already carries its own "‹ Back"), rather than stacking a second sheet
     // on top. Two stacked sheets close one after the other, so logging
     // flashed Log Food back up for a beat before the whole thing went away.
+    // Slid over by hand, not pushed on a NavigationStack: inside one, the
+    // sheet ignored the detail's height (see FittedSheet.swift).
     private var showsOwnManualEntry: Bool {
         ["noResults", "networkError"].contains(viewModel.outcome.kindID)
     }
 
     var body: some View {
-        NavigationStack {
+        ZStack {
             searchContent
-                .toolbar(.hidden, for: .navigationBar)
-                .navigationDestination(item: $pushedFood) { food in
-                    if let mealType = viewModel.selectedMealType {
-                        // A food logged before opens at the amount last used.
-                        FoodDetailView(food: food, mealTypes: viewModel.mealTypes, initialMealType: mealType,
-                                       initialQuantity: viewModel.logStat(for: food)?.lastQuantity,
-                                       entryDate: entryDate, dismissesOnSave: false) {
-                            if let onLogged { onLogged() } else { dismiss() }
-                        }
-                        .toolbar(.hidden, for: .navigationBar)
-                    }
+                .accessibilityHidden(pushedFood != nil)
+                // A navigation push's parallax: the list drifts left under
+                // the incoming detail rather than sitting still.
+                .visualEffect { [isPushed = pushedFood != nil] content, proxy in
+                    content.offset(x: isPushed ? -proxy.size.width * 0.3 : 0)
                 }
+            if let food = pushedFood, let mealType = viewModel.selectedMealType {
+                // A food logged before opens at the amount last used.
+                FoodDetailView(food: food, mealTypes: viewModel.mealTypes, initialMealType: mealType,
+                               initialQuantity: viewModel.logStat(for: food)?.lastQuantity,
+                               entryDate: entryDate, dismissesOnSave: false) {
+                    if let onLogged { onLogged() } else { dismiss() }
+                }
+                .onClose { pushedFood = nil }
+                .id(food.id)
+                .transition(.move(edge: .trailing))
+                .zIndex(1)
+            }
         }
+        .animation(reduceMotion ? nil : .sheetResize, value: pushedFood?.id)
+        .sheetHeightIgnored(pushedFood == nil)
+        // The list stays mounted under the detail, so its search field
+        // would keep the keyboard up over it.
+        .onChange(of: pushedFood?.id) { _, id in if id != nil { isSearchFocused = false } }
     }
 
     private var searchContent: some View {

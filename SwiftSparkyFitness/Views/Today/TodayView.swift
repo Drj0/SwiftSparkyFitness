@@ -187,7 +187,9 @@ struct TodayView: View {
                            entryDate: viewModel.entryDate) {
                 viewModel.isPresentingFoodSearch = false
             }
-                .presentationDetents([.medium, .large])
+                // Full height for results, like Log Exercise; then fitted to
+                // the picked food's detail.
+                .fittedDetent()
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $viewModel.isPresentingLogExercise, onDismiss: { Task { await viewModel.load() } }) {
@@ -197,10 +199,10 @@ struct TodayView: View {
             ExerciseSearchView(entryDate: viewModel.entryDate) {
                 viewModel.isPresentingLogExercise = false
             }
-                // Tall from the start: it's a list to browse (recents,
-                // categories), and its search field no longer raises the
-                // keyboard to push it up.
-                .presentationDetents([.large])
+                // Full height for the list to browse (its search field
+                // doesn't raise the keyboard to push it up), then fitted to
+                // the picked exercise's form.
+                .fittedDetent()
                 .presentationDragIndicator(.visible)
         }
         .sheet(item: $viewModel.editingFoodEntry, onDismiss: { Task { await viewModel.load() } }) { entry in
@@ -238,7 +240,7 @@ struct TodayView: View {
                 food: food, mealTypes: viewModel.loggableMealTypes, initialMealType: mealType,
                 existingEntryId: entry.id, initialQuantity: entry.quantity, entryDate: viewModel.today
             ) {}
-            .presentationDetents([.medium, .large])
+            .fittedDetent()
             .presentationDragIndicator(.visible)
         }
     }
@@ -258,7 +260,7 @@ struct TodayView: View {
         ) {
             Task { await viewModel.reloadBodyMeasurements() }
         }
-        .presentationDetents([.medium, .large])
+        .fittedDetent()
         .presentationDragIndicator(.visible)
     }
 

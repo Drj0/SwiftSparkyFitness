@@ -62,7 +62,7 @@ struct ExerciseDiaryView: View {
         .safeAreaInset(edge: .bottom) { bottomBar }
         .sheet(item: $viewModel.editingExerciseEntry, onDismiss: { Task { await viewModel.load() } }) { entry in
             ExerciseEntryEditorView(editing: entry, exercise: entry.asExercise) {}
-                .presentationDetents([.large])
+                .fittedDetent()
                 .presentationDragIndicator(.visible)
         }
         .sheet(isPresented: $viewModel.isPresentingExerciseSearch, onDismiss: { Task { await viewModel.load() } }) {
@@ -71,7 +71,7 @@ struct ExerciseDiaryView: View {
             ExerciseSearchView(entryDate: viewModel.selectedDate) {
                 viewModel.isPresentingExerciseSearch = false
             }
-            .presentationDetents([.large])
+            .fittedDetent()
             .presentationDragIndicator(.visible)
         }
     }

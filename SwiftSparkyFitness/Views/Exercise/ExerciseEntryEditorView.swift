@@ -59,9 +59,27 @@ struct ExerciseEntryEditorView: View {
         self.onSaved = onSaved
     }
 
+    /// Set when the editor is slid over Log Exercise's list rather than
+    /// presented: Cancel goes back to the list instead of closing the sheet.
+    private var closes: (() -> Void)?
+
+    func onClose(_ close: @escaping () -> Void) -> Self {
+        var copy = self
+        copy.closes = close
+        return copy
+    }
+
+    private func close() {
+        if let closes { closes() } else { dismiss() }
+    }
+
     var body: some View {
         VStack(spacing: 0) {
+            // Each exercise's form is its own height — Yoga is a duration
+            // and calories, Strength a growing list of sets — so the sheet
+            // fits the form rather than one size for all of them.
             header
+                .sheetHeightPart()
 
             ScrollViewReader { proxy in
                 ScrollView {
@@ -70,9 +88,10 @@ struct ExerciseEntryEditorView: View {
                             ErrorBanner(message: bannerMessage)
                         }
 
-                        ExercisePhotos(exerciseName: viewModel.exercise.name, height: 104)
-
-                        kindRow
+                        VStack(alignment: .leading, spacing: 0) {
+                            ExercisePhotos(exerciseName: viewModel.exercise.name, height: 104, spacingBelow: 18)
+                            kindRow
+                        }
 
                         if viewModel.startsFromLastSession, let last = viewModel.lastSession {
                             lastTimeCard(last)
@@ -92,6 +111,7 @@ struct ExerciseEntryEditorView: View {
                         if viewModel.isEditing { deleteButton }
                     }
                     .padding(18)
+                    .sheetHeightPart()
                     .id(Self.topAnchor)
                     .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.bannerMessage)
                     .animation(reduceMotion ? nil : .snappy(duration: 0.22), value: viewModel.setRows.count)
@@ -112,11 +132,11 @@ struct ExerciseEntryEditorView: View {
         }
         .background(AppColor.surface)
         .task { await viewModel.loadUnits() }
-        .discardGuard(isDirty: viewModel.isDirty, isPresented: $confirmingDiscard) { dismiss() }
+        .discardGuard(isDirty: viewModel.isDirty, isPresented: $confirmingDiscard) { close() }
         .confirmationDialog("Delete this \(viewModel.exercise.name) session?", isPresented: $isConfirmingDelete, titleVisibility: .visible) {
             Button("Delete", role: .destructive) {
                 Task {
-                    if await viewModel.delete() { dismiss() }
+                    if await viewModel.delete() { close() }
                 }
             }
             Button("Cancel", role: .cancel) {}
@@ -128,12 +148,12 @@ struct ExerciseEntryEditorView: View {
     private var header: some View {
         SheetHeader(
             title: viewModel.isEditing ? "Edit \(viewModel.exercise.name)" : viewModel.exercise.name,
-            onCancel: { if viewModel.isDirty { confirmingDiscard = true } else { dismiss() } },
+            onCancel: { if viewModel.isDirty { confirmingDiscard = true } else { close() } },
             action: SheetAction("Save", isBusy: viewModel.isSaving) {
                 Task {
                     if await viewModel.save() {
                         onSaved()
-                        if dismissesOnSave { dismiss() }
+                        if dismissesOnSave { close() }
                     }
                 }
             }
