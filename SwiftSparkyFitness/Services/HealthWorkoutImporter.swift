@@ -54,6 +54,11 @@ enum HealthWorkoutImporter {
 
     private static var inFlight: [String: Task<Bool, Never>] = [:]
 
+    /// See `LocalStore.removeHealthRows`.
+    static func forgetImported() {
+        UserDefaults.standard.removeObject(forKey: importedKey)
+    }
+
     private static func run(on date: Date, apiClient: APIClientProtocol, health: HealthKitReading) async -> Bool {
         // Its own opt-in, asked for from Settings: see HealthSync.
         guard HealthSync.isEnabled, HealthSync.importsWorkouts, health.isAvailable else { return false }

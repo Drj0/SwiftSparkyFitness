@@ -54,9 +54,16 @@ extension LocalAPIClient {
     }
 
     /// Health workouts that started in [start, end), as read-only sessions.
+    ///
+    /// Filtered on the start here: HealthKit's range matches any workout
+    /// that *overlaps* it, so a run from 23:30 to 00:30 came back for both
+    /// days and was counted on each. Stored imports never had this — each
+    /// was saved once, on its start day — and a live read has no such memory.
     func healthWorkoutSessions(from start: Date, to end: Date) async -> [ExerciseSessionSummary] {
         guard let health, HealthSync.isEnabled, HealthSync.importsWorkouts, health.isAvailable,
-              let workouts = try? await health.workouts(from: start, to: end), !workouts.isEmpty else { return [] }
+              let workouts = try? await health.workouts(from: start, to: end)
+                .filter({ $0.start >= start && $0.start < end }),
+              !workouts.isEmpty else { return [] }
         let preferences = (try? await userPreferences()) ?? .serverDefaults
         return workouts.map { HealthWorkoutImporter.session(for: $0, preferences: preferences) }
     }
@@ -82,7 +89,7 @@ extension LocalStore {
         let note: String? = HealthWorkoutImporter.note
         let rows = fetch(LocalExerciseEntry.self, where: #Predicate { $0.name == sentinel || $0.notes == note })
         guard !rows.isEmpty else { return 0 }
-        return applyingRemoteChanges {
+        let removed = applyingRemoteChanges {
             rows.forEach(context.delete)
             guard save() else {
                 context.rollback()
@@ -90,5 +97,11 @@ extension LocalStore {
             }
             return rows.count
         }
+        // The importer remembers what it has imported, on this device, to
+        // never log a workout twice. With the rows gone, that memory would
+        // stop server mode re-importing them after a move to a server; its
+        // own check against the server's day still prevents duplicates.
+        if removed > 0, self === LocalStore.shared { HealthWorkoutImporter.forgetImported() }
+        return removed
     }
 }

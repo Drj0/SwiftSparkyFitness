@@ -127,7 +127,9 @@ protocol HealthKitReading {
     /// Whether Health has handed over any active energy in the last `days`.
     /// False means "nothing arrived", never "you were refused".
     func hasRecentEnergy(days: Int) async -> Bool
-    /// Workouts that started in [start, end), oldest first.
+    /// Workouts overlapping [start, end), oldest first — HealthKit's range
+    /// match, so one that crosses midnight comes back for both days. Callers
+    /// that need "started in" filter on `start`.
     func workouts(from start: Date, to end: Date) async throws -> [HealthWorkout]
     /// The day's step count, or nil when Health has none (no samples, or a
     /// refused read — indistinguishable, see the note at the top).

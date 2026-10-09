@@ -20,8 +20,9 @@ final class HealthLiveTests: XCTestCase {
         func requestAuthorization(includingWorkouts: Bool) async throws -> HealthAuthorizationOutcome { .answered }
         func activeEnergy(on date: Date) async throws -> EnergyReading { energy }
         func hasRecentEnergy(days: Int) async -> Bool { false }
+        /// HealthKit's range match: anything *overlapping* [start, end).
         func workouts(from start: Date, to end: Date) async throws -> [HealthWorkout] {
-            workouts.filter { $0.start >= start && $0.start < end }
+            workouts.filter { $0.start < end && $0.start.addingTimeInterval($0.durationMinutes * 60) > start }
         }
     }
 
@@ -84,6 +85,24 @@ final class HealthLiveTests: XCTestCase {
         XCTAssertNil(run.exerciseId, "no stored row to reopen for editing")
         // Active energy already contains the workout: max(500, 312), not the sum.
         XCTAssertEqual(day.calorieBalance.burned, 500)
+    }
+
+    /// A run from 23:30 to 00:30 belongs to the day it started on, once —
+    /// not to both days HealthKit's overlapping range returns it for.
+    func testAWorkoutAcrossMidnightCountsOnlyOnTheDayItStarted() async throws {
+        let today = Calendar.current.startOfDay(for: Date())
+        let lateStart = today.addingTimeInterval(-30 * 60)
+        health.workouts = [HealthWorkout(id: UUID(), catalogName: "Running", start: lateStart, durationMinutes: 60,
+                                         kilocalories: 600, distanceMeters: nil)]
+        let diary = makeICloudDiary()
+
+        let yesterday = try await diary.dailySummary(date: lateStart)
+        let todays = try await diary.dailySummary(date: today)
+
+        XCTAssertEqual(yesterday.exerciseSessions.userLogged.map(\.name), ["Running"])
+        XCTAssertTrue(todays.exerciseSessions.userLogged.isEmpty)
+        let week = try await diary.exerciseSummary(from: lateStart, to: today)
+        XCTAssertEqual(week.totals.workoutCount, 1)
     }
 
     func testWorkoutsNeedTheirOwnSwitchAndHealthOn() async throws {
