@@ -44,9 +44,6 @@ struct MainTabView: View {
     @State private var deviceMoveError: String?
     /// First-run setup, opened on its own while there's no goal yet.
     @State private var isOnboarding = false
-    /// A returning user skips onboarding, which is where Health is asked
-    /// for, so a reinstall would otherwise leave Health off for good.
-    @State private var isOfferingHealth = false
     /// `.active` also follows `.inactive` alone — Control Center, a Face ID
     /// prompt, a system alert — and each of those used to cost a full sync
     /// (server) or a sweep of every table (iCloud). Only a real return from
@@ -103,20 +100,6 @@ struct MainTabView: View {
             guard !waiting, AppMode.isLocal else { return }
             checkOtherDevices()
             Task { await offerOnboardingIfNew() }
-        }
-        // Worded for anyone onboarding didn't ask — someone back after a
-        // reinstall, or someone who never connected Health at all.
-        .alert("Connect Apple Health?", isPresented: $isOfferingHealth) {
-            Button("Not now", role: .cancel) {}
-            Button("Connect") {
-                Task {
-                    let outcome = try? await HealthKitService.shared.requestAuthorization()
-                    HealthSync.isEnabled = outcome == .answered
-                    NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
-                }
-            }
-        } message: {
-            Text("Steps and active energy from your iPhone or Watch can count towards your day. Sparky only reads from Health.")
         }
         .fullScreenCover(isPresented: $isOnboarding) {
             OnboardingView(account: serverSync.account) {
@@ -196,7 +179,8 @@ extension MainTabView {
         withTransaction(transaction) { isOnboarding = true }
     }
 
-    /// Once per install, for someone onboarding didn't ask: Health is off,
+    /// Once per install, iOS's Health sheet for someone onboarding didn't
+    /// ask (back after a reinstall, say): Health is off,
     /// HealthKit has never been asked here (a reinstall drops the old
     /// answer), and this isn't a diary still arriving from iCloud.
     private func offerHealthIfReturning() async {
@@ -209,7 +193,12 @@ extension MainTabView {
               // waits for next time rather than being spent unseen.
               !isShowingMoveElsewhere, moveElsewhere == nil, deviceMoveError == nil else { return }
         defaults.set(true, forKey: HealthSync.reconnectOfferedKey)
-        isOfferingHealth = true
+        // Straight to iOS's own sheet, which explains itself and is where
+        // Health is allowed or not. A custom "Connect / Not now" alert in
+        // front of it is what App Review rejects (guideline 5.1.1).
+        let outcome = try? await HealthKitService.shared.requestAuthorization()
+        HealthSync.isEnabled = outcome == .answered
+        NotificationCenter.default.post(name: .referenceDataChanged, object: nil)
     }
 
     /// What the other devices on this diary have done since this one last

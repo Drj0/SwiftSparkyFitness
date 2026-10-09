@@ -134,7 +134,8 @@ struct OnboardingView: View {
             .frame(minWidth: 44, minHeight: 44)
             .padding(.trailing, 8)
             .contentShape(Rectangle())
-            // Nothing to skip once the plan is saved; "Not now" is below.
+            // Nothing to skip once the plan is saved; Health's own sheet is
+            // where it can be declined.
             .opacity(viewModel.step == .health ? 0 : 1)
             .disabled(viewModel.step == .health)
             .accessibilityHint(trailingHint)
@@ -160,7 +161,11 @@ struct OnboardingView: View {
                 .disabled(!viewModel.canContinue)
                 .opacity(viewModel.canContinue ? 1 : 0.4)
             case .health:
-                PrimaryButton(title: "Connect Apple Health", isLoading: isConnectingHealth) {
+                // One way on, and it goes to iOS's own Health sheet, where
+                // every type can be allowed or not: a custom "Not now" in
+                // front of a system permission request is what App Review
+                // rejects (guideline 5.1.1).
+                PrimaryButton(title: "Continue", isLoading: isConnectingHealth) {
                     guard !isConnectingHealth else { return }
                     isConnectingHealth = true
                     Task {
@@ -169,10 +174,6 @@ struct OnboardingView: View {
                         onFinish()
                     }
                 }
-                Button("Not now", action: onFinish)
-                    .appBody(15, weight: .semibold)
-                    .foregroundStyle(AppColor.accent)
-                    .frame(maxWidth: .infinity, minHeight: 44)
             default:
                 HStack(spacing: 10) {
                     // The number pad has no return key, a keyboard-toolbar
@@ -618,7 +619,7 @@ struct OnboardingView: View {
             .background(AppColor.surface, in: RoundedRectangle(cornerRadius: AppRadius.md))
             .overlay(RoundedRectangle(cornerRadius: AppRadius.md).stroke(AppColor.hairline, lineWidth: 1))
 
-            Label("Sparky only reads from Health. Workout import and everything else is in Settings.", systemImage: "lock.fill")
+            Label("Next, iOS asks which of these to share; you can turn any off. Sparky only reads from Health, and it can be changed later in Settings.", systemImage: "lock.fill")
                 .appBody(12)
                 .foregroundStyle(AppColor.placeholder)
                 .padding(.top, 12)
