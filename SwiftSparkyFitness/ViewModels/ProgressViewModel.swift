@@ -254,6 +254,13 @@ final class ProgressViewModel: ObservableObject {
     /// cancelled — never `.task`/`.refreshable`'s (see `load()`).
     private func reloadForRangeChange() {
         rangeLoad?.cancel()
+        // Claimed now, not after the wait: a load cancelled past its wait
+        // would otherwise see itself as the latest and undim the old range
+        // for the length of the next one's wait.
+        if !isPreviewSeeded {
+            visibleLoad += 1
+            isLoading = true
+        }
         rangeLoad = Task {
             try? await Task.sleep(for: .milliseconds(150))
             guard !Task.isCancelled else { return }
@@ -286,8 +293,9 @@ final class ProgressViewModel: ObservableObject {
     func refresh() async {
         if isPreviewSeeded { return }
         // Something may have been logged since: the empty-range lookup is
-        // stale.
+        // stale, and so is any answer to one still in flight.
         lastEntryLookup = nil
+        lastEntryGeneration += 1
         guard hasLoadedOnce else { return await load() }
         await performLoad(showsProgress: false)
     }
@@ -393,11 +401,13 @@ final class ProgressViewModel: ObservableObject {
     /// including it costs nothing. Three reads, only ever for an empty
     /// range.
     private var lastEntryLookup: (end: Date, history: EarlierHistory)?
+    private var lastEntryGeneration = 0
 
     private func findLastEntry(outside window: ProgressDateRange) async {
         let calendar = Calendar.current
         let end = maxDate
         let start = calendar.date(byAdding: .day, value: -365, to: end) ?? end
+        let generation = lastEntryGeneration
 
         async let food = try? apiClient.foodEntries(from: start, to: end)
         async let body = try? apiClient.bodyMeasurements(from: start, to: end)
@@ -420,7 +430,7 @@ final class ProgressViewModel: ObservableObject {
         } else {
             earlierHistory = .none
         }
-        lastEntryLookup = (end, earlierHistory)
+        if generation == lastEntryGeneration { lastEntryLookup = (end, earlierHistory) }
     }
 
     /// Wraps a throwing call so one failing read can't cancel its siblings.
