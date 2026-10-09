@@ -97,11 +97,20 @@ struct FoodSearchView: View {
         VStack(spacing: 0) {
             header
 
-            ScrollView {
-                resultsArea
+            ScrollViewReader { proxy in
+                ScrollView {
+                    Color.clear.frame(height: 0).id(Self.listTop)
+                    resultsArea
+                }
+                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.isSearching)
+                .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: resultsStateKey)
+                // Sources answer one after another, and a later one's best
+                // match ranks above rows already showing. The scroll view
+                // holds those rows still, so the new top rows landed above
+                // the fold, under the chips. A new best match is the top.
+                .onChange(of: firstResultID) { _, _ in proxy.scrollTo(Self.listTop, anchor: .top) }
+                .onChange(of: resultsStateKey) { _, _ in proxy.scrollTo(Self.listTop, anchor: .top) }
             }
-            .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: viewModel.isSearching)
-            .animation(reduceMotion ? nil : .snappy(duration: 0.25), value: resultsStateKey)
 
             // The empty and error states carry this same action as their
             // main button; a second copy under them read as noise.
@@ -260,6 +269,13 @@ struct FoodSearchView: View {
 
     private var entrance: AnyTransition {
         .opacity.combined(with: .move(edge: .top))
+    }
+
+    private static let listTop = "listTop"
+
+    private var firstResultID: String? {
+        if case .results(let foods) = viewModel.outcome { return foods.first?.id }
+        return nil
     }
 
     /// Changes only when the *kind* of content changes, so a list swapping

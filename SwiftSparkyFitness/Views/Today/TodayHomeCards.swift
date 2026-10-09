@@ -68,6 +68,10 @@ struct WeekStrip: View {
         .scrollTargetBehavior(.paging)
         .scrollIndicators(.hidden)
         .scrollPosition(id: $visibleWeek)
+        // iOS 17 often drops a position set before the lazy stack's first
+        // layout and leaves the strip on the oldest week; the current week
+        // is always last, so start at the trailing end.
+        .defaultScrollAnchor(.trailing)
         .onAppear { visibleWeek = Self.weekStart(selected) }
         // A day picked from the calendar may sit in another week.
         .onChange(of: Self.weekStart(selected)) { _, week in

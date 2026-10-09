@@ -137,6 +137,7 @@ struct TodayView: View {
                 .padding(.bottom, 76)
             }
             .refreshable { await viewModel.load() }
+            .statusBarBackdrop()
 
             // Logging must work regardless of whether a goal is set: gating
             // the FAB on hasGoalSet left a goal-less account with no way to

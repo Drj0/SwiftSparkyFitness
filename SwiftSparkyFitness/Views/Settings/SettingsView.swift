@@ -1462,14 +1462,13 @@ struct SettingsRow: View {
                 base.symbolEffect(.bounce, options: .nonRepeating)
             }
         } else {
-            // iOS 17 can only bounce on a value change, and has no breathe:
-            // both loops pulse, and the one knock is left out.
-            switch effect {
-            case .none, .break:
-                base
-            case .heartbeat, .waiting:
-                base.symbolEffect(.pulse, options: .repeating)
-            }
+            // iOS 17 has no breathe, so both loops pulse; it can only bounce
+            // on a value change, which is what the one knock is. One chain
+            // rather than a switch: a switch swaps the view, so the value
+            // would never be seen to change.
+            base
+                .symbolEffect(.pulse, isActive: effect == .heartbeat || effect == .waiting)
+                .symbolEffect(.bounce, value: effect == .break)
         }
     }
 

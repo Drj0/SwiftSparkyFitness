@@ -39,10 +39,21 @@ struct CatalogExercise: Identifiable, Hashable {
         self.category = category
         self.modality = modality
         self.met = met
-        self.symbol = symbol
+        self.symbol = Self.symbolBeforeIOS18[symbol].flatMap { old in
+            if #available(iOS 18, *) { nil } else { old }
+        } ?? symbol
         self.imageId = imageId
         self.popular = popular
     }
+
+    /// SF Symbols 6 glyphs, which draw nothing on iOS 17, and the closest
+    /// older ones.
+    private static let symbolBeforeIOS18 = [
+        "figure.run.treadmill": "figure.run",
+        "figure.walk.treadmill": "figure.walk",
+        "figure.indoor.rowing": "figure.rower",
+        "figure.outdoor.rowing": "figure.rower",
+    ]
 
     /// kcal per hour for someone of `weightKg`.
     func caloriesPerHour(weightKg: Double) -> Double {

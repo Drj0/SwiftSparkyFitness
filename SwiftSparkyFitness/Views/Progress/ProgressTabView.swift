@@ -95,6 +95,7 @@ struct ProgressTabView: View {
         // charts under it as well would be saying it twice.
         .refreshable { await viewModel.refresh() }
         .safeAreaInset(edge: .top) { errorBanner }
+        .statusBarBackdrop()
         .onChange(of: historyStart) { _, start in viewModel.historyStarts(start) }
         .onChange(of: viewModel.errorMessage) { _, message in
             // The banner appears without moving VoiceOver focus, so it has to

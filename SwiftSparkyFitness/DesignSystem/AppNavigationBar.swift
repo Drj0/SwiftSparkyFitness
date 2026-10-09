@@ -63,3 +63,19 @@ enum AppNavigationBar {
         ]
     }
 }
+
+extension View {
+    /// For a screen with its own header and no nav bar. iOS 26 softens
+    /// content as it scrolls under the status bar; iOS 17 doesn't, and cards
+    /// and chart lines ran straight under the clock. A zero-height inset
+    /// whose background reaches up into the status bar covers it there.
+    @ViewBuilder func statusBarBackdrop() -> some View {
+        if #available(iOS 26, *) {
+            self
+        } else {
+            safeAreaInset(edge: .top, spacing: 0) {
+                Color.clear.frame(height: 0).background(AppColor.background)
+            }
+        }
+    }
+}
