@@ -71,13 +71,6 @@ final class ServerModeClient: APIClientProtocol {
         return user
     }
 
-    func signUp(email: String, password: String) async throws -> SessionUser {
-        let epoch = AppMode.changeCount
-        let user = try await remote.signUp(email: email, password: password)
-        signedIn(user, epoch: epoch)
-        return user
-    }
-
     /// Out of range, the last user who signed in to *this* server is still
     /// signed in: their diary opens from this device instead of a
     /// "can't reach the server" screen. A server that answers "no session"

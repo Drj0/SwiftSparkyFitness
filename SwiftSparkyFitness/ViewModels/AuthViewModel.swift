@@ -13,16 +13,10 @@
 import Foundation
 import Combine
 
-enum AuthMode {
-    case login, signUp
-}
-
 @MainActor
 final class AuthViewModel: ObservableObject {
-    @Published var mode: AuthMode = .login
     @Published var email = ""
     @Published var password = ""
-    @Published var confirmPassword = ""
 
     @Published private(set) var emailError: String?
     @Published private(set) var passwordError: String?
@@ -80,20 +74,7 @@ final class AuthViewModel: ObservableObject {
     }
 
     var canSubmit: Bool {
-        guard !email.isEmpty, !password.isEmpty, !isLoading else { return false }
-        guard mode == .signUp else { return true }
-        return !confirmPassword.isEmpty && confirmPasswordError == nil
-    }
-
-    /// Sign-up only: nil once confirmPassword is empty or matches password.
-    var confirmPasswordError: String? {
-        guard mode == .signUp, !confirmPassword.isEmpty, confirmPassword != password else { return nil }
-        return "Passwords don't match."
-    }
-
-    func switchMode(to newMode: AuthMode) {
-        mode = newMode
-        clearErrors()
+        !email.isEmpty && !password.isEmpty && !isLoading
     }
 
     /// Where the launch-time session check has got to.
@@ -121,7 +102,6 @@ final class AuthViewModel: ObservableObject {
         await apiClient.signOut()
         email = ""
         password = ""
-        confirmPassword = ""
         clearErrors()
         session = nil
         restoreState = .done
@@ -140,8 +120,6 @@ final class AuthViewModel: ObservableObject {
         session = nil
         restoreState = restoring ? .restoring : .done
         password = ""
-        confirmPassword = ""
-        mode = .login
         clearErrors()
     }
 
@@ -177,24 +155,10 @@ final class AuthViewModel: ObservableObject {
     func submit() async {
         clearErrors()
 
-        if mode == .signUp {
-            if confirmPasswordError != nil {
-                Haptics.error()
-                return
-            }
-            if let reason = passwordWeaknessReason(password) {
-                passwordError = reason
-                Haptics.error()
-                return
-            }
-        }
-
         isLoading = true
         defer { isLoading = false }
         do {
-            session = mode == .login
-                ? try await apiClient.signIn(email: email, password: password)
-                : try await apiClient.signUp(email: email, password: password)
+            session = try await apiClient.signIn(email: email, password: password)
         } catch let error as APIError {
             apply(error)
             Haptics.error()
@@ -266,11 +230,6 @@ final class AuthViewModel: ObservableObject {
         default:
             bannerMessage = message
         }
-    }
-
-    private func passwordWeaknessReason(_ password: String) -> String? {
-        let hasDigit = password.contains { $0.isNumber }
-        return (password.count >= 8 && hasDigit) ? nil : "Use at least 8 characters, with a number."
     }
 
     private func clearErrors() {

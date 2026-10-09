@@ -37,7 +37,6 @@ extension Notification.Name {
 
 protocol APIClientProtocol {
     func signIn(email: String, password: String) async throws -> SessionUser
-    func signUp(email: String, password: String) async throws -> SessionUser
     func currentSession() async throws -> SessionUser?
     func signOut() async
     func requestPasswordReset(email: String) async throws
@@ -287,11 +286,6 @@ final class APIClient: APIClientProtocol {
         let password: String
     }
 
-    private struct SignUpRequest: Encodable {
-        let name: String
-        let email: String
-        let password: String
-    }
 
     private struct AuthResponse: Decodable {
         let user: SessionUser
@@ -317,15 +311,6 @@ final class APIClient: APIClientProtocol {
     func signIn(email: String, password: String) async throws -> SessionUser {
         clearStaleCookies()
         return try await (send("api/auth/sign-in/email", method: "POST", body: EmailPasswordRequest(email: email, password: password)) as AuthResponse).user
-    }
-
-    func signUp(email: String, password: String) async throws -> SessionUser {
-        clearStaleCookies()
-        // The server's auth schema requires a display name; the sign-up
-        // screen only collects email/password, so derive one from the email
-        // rather than adding a field the design doesn't have.
-        let name = email.split(separator: "@").first.map(String.init) ?? email
-        return try await (send("api/auth/sign-up/email", method: "POST", body: SignUpRequest(name: name, email: email, password: password)) as AuthResponse).user
     }
 
     /// Asks the server to mail a reset link.

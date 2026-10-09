@@ -2,72 +2,35 @@
 //  AuthContainerView.swift
 //  SwiftSparkyFitness
 //
-//  Login and Sign Up are one flow, not two screens: ~80% of what's on them
-//  is the same fields in the same place. A bare switch hard-cut between
-//  them, which threw that continuity away and read as a reload rather than
-//  a move sideways. They now slide as a pair — sign-up arrives from the
-//  trailing edge and leaves back the way it came — with the ZStack there so
-//  both views exist for the length of the transition. The mode change
-//  itself is animated at the two buttons that make it, in LoginView and
-//  SignUpView.
+//  The sign-in screen, with Back and the server address above it.
 //
-//  Back and the server address sit above both forms, outside the slide, so
-//  they hold still while the fields move. Back retraces the path the user
-//  took: sign-up returns to login, login returns to the start screen.
+//  There is no sign-up here: accounts are made on the server's own web app,
+//  where its admin manages them — and deleted there too. An app that creates
+//  accounts must also delete them (App Store guideline 5.1.1(v)), and the
+//  server is where both belong.
 //
 
 import SwiftUI
 
 struct AuthContainerView: View {
     @ObservedObject var viewModel: AuthViewModel
-    @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var isEditingServer = false
 
     var body: some View {
-        ZStack {
-            switch viewModel.mode {
-            case .login:
-                LoginView(viewModel: viewModel)
-                    .transition(transition(from: .leading))
-            case .signUp:
-                SignUpView(viewModel: viewModel)
-                    .transition(transition(from: .trailing))
+        LoginView(viewModel: viewModel)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(AppColor.background)
+            .safeAreaInset(edge: .top, spacing: 0) {
+                ServerScreenBar(
+                    onBack: { AppMode.leaveServer(for: nil) },
+                    onEditServer: { isEditingServer = true },
+                    backHint: "Returns to choosing how to use Sparky"
+                )
             }
-        }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .background(AppColor.background)
-        .safeAreaInset(edge: .top, spacing: 0) {
-            ServerScreenBar(
-                onBack: goBack,
-                onEditServer: { isEditingServer = true },
-                backHint: viewModel.mode == .signUp ? "Returns to log in" : "Returns to choosing how to use Sparky"
-            )
-        }
-        .sheet(isPresented: $isEditingServer) {
-            ServerAddressSheet()
-                .fittedDetent()
-                .presentationDragIndicator(.visible)
-        }
-    }
-
-    private func goBack() {
-        guard viewModel.mode == .login else {
-            withAnimation(reduceMotion ? nil : .snappy(duration: 0.3)) {
-                viewModel.switchMode(to: .login)
+            .sheet(isPresented: $isEditingServer) {
+                ServerAddressSheet()
+                    .fittedDetent()
+                    .presentationDragIndicator(.visible)
             }
-            return
-        }
-        AppMode.leaveServer(for: nil)
-    }
-
-    /// Each form enters and leaves on its own side, so the pair reads as one
-    /// strip sliding rather than two cards shuffling. Reduce Motion keeps
-    /// the cross-fade and drops the travel.
-    private func transition(from edge: Edge) -> AnyTransition {
-        guard !reduceMotion else { return .opacity }
-        return .asymmetric(
-            insertion: .move(edge: edge).combined(with: .opacity),
-            removal: .move(edge: edge).combined(with: .opacity)
-        )
     }
 }

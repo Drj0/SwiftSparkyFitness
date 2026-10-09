@@ -144,7 +144,6 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         var preferenceWriteError: Error?
 
         func signIn(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
-        func signUp(email: String, password: String) async throws -> SessionUser { fatalError("unused") }
         func currentSession() async throws -> SessionUser? { nil }
         func signOut() async {}
         func requestPasswordReset(email: String) async throws {

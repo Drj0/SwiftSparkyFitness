@@ -88,29 +88,15 @@ struct LoginView: View {
             .disabled(!viewModel.canSubmit)
             .opacity(viewModel.canSubmit ? 1 : 0.6)
 
-            HStack(spacing: 4) {
-                Text("New to Sparky?")
-                    .foregroundStyle(AppColor.secondaryText)
-                Button {
-                    // Animated here rather than in AuthContainerView because
-                    // this is where the state actually changes — the
-                    // container's transition has nothing to run off
-                    // otherwise, and the two near-identical forms hard-cut.
-                    withAnimation(reduceMotion ? nil : .snappy(duration: 0.3)) {
-                        viewModel.switchMode(to: .signUp)
-                    }
-                } label: {
-                    Text("Create an account")
-                        .foregroundStyle(AppColor.accent)
-                        .appBody(13, weight: .semibold)
-                        .frame(minHeight: 44)
-                        .contentShape(Rectangle())
-                }
-                .buttonStyle(.pressable)
-            }
-            .appBody(13)
-            .frame(maxWidth: .infinity)
-            .padding(.top, 4)
+            // Accounts are made on the server's web app, not here (see
+            // AuthContainerView), so someone without one is told where to go.
+            Text("No account yet? Create one on your server's web app, or ask whoever runs it.")
+                .appBody(13)
+                .foregroundStyle(AppColor.secondaryText)
+                .multilineTextAlignment(.center)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: .infinity)
+                .padding(.top, 4)
 
             Spacer(minLength: 24)
         }

@@ -72,10 +72,6 @@ final class LocalAPIClient: APIClientProtocol {
         throw unsupported("Signing in")
     }
 
-    func signUp(email: String, password: String) async throws -> SessionUser {
-        throw unsupported("Signing up")
-    }
-
     func requestPasswordReset(email: String) async throws {
         throw unsupported("Password reset")
     }
