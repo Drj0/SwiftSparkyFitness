@@ -277,8 +277,14 @@ final class SwiftSparkyFitnessTests: XCTestCase {
             deletedContainerIds.append(id)
             if let containerWriteError { throw containerWriteError }
         }
+        /// The day each quick-add was sent for, and a hook that runs while
+        /// it is "in flight" (to page the screen mid-request).
+        var adjustDates: [String] = []
+        var whileAdjusting: (@MainActor () async -> Void)?
         func adjustWater(date: Date, drinks: Int, containerId: Int?) async throws -> WaterTotals {
             adjustCalls.append((drinks, containerId))
+            adjustDates.append(LocalDay.key(date))
+            await whileAdjusting?()
             return try await adjustWater(date: date, drinks: drinks)
         }
         func adjustWater(date: Date, drinks: Int) async throws -> WaterTotals {
@@ -398,6 +404,29 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         // The total shown is the server's answer to the write, not a local
         // increment.
         XCTAssertEqual(viewModel.totalMl, 250)
+    }
+
+    /// Two quick taps on Monday, then a swipe to Tuesday while the first is
+    /// in flight: the second drink is still logged on Monday, and Monday's
+    /// replies don't overwrite the total Tuesday is showing.
+    @MainActor
+    func testWaterQuickAddStaysOnTheDayItWasTappedOn() async {
+        let stub = StubAPIClient()
+        let monday = Calendar.current.startOfDay(for: Date())
+        let tuesday = Calendar.current.date(byAdding: .day, value: 1, to: monday)!
+        let viewModel = WaterViewModel(date: monday, apiClient: stub)
+        stub.totalsToReturn = WaterTotals(waterMl: 500, manualMl: 500, ledgerMl: 500, foodMl: 0)
+        stub.whileAdjusting = {
+            stub.whileAdjusting = nil
+            await viewModel.adjust(drinks: 1)   // queued behind the first
+            viewModel.setDate(tuesday)
+            viewModel.adopt(summary: self.summary(waterMl: 1000, manualMl: 1000))
+        }
+
+        await viewModel.adjust(drinks: 1)
+
+        XCTAssertEqual(stub.adjustDates, [LocalDay.key(monday), LocalDay.key(monday)])
+        XCTAssertEqual(viewModel.totalMl, 1000)
     }
 
     @MainActor

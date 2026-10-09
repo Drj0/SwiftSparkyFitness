@@ -137,10 +137,20 @@ final class WaterViewModel: ObservableObject {
         foodMl = totals.foodMl
     }
 
-    /// Taps applied to the total but not yet acknowledged by the server, and
-    /// whether a send loop is already draining them.
-    private var unsentDrinks = 0
+    /// Taps applied to the total but not yet acknowledged by the server, by
+    /// the day they were made on, and whether a send loop is draining them.
+    /// By day because Today and Diary page this model's `date` while a send
+    /// is in flight: one shared count sent a tap made on Monday with
+    /// Tuesday's date once the user had swiped on.
+    private var unsent: [String: (date: Date, drinks: Int)] = [:]
     private var isSendingDrinks = false
+
+    /// Unsent taps for the day on screen.
+    private var unsentOnScreen: Int { unsent[LocalDay.key(date)]?.drinks ?? 0 }
+
+    /// Whether `day` is still the one on screen — a reply for a day paged
+    /// away from mid-flight carries that day's totals, not this one's.
+    private func isShowing(_ day: Date) -> Bool { LocalDay.key(day) == LocalDay.key(date) }
 
     /// Quick-add (`drinks > 0`) and undo (`drinks < 0`). The server clamps
     /// at zero and no-ops on an empty day — verified live — so there's no
@@ -155,35 +165,40 @@ final class WaterViewModel: ObservableObject {
     func adjust(drinks: Int) async {
         errorMessage = nil
         applyOptimistic(drinks: drinks)
-        unsentDrinks += drinks
+        let key = LocalDay.key(date)
+        unsent[key] = (date, (unsent[key]?.drinks ?? 0) + drinks)
 
         guard !isSendingDrinks else { return }
         isSendingDrinks = true
         defer { isSendingDrinks = false }
 
-        while unsentDrinks != 0 {
-            let batch = unsentDrinks
-            unsentDrinks = 0
+        while let (key, batch) = unsent.first.map({ ($0.key, $0.value) }) {
+            unsent[key] = nil
+            guard batch.drinks != 0 else { continue }
             do {
                 // Only an *addition* names a container. The decrement deletes
                 // the most recent manual rows whatever they were logged from,
                 // so naming one there would imply a precision it doesn't have.
-                apply(try await apiClient.adjustWater(
-                    date: date,
-                    drinks: batch,
-                    containerId: batch > 0 ? primaryContainer?.id : nil
-                ))
+                let totals = try await apiClient.adjustWater(
+                    date: batch.date,
+                    drinks: batch.drinks,
+                    containerId: batch.drinks > 0 ? primaryContainer?.id : nil
+                )
+                guard isShowing(batch.date) else { continue }
+                apply(totals)
                 // The server's total predates anything tapped while the call
                 // was in flight, so those taps have to go back on top of it
                 // or the number would visibly fall back mid-flurry.
-                if unsentDrinks != 0 {
-                    applyOptimistic(drinks: unsentDrinks)
+                if unsentOnScreen != 0 {
+                    applyOptimistic(drinks: unsentOnScreen)
                 }
             } catch {
                 // Nothing was accepted, so take back every tap still
                 // unacknowledged: this batch and whatever queued behind it.
-                applyOptimistic(drinks: -(batch + unsentDrinks))
-                unsentDrinks = 0
+                if isShowing(batch.date) {
+                    applyOptimistic(drinks: -(batch.drinks + unsentOnScreen))
+                }
+                unsent = [:]
                 errorMessage = error.localizedDescription
                 Haptics.error()
                 return
@@ -225,10 +240,14 @@ final class WaterViewModel: ObservableObject {
         isBusy = true
         errorMessage = nil
         defer { isBusy = false }
+        let day = date
         do {
-            apply(try await apiClient.logWaterAmount(date: date, milliliters: milliliters))
-            if unsentDrinks != 0 {
-                applyOptimistic(drinks: unsentDrinks)
+            let totals = try await apiClient.logWaterAmount(date: day, milliliters: milliliters)
+            if isShowing(day) {
+                apply(totals)
+                if unsentOnScreen != 0 {
+                    applyOptimistic(drinks: unsentOnScreen)
+                }
             }
             Haptics.success()
             return true
@@ -244,12 +263,16 @@ final class WaterViewModel: ObservableObject {
         isBusy = true
         errorMessage = nil
         defer { isBusy = false }
+        let day = date
         do {
             try await apiClient.deleteWaterLogEntry(id: entry.id)
             // The delete response is just an ack, so re-read the two things
             // that changed rather than subtracting locally and drifting.
-            entries = try await apiClient.waterLog(date: date)
-            apply(try await apiClient.waterTotals(date: date))
+            let rows = try await apiClient.waterLog(date: day)
+            let totals = try await apiClient.waterTotals(date: day)
+            guard isShowing(day) else { return }
+            entries = rows
+            apply(totals)
         } catch {
             errorMessage = error.localizedDescription
             Haptics.error()
