@@ -194,10 +194,9 @@ final class WaterViewModel: ObservableObject {
                 }
             } catch {
                 // Nothing was accepted, so take back every tap still
-                // unacknowledged: this batch and whatever queued behind it.
-                if isShowing(batch.date) {
-                    applyOptimistic(drinks: -(batch.drinks + unsentOnScreen))
-                }
+                // unacknowledged: this batch and whatever queued behind it —
+                // as far as the day on screen shows them.
+                applyOptimistic(drinks: -((isShowing(batch.date) ? batch.drinks : 0) + unsentOnScreen))
                 unsent = [:]
                 errorMessage = error.localizedDescription
                 Haptics.error()
