@@ -372,12 +372,23 @@ extension LocalAPIClient {
             sortBy: [SortDescriptor(\.dayKey)]
         )
 
-        var byDay: [String: [LocalExerciseEntry]] = [:]
+        /// What a bucket sums, from a stored row or a workout read from Health.
+        struct Session { let duration: Double, calories: Double, distance: Double? }
+        var byDay: [String: [Session]] = [:]
         // The shared name, not a summary built per row: building one decoded
         // the row's sets JSON just to read its name.
         let sentinel = ExerciseSessionSummary.healthActiveEnergyName
-        for row in rows where row.name != sentinel {
-            byDay[row.dayKey, default: []].append(row)
+        for row in rows where row.name != sentinel && !(readsHealthLive && Self.isFromHealth(row)) {
+            byDay[row.dayKey, default: []].append(Session(duration: row.durationMinutes, calories: row.caloriesBurned, distance: row.distance))
+        }
+        // In this iPhone's diary, Health's workouts are read, not stored.
+        if readsHealthLive, let after = Calendar.current.date(byAdding: .day, value: 1, to: Calendar.current.startOfDay(for: end)) {
+            for workout in await healthWorkoutSessions(from: Calendar.current.startOfDay(for: start), to: after) {
+                guard let key = workout.entryDate else { continue }
+                byDay[key, default: []].append(Session(
+                    duration: workout.durationMinutes ?? 0, calories: workout.caloriesBurned ?? 0, distance: workout.distance
+                ))
+            }
         }
 
         let buckets = byDay.keys.sorted().map { key -> ExerciseRangeSummary.Bucket in
@@ -385,8 +396,8 @@ extension LocalAPIClient {
             let distance = day.reduce(0.0) { $0 + ($1.distance ?? 0) }
             return ExerciseRangeSummary.Bucket(
                 startDate: key,
-                durationMinutes: day.reduce(0.0) { $0 + $1.durationMinutes },
-                caloriesBurned: day.reduce(0.0) { $0 + $1.caloriesBurned },
+                durationMinutes: day.reduce(0.0) { $0 + $1.duration },
+                caloriesBurned: day.reduce(0.0) { $0 + $1.calories },
                 workoutCount: day.count,
                 // The server reports distance in meters; local mode logs it
                 // in the user's own distance unit, same "no conversion"

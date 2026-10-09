@@ -57,6 +57,10 @@ enum HealthWorkoutImporter {
     private static func run(on date: Date, apiClient: APIClientProtocol, health: HealthKitReading) async -> Bool {
         // Its own opt-in, asked for from Settings: see HealthSync.
         guard HealthSync.isEnabled, HealthSync.importsWorkouts, health.isAvailable else { return false }
+        // This iPhone's diary mirrors to iCloud, where Health data may not be
+        // stored (App Store guideline 5.1.3(ii)): it reads workouts from
+        // Health as each day loads instead (`LocalAPIClient.healthSessions`).
+        if (apiClient as? LocalAPIClient)?.readsHealthLive == true { return false }
         let defaults = UserDefaults.standard
 
         guard let workouts = try? await health.workouts(on: date), !workouts.isEmpty else { return false }
@@ -93,27 +97,66 @@ enum HealthWorkoutImporter {
     ) async -> Bool {
         guard let entry = ExerciseCatalog.entry(named: workout.catalogName),
               let exercise = try? await apiClient.libraryExercise(for: entry) else { return false }
-        // Health's measured figure; the catalog estimate only if Health
-        // recorded none.
-        let calories = workout.kilocalories
-            ?? entry.caloriesPerHour(weightKg: ExerciseCatalog.fallbackWeightKg) * workout.durationMinutes / 60
-        let distance = workout.distanceMeters.map {
-            preferences.defaultDistanceUnit == "miles" ? $0 / 1609.344 : $0 / 1000
-        }
+        let figures = Figures(workout, entry: entry, preferences: preferences)
         let input = ExerciseEntryInput(
             exerciseId: exercise.id,
-            modality: distance == nil ? .duration : .durationDistance,
+            modality: figures.distance == nil ? .duration : .durationDistance,
             entryDate: workout.start,
             entryTime: time,
             durationMinutes: workout.durationMinutes.rounded(),
-            caloriesBurned: calories.rounded(),
-            distance: distance.map { ($0 * 100).rounded() / 100 },
+            caloriesBurned: figures.calories,
+            distance: figures.distance,
             notes: note
         )
         return (try? await apiClient.createExerciseEntry(input)) != nil
+    }
+
+    /// A workout as a session read straight from Health: shown and counted
+    /// like an imported one, but stored nowhere, so there is nothing to edit
+    /// or delete (no `exerciseId`, and `isReadFromHealth`).
+    static func session(for workout: HealthWorkout, preferences: UserPreferences) -> ExerciseSessionSummary {
+        let entry = ExerciseCatalog.entry(named: workout.catalogName)
+        let figures = Figures(workout, entry: entry, preferences: preferences)
+        return ExerciseSessionSummary(
+            id: ExerciseSessionSummary.readFromHealthPrefix + workout.id.uuidString,
+            name: workout.catalogName,
+            caloriesBurned: figures.calories,
+            durationMinutes: workout.durationMinutes.rounded(),
+            exerciseId: nil,
+            entryDate: LocalDay.key(workout.start),
+            entryTime: timeFormatter.string(from: workout.start),
+            notes: note,
+            distance: figures.distance,
+            modality: figures.distance == nil ? .duration : .durationDistance
+        )
+    }
+
+    /// Health's measured calories, or the catalog's estimate when it recorded
+    /// none; distance in the user's unit, to two places.
+    private struct Figures {
+        let calories: Double
+        let distance: Double?
+
+        init(_ workout: HealthWorkout, entry: CatalogExercise?, preferences: UserPreferences) {
+            let estimate = entry.map {
+                $0.caloriesPerHour(weightKg: ExerciseCatalog.fallbackWeightKg) * workout.durationMinutes / 60
+            }
+            calories = (workout.kilocalories ?? estimate ?? 0).rounded()
+            distance = workout.distanceMeters.map {
+                let converted = preferences.defaultDistanceUnit == "miles" ? $0 / 1609.344 : $0 / 1000
+                return (converted * 100).rounded() / 100
+            }
+        }
     }
 }
 
 extension ExerciseSessionSummary {
     var isHealthWorkout: Bool { notes == HealthWorkoutImporter.note }
+
+    /// Ids of sessions built from Health as the day loads, never stored.
+    static let readFromHealthPrefix = "apple-health:"
+
+    /// Read from Health for this screen, not stored in the diary: Health owns
+    /// it, so it can't be edited or deleted here.
+    var isReadFromHealth: Bool { id.hasPrefix(Self.readFromHealthPrefix) }
 }

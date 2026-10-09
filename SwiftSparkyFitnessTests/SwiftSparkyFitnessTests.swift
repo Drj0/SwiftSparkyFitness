@@ -1260,7 +1260,9 @@ final class SwiftSparkyFitnessTests: XCTestCase {
         }
         func hasRecentEnergy(days: Int) async -> Bool { recentEnergy }
         var workoutsToReturn: [HealthWorkout] = []
-        func workouts(on date: Date) async throws -> [HealthWorkout] { workoutsToReturn }
+        func workouts(from start: Date, to end: Date) async throws -> [HealthWorkout] {
+            workoutsToReturn.filter { $0.start >= start && $0.start < end }
+        }
     }
 
     /// A Health workout arrives with Health's measured calories (not the

@@ -412,6 +412,8 @@ extension LocalAPIClient {
     /// `max(active, logged)` rule reads it back through that same match.
     ///
     func syncActiveEnergy(kilocalories: Double, date: Date) async throws {
+        // Read live instead, in a diary that mirrors to iCloud.
+        guard !readsHealthLive else { return }
         try await upsertActiveEnergy(kilocalories: kilocalories, date: date)
     }
 

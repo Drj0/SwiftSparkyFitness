@@ -115,14 +115,17 @@ struct ExerciseDiaryView: View {
                             .padding(.vertical, 4)
                             .diaryRow()
                             .swipeActions(edge: .trailing) {
-                                Button(role: .destructive) {
-                                    Haptics.warning()
-                                    Task { await viewModel.deleteExerciseEntry(session) }
-                                } label: {
-                                    Label("Delete", systemImage: "trash")
+                                // Read from Health, not stored here: Health owns it.
+                                if !session.isReadFromHealth {
+                                    Button(role: .destructive) {
+                                        Haptics.warning()
+                                        Task { await viewModel.deleteExerciseEntry(session) }
+                                    } label: {
+                                        Label("Delete", systemImage: "trash")
+                                    }
+                                    // The TabView tints everything pink; delete keeps iOS red.
+                                    .tint(AppColor.destructive)
                                 }
-                                // The TabView tints everything pink; delete keeps iOS red.
-                                .tint(AppColor.destructive)
                             }
                             .swipeActions(edge: .leading) {
                                 if session.exerciseId != nil {
@@ -273,8 +276,10 @@ struct ExerciseDiaryView: View {
                 Button("Edit", systemImage: "pencil") { viewModel.editingExerciseEntry = session }
                 Button(logAgainTitle, systemImage: "arrow.clockwise") { logAgain(session) }
             }
-            Button("Delete", systemImage: "trash", role: .destructive) {
-                Task { await viewModel.deleteExerciseEntry(session) }
+            if !session.isReadFromHealth {
+                Button("Delete", systemImage: "trash", role: .destructive) {
+                    Task { await viewModel.deleteExerciseEntry(session) }
+                }
             }
         }
         .accessibilityElement(children: .ignore)
@@ -286,9 +291,9 @@ struct ExerciseDiaryView: View {
             if session.exerciseId != nil {
                 Button(logAgainTitle) { logAgain(session) }
             }
-        }
-        .accessibilityAction(named: "Delete") {
-            Task { await viewModel.deleteExerciseEntry(session) }
+            if !session.isReadFromHealth {
+                Button("Delete") { Task { await viewModel.deleteExerciseEntry(session) } }
+            }
         }
     }
 

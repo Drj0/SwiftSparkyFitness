@@ -375,6 +375,9 @@ extension DiaryArchive {
             store.context.rollback()
             throw store.lastSaveError ?? ArchiveError.couldNotSave
         }
+        // A file can hold Health's rows; this iPhone's diary reads Health
+        // live and mustn't carry them into iCloud (LocalAPIClient+Health).
+        if store === LocalStore.shared { store.removeHealthRows() }
         return result
     }
 

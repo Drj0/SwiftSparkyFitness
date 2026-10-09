@@ -25,12 +25,20 @@ import Foundation
 
 @MainActor
 final class LocalAPIClient: APIClientProtocol {
-    static let shared = LocalAPIClient()
+    /// This iPhone's diary, which mirrors to iCloud: Health is read live,
+    /// never stored (see LocalAPIClient+Health).
+    static let shared = LocalAPIClient(health: HealthKitService.shared)
 
     let store: LocalStore
+    /// Set only where Health data must not be stored; nil stores it as rows
+    /// (server mode's copy, and tests).
+    let health: HealthKitReading?
+    /// See `removeStoredHealthRowsOnce`.
+    var didRemoveStoredHealthRows = false
 
-    init(store: LocalStore = .shared) {
+    init(store: LocalStore = .shared, health: HealthKitReading? = nil) {
         self.store = store
+        self.health = health
     }
 
     /// When local mode was first used. Load-bearing rather than decorative:
@@ -272,7 +280,14 @@ final class LocalAPIClient: APIClientProtocol {
 
         let goals = try await goals(date: date)
         let entries = foodRows.map(Self.foodEntrySummary)
-        let sessions = exerciseRows.map(Self.exerciseSummary).markingHealthDuplicates()
+        var stored = exerciseRows
+        var fromHealth: [ExerciseSessionSummary] = []
+        if readsHealthLive {
+            removeStoredHealthRowsOnce()
+            stored.removeAll(where: Self.isFromHealth)
+            fromHealth = await healthSessions(on: date)
+        }
+        let sessions = (stored.map(Self.exerciseSummary) + fromHealth).markingHealthDuplicates()
         let burned = sessions.dayBurn
 
         let eaten = entries.reduce(0.0) { $0 + $1.calories }

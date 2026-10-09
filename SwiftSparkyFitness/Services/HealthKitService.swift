@@ -127,7 +127,8 @@ protocol HealthKitReading {
     /// Whether Health has handed over any active energy in the last `days`.
     /// False means "nothing arrived", never "you were refused".
     func hasRecentEnergy(days: Int) async -> Bool
-    func workouts(on date: Date) async throws -> [HealthWorkout]
+    /// Workouts that started in [start, end), oldest first.
+    func workouts(from start: Date, to end: Date) async throws -> [HealthWorkout]
     /// The day's step count, or nil when Health has none (no samples, or a
     /// refused read — indistinguishable, see the note at the top).
     func steps(on date: Date) async throws -> Int?
@@ -137,8 +138,16 @@ extension HealthKitReading {
     func requestAuthorization() async throws -> HealthAuthorizationOutcome {
         try await requestAuthorization(includingWorkouts: false)
     }
-    func workouts(on date: Date) async throws -> [HealthWorkout] { [] }
+    func workouts(from start: Date, to end: Date) async throws -> [HealthWorkout] { [] }
     func steps(on date: Date) async throws -> Int? { nil }
+
+    /// The calendar day containing `date`.
+    func workouts(on date: Date) async throws -> [HealthWorkout] {
+        let calendar = Calendar(identifier: .gregorian)
+        let start = calendar.startOfDay(for: date)
+        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return [] }
+        return try await workouts(from: start, to: end)
+    }
 }
 
 /// One workout recorded in Health (Apple Watch, or any app that writes
@@ -262,12 +271,8 @@ extension HealthKitService {
         return count > 0 ? count : nil
     }
 
-    func workouts(on date: Date) async throws -> [HealthWorkout] {
+    func workouts(from start: Date, to end: Date) async throws -> [HealthWorkout] {
         guard isAvailable else { return [] }
-        let calendar = Calendar(identifier: .gregorian)
-        let start = calendar.startOfDay(for: date)
-        guard let end = calendar.date(byAdding: .day, value: 1, to: start) else { return [] }
-
         let descriptor = HKSampleQueryDescriptor(
             predicates: [.workout(HKQuery.predicateForSamples(withStart: start, end: end))],
             sortDescriptors: [SortDescriptor(\.startDate)]

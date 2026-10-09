@@ -45,6 +45,9 @@ enum ServerToDeviceMove {
         await sync.syncNow()
         try Task.checkCancellation()
         try StoreTransfer.copy(from: ServerCache.store(for: account), to: .shared, account: account)
+        // The server's copy holds Health's rows; this diary reads Health live
+        // and mustn't carry them into iCloud (LocalAPIClient+Health).
+        LocalStore.shared.removeHealthRows()
         // A copy that couldn't be brought up to date is current only to its
         // last sync; the handoff says so.
         let upToDate = sync.status == .idle && InitialPull.isDone(account: account)

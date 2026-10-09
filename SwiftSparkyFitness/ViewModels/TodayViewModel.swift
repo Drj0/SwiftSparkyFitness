@@ -205,9 +205,9 @@ final class TodayViewModel: ObservableObject {
 
     var showsHealthActivity: Bool { HealthSync.isEnabled && health.isAvailable }
 
-    /// Health's active energy as *stored* for the day, not a live read: it is
-    /// the figure the balance actually uses, so the card can't disagree with
-    /// the ring (a live read on a past day could, since only today is synced).
+    /// Health's active energy as the day's summary carries it (read live on
+    /// this iPhone's diary, stored on a server's), so the card and the ring
+    /// always use the same figure.
     var healthActiveKilocalories: Double? { summary?.exerciseSessions.healthActiveEnergy }
 
     /// Logged exercise on top of Health's active energy in the day's burn:
